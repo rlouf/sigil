@@ -22,6 +22,10 @@ def qwen_model() -> str:
     return os.environ.get("QWEN_MODEL", DEFAULT_MODEL)
 
 
+def qwen_model_path() -> str:
+    return os.environ.get("QWEN_MODEL_PATH", "<path-to-model.gguf>")
+
+
 def ensure_server() -> bool:
     if qwen_port_open():
         return True
@@ -33,7 +37,7 @@ def ensure_server() -> bool:
     print("", file=sys.stderr)
     print("  ...or launch llama-server yourself:", file=sys.stderr)
     print("      llama-server \\", file=sys.stderr)
-    print("        -m <path-to-model.gguf> \\", file=sys.stderr)
+    print(f"        -m {qwen_model_path()} \\", file=sys.stderr)
     print(f"        --alias {qwen_model()} --host 127.0.0.1 --port 8080 \\", file=sys.stderr)
     print(f"        -ngl 99 -c 262144 -fa on --reasoning auto{RESET}", file=sys.stderr)
     print("", file=sys.stderr)
