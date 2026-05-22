@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import time
 from typing import TextIO
 
 from .ansi import MUTED, RESET
-from .state import append_event
+from .state import append_event, append_jsonl
 
 
 def clear_status(stderr: TextIO) -> None:
@@ -29,6 +30,7 @@ def summarize(tool: str, args: object) -> str:
 
 def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr: TextIO = sys.stderr) -> int:
     started_text = False
+    answer_chunks: list[str] = []
     spinner_running = True
     spinner_paused = False
     spinner_lock = threading.Lock()
@@ -103,11 +105,16 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                     stdout.write("\n")
                     started_text = True
                 delta = update.get("delta", "")
+                answer_chunks.append(delta)
                 append_event({"type": "answer_delta", "text": delta})
                 stdout.write(delta)
                 stdout.flush()
     finally:
         if spinner_running:
             stop_spinner()
+        answer = "".join(answer_chunks)
+        if answer:
+            if os.environ.get("SIGIL_CAPTURE_ANSWER") == "1":
+                append_jsonl("last-question.jsonl", {"role": "assistant", "content": answer})
+            append_event({"type": "answer_done"})
     return 0
-

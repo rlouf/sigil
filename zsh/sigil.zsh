@@ -5,6 +5,14 @@ typeset -g __sigil_bin="$__sigil_root/bin/sigil"
 typeset -g __sigil_muted=$'\e[38;2;110;106;134m'
 typeset -g __sigil_reset=$'\e[0m'
 
+if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
+  if command -v uuidgen >/dev/null 2>&1; then
+    export SIGIL_SESSION_ID="$(uuidgen)"
+  else
+    export SIGIL_SESSION_ID="${TTY:t:-tty}-$$"
+  fi
+fi
+
 sigil_command() {
   local selected
   selected="$("$__sigil_bin" command --select "$*")" || return $?
@@ -21,9 +29,14 @@ sigil_question() {
   "$__sigil_bin" question "$*"
 }
 
+sigil_follow_up() {
+  "$__sigil_bin" follow-up "$*"
+}
+
 function ',' { sigil_command "$*" }
 function ',,' { sigil_previous_command "$*" }
 function '?' { sigil_question "$*" }
+function '??' { sigil_follow_up "$*" }
 
 __sigil_accept_line() {
   emulate -L zsh
@@ -35,12 +48,22 @@ __sigil_accept_line() {
       rest="${b#,}"; rest="${rest## }"
       [[ -n "$rest" ]] && BUFFER=", ${(qqq)rest}"
     fi
+  elif [[ "$b" == \?\?* ]]; then
+    rest="${b#\?\?}"; rest="${rest## }"
+    if [[ -n "$rest" ]]; then
+      BUFFER=""
+      zle -I
+      print -r -- "?? ${rest}"
+      sigil_follow_up "$rest"
+      zle reset-prompt
+      return
+    fi
   elif [[ "$b" == \?* ]]; then
     rest="${b#\?}"; rest="${rest## }"
     if [[ -n "$rest" ]]; then
       BUFFER=""
       zle -I
-      print -r -- "${__sigil_muted}? ${rest}${__sigil_reset}"
+      print -r -- "? ${rest}"
       sigil_question "$rest"
       zle reset-prompt
       return

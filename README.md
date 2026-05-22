@@ -12,6 +12,7 @@ calls, selection UI, Pi streaming, rendering, and persistent state.
 ,   generate shell command candidates
 ,,  reopen the previous command selector
 ?   answer a question with Pi using read + web search
+??  continue the previous question discussion
 ```
 
 ## Layout
@@ -29,6 +30,7 @@ Core commands:
 sigil command --select "find wav files"
 sigil previous-command --select
 sigil question "what is tldraw?"
+sigil follow-up "how would that work in practice?"
 sigil stream-pi-json
 ```
 
@@ -40,17 +42,18 @@ prompt with `print -z`.
 Sigil writes state under:
 
 ```text
-${XDG_STATE_HOME:-~/.local/state}/sigil/
+~/.sigil/
 ```
 
 Current files:
 
 ```text
-events.jsonl        append-only interaction/tool/answer event log
-last-command.json   latest generated command candidates for `,,`
+events.jsonl                                 append-only global event log
+sessions/<session-id>/last-command.json      latest command candidates for `,,`
+sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
 ```
 
-The event log is the durable substrate for future `??`, `@.`, `@@`, and `!!`
+The event log is the durable substrate for future `@.`, `@@`, and `!!`
 behavior. Shell globals are intentionally not used for session continuity.
 
 ## zsh

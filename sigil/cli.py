@@ -47,6 +47,10 @@ def cmd_question(args: argparse.Namespace) -> int:
     return ask(args.question, str(project_root() / "bin" / "stream-pi-json"))
 
 
+def cmd_follow_up(args: argparse.Namespace) -> int:
+    return ask(args.question, str(project_root() / "bin" / "stream-pi-json"), follow_up=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sigil")
     sub = parser.add_subparsers(dest="command_name", required=True)
@@ -66,6 +70,10 @@ def main(argv: list[str] | None = None) -> int:
     question.add_argument("question")
     question.set_defaults(func=cmd_question)
 
+    follow_up = sub.add_parser("follow-up")
+    follow_up.add_argument("question")
+    follow_up.set_defaults(func=cmd_follow_up)
+
     stream_pi = sub.add_parser("stream-pi-json")
     stream_pi.set_defaults(func=lambda _args: stream_events())
 
@@ -75,4 +83,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
