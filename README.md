@@ -51,6 +51,7 @@ Current files:
 events.jsonl                                 append-only global event log
 sessions/<session-id>/last-command.json      latest command candidates for `,,`
 sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
+sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
 ```
 
 The event log is the durable substrate for future `@.`, `@@`, and `!!`

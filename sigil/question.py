@@ -51,6 +51,7 @@ def ask(question: str, stream_filter: str, *, follow_up: bool = False) -> int:
         append_jsonl("last-question.jsonl", question_turn)
     else:
         write_jsonl("last-question.jsonl", [question_turn])
+    write_jsonl("last-tools.jsonl", [])
     append_event(
         {
             "type": "question",
@@ -75,7 +76,11 @@ def ask(question: str, stream_filter: str, *, follow_up: bool = False) -> int:
     ]
     filter_cmd = [stream_filter]
     renderer_cmd = ["glow", "-s", "dark", "-"] if shutil.which("glow") else ["cat"]
-    filter_env = {**os.environ, "SIGIL_CAPTURE_ANSWER": "1"}
+    filter_env = {
+        **os.environ,
+        "SIGIL_CAPTURE_ANSWER": "1",
+        "SIGIL_CAPTURE_TRACE": "1",
+    }
 
     pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)
     filter_proc = subprocess.Popen(

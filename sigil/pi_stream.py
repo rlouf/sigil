@@ -83,7 +83,15 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                 pause_spinner()
                 tool = event.get("toolName", "")
                 detail = summarize(tool, event.get("args"))
-                append_event({"type": "tool_start", "tool": tool, "detail": detail})
+                trace_event = {
+                    "type": "tool_start",
+                    "tool": tool,
+                    "detail": detail,
+                    "args": event.get("args"),
+                }
+                if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
+                    append_jsonl("last-tools.jsonl", trace_event)
+                append_event(trace_event)
                 if detail:
                     print(f"{MUTED}❯ {tool}  {detail}{RESET}", file=stderr, flush=True)
                 else:
@@ -91,7 +99,10 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                 continue
 
             if event.get("type") == "tool_execution_end":
-                append_event({"type": "tool_end", "tool": event.get("toolName", "")})
+                trace_event = {"type": "tool_end", "tool": event.get("toolName", "")}
+                if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
+                    append_jsonl("last-tools.jsonl", trace_event)
+                append_event(trace_event)
                 resume_spinner()
                 continue
 
@@ -106,7 +117,6 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
                     started_text = True
                 delta = update.get("delta", "")
                 answer_chunks.append(delta)
-                append_event({"type": "answer_delta", "text": delta})
                 stdout.write(delta)
                 stdout.flush()
     finally:
@@ -116,5 +126,5 @@ def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr
         if answer:
             if os.environ.get("SIGIL_CAPTURE_ANSWER") == "1":
                 append_jsonl("last-question.jsonl", {"role": "assistant", "content": answer})
-            append_event({"type": "answer_done"})
+            append_event({"type": "answer_done", "bytes": len(answer.encode("utf-8"))})
     return 0
