@@ -2,6 +2,9 @@
 
 Punctuation-native LLM interaction for the shell.
 
+Status: this is currently a "works on my machine" repo. If you are interested
+in an easier-to-install version, please open an issue.
+
 Sigil is structured as a shell-agnostic core with thin shell bindings. The zsh
 layer owns prompt interception and buffer insertion; the executable owns model
 calls, selection UI, Pi streaming, rendering, and persistent state.
