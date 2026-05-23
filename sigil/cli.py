@@ -16,6 +16,7 @@ from .commands import generate, previous, select
 from .pi_stream import stream_events
 from .question import ask
 from .security import inherited_label, make_security, normalize_security, record_id
+from .session import clear_current_session, current_session_snapshot, known_sessions, session_paths
 from .state import append_event, read_json
 
 
@@ -80,6 +81,58 @@ def cmd_follow_up(args: argparse.Namespace) -> int:
     return ask(args.question, str(project_root() / "bin" / "stream-pi-json"), follow_up=True)
 
 
+def print_json(value: object) -> None:
+    """Print inspection data in a stable machine-readable shape."""
+    print(json.dumps(value, ensure_ascii=False, indent=2))
+
+
+def cmd_session(args: argparse.Namespace) -> int:
+    """Inspect or clear the current shell session state."""
+    if args.session_command == "path":
+        paths = session_paths()
+        if args.json:
+            print_json(paths)
+        else:
+            print(paths["session"])
+        return 0
+    if args.session_command == "list":
+        sessions = known_sessions()
+        if args.json:
+            print_json(sessions)
+        else:
+            for session in sessions:
+                print(f"{session['session_id']}\t{session['path']}")
+        return 0
+    if args.session_command == "clear":
+        removed = clear_current_session()
+        if args.json:
+            print_json({"removed": removed})
+        else:
+            if removed:
+                for path in removed:
+                    print(f"removed {path}")
+            else:
+                print("session already clear")
+        return 0
+
+    snapshot = current_session_snapshot()
+    if args.json:
+        print_json(snapshot)
+    else:
+        print(f"session {snapshot['session_id']}")
+        print(snapshot["path"])
+        for name, value in snapshot["files"].items():
+            if value is None:
+                continue
+            if isinstance(value, list):
+                print(f"{name}: {len(value)} entries")
+            elif isinstance(value, dict):
+                print(f"{name}: {len(value)} keys")
+            else:
+                print(f"{name}: present")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Parse the shell-agnostic Sigil CLI surface."""
     parser = argparse.ArgumentParser(prog="sigil")
@@ -106,6 +159,11 @@ def main(argv: list[str] | None = None) -> int:
 
     stream_pi = sub.add_parser("stream-pi-json")
     stream_pi.set_defaults(func=lambda _args: stream_events())
+
+    session = sub.add_parser("session")
+    session.add_argument("session_command", nargs="?", choices=("show", "path", "list", "clear"), default="show")
+    session.add_argument("--json", action="store_true")
+    session.set_defaults(func=cmd_session)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

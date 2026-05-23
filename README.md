@@ -52,6 +52,10 @@ sigil command --select "find wav files"
 sigil previous-command --select
 sigil question "what is tldraw?"
 sigil follow-up "how would that work in practice?"
+sigil session show
+sigil session path
+sigil session list
+sigil session clear
 sigil stream-pi-json
 ```
 
