@@ -1,3 +1,9 @@
+"""Lifecycle helpers for the local model server used by Sigil and Pi.
+
+This is intentionally local-machine oriented for now: Sigil can start the
+user's existing helper script and waits for the llama.cpp-compatible port.
+"""
+
 from __future__ import annotations
 
 import os
@@ -9,6 +15,7 @@ from pathlib import Path
 
 
 def qwen_port_open() -> bool:
+    """Return whether the local OpenAI-compatible server is listening."""
     try:
         with socket.create_connection(("127.0.0.1", 8080), timeout=0.25):
             return True
@@ -17,6 +24,7 @@ def qwen_port_open() -> bool:
 
 
 def start_qwen_for_pi() -> bool:
+    """Start the local model server before invoking Pi, if needed."""
     if qwen_port_open():
         return True
 
@@ -47,4 +55,3 @@ def start_qwen_for_pi() -> bool:
 
     print(f"pi: local Qwen server did not become ready; see {log_path}", file=sys.stderr)
     return False
-

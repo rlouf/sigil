@@ -1,3 +1,9 @@
+"""Minimal OpenAI-compatible client for the local llama.cpp/Qwen server.
+
+Sigil keeps this small to avoid taking a runtime dependency on an SDK for one
+structured chat-completions call.
+"""
+
 from __future__ import annotations
 
 import json
@@ -15,18 +21,22 @@ DEFAULT_MODEL = "qwen3.6-27b-q8-local"
 
 
 def qwen_url() -> str:
+    """Return the OpenAI-compatible endpoint used for command generation."""
     return os.environ.get("QWEN_URL", DEFAULT_URL)
 
 
 def qwen_model() -> str:
+    """Return the model alias expected by the local server."""
     return os.environ.get("QWEN_MODEL", DEFAULT_MODEL)
 
 
 def qwen_model_path() -> str:
+    """Return the optional model path shown in startup help text."""
     return os.environ.get("QWEN_MODEL_PATH", "<path-to-model.gguf>")
 
 
 def ensure_server() -> bool:
+    """Check that the local model server is reachable before inference."""
     if qwen_port_open():
         return True
     print("", file=sys.stderr)
@@ -45,6 +55,7 @@ def ensure_server() -> bool:
 
 
 def chat_json(system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """Request schema-constrained JSON from the local model server."""
     body = {
         "model": qwen_model(),
         "messages": [

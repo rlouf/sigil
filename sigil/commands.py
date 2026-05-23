@@ -1,3 +1,9 @@
+"""Command-generation flow for the comma glyph.
+
+This module owns the model prompt, candidate normalization, trust metadata, and
+selector behavior. Shell bindings only ask it for a selected command.
+"""
+
 from __future__ import annotations
 
 import subprocess
@@ -39,6 +45,11 @@ COMMAND_SYSTEM = (
 
 
 def generate(prompt: str) -> list[dict[str, str]]:
+    """Ask the local model for runnable command candidates.
+
+    The result is stored in session state so `,,` can reopen the same candidates
+    without repeating inference.
+    """
     if not ensure_server():
         raise SystemExit(1)
     print(f"{MUTED}❯ sigil ,  · propose · model-authored{RESET}", file=sys.stderr)
@@ -79,6 +90,7 @@ def generate(prompt: str) -> list[dict[str, str]]:
 
 
 def previous() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
+    """Load the last generated command set for the current session."""
     data = read_json("last-command.json")
     if not data or not data.get("commands"):
         print(f"{LOVE}✗ no previous command suggestions{RESET}", file=sys.stderr)
@@ -88,6 +100,7 @@ def previous() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
 
 
 def select(prompt: str, candidates: list[dict[str, str]], metadata: dict[str, Any] | None = None) -> str | None:
+    """Return the command selected by the user, preferring the fzf UI."""
     metadata = normalize_security(metadata or {})
     if len(candidates) == 1:
         return candidates[0]["command"]
@@ -138,6 +151,7 @@ def select_numbered(
     candidates: list[dict[str, str]],
     metadata: dict[str, Any] | None = None,
 ) -> str | None:
+    """Fallback selector for environments without fzf."""
     prefix = candidate_prefix(metadata or {})
     print(f"{MUTED}commands for {prompt}{RESET}", file=sys.stderr)
     for index, item in enumerate(candidates, start=1):

@@ -1,3 +1,10 @@
+"""Persistent state for Sigil sessions.
+
+Global state captures audit/debug events. Session state captures continuity for
+one shell, so multiple terminal windows do not overwrite each other's `??` or
+`,,` context.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +18,7 @@ from .security import normalize_security
 
 
 def state_dir() -> Path:
+    """Return the global Sigil state directory."""
     base = os.environ.get("SIGIL_STATE_DIR")
     if base:
         return Path(base)
@@ -18,10 +26,12 @@ def state_dir() -> Path:
 
 
 def session_id() -> str:
+    """Return the current shell session identifier."""
     return os.environ.get("SIGIL_SESSION_ID") or "default"
 
 
 def session_dir() -> Path:
+    """Return the directory that stores continuity for this shell session."""
     base = os.environ.get("SIGIL_SESSION_DIR")
     if base:
         return Path(base)
@@ -29,6 +39,7 @@ def session_dir() -> Path:
 
 
 def append_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Append a global audit/debug event with session and trust metadata."""
     root = state_dir()
     root.mkdir(parents=True, exist_ok=True)
     payload = normalize_security(
@@ -46,6 +57,7 @@ def append_event(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_json(name: str, value: Any) -> None:
+    """Atomically write a session-scoped JSON document."""
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
     tmp = root / f"{name}.tmp"
@@ -55,6 +67,7 @@ def write_json(name: str, value: Any) -> None:
 
 
 def append_jsonl(name: str, event: dict[str, Any]) -> dict[str, Any]:
+    """Append a session-scoped JSONL event."""
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
     payload = normalize_security(
@@ -72,6 +85,7 @@ def append_jsonl(name: str, event: dict[str, Any]) -> dict[str, Any]:
 
 
 def write_jsonl(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Replace a session-scoped JSONL file atomically."""
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
     tmp = root / f"{name}.tmp"
@@ -95,6 +109,7 @@ def write_jsonl(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 
 def read_jsonl(name: str) -> list[dict[str, Any]]:
+    """Read a session-scoped JSONL file, skipping malformed lines."""
     path = session_dir() / name
     if not path.exists():
         return []
@@ -110,6 +125,7 @@ def read_jsonl(name: str) -> list[dict[str, Any]]:
 
 
 def read_json(name: str) -> Any | None:
+    """Read a session-scoped JSON document if it exists and parses."""
     path = session_dir() / name
     if not path.exists():
         return None

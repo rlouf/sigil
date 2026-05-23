@@ -1,3 +1,11 @@
+"""Render Pi JSON events while preserving structured state.
+
+Pi emits machine-readable events. This filter turns tool calls into live grey
+status lines, streams answer text to stdout for `glow`, and writes only the
+right pieces into session state: assistant turns to the question transcript and
+tool calls to the tool trace.
+"""
+
 from __future__ import annotations
 
 import json
@@ -13,11 +21,13 @@ from .state import append_event, append_jsonl
 
 
 def clear_status(stderr: TextIO) -> None:
+    """Erase the transient spinner/status line before printing durable output."""
     stderr.write("\r\033[K")
     stderr.flush()
 
 
 def summarize(tool: str, args: object) -> str:
+    """Extract a short human-readable label for a tool call."""
     if not isinstance(args, dict):
         return ""
     if tool == "read":
@@ -30,6 +40,7 @@ def summarize(tool: str, args: object) -> str:
 
 
 def env_security() -> dict[str, object]:
+    """Recover trust metadata passed from the parent `sigil question` process."""
     taint = [
         item
         for item in os.environ.get("SIGIL_SECURITY_TAINT", "").split(",")
@@ -51,6 +62,7 @@ def env_security() -> dict[str, object]:
 
 
 def stream_events(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr: TextIO = sys.stderr) -> int:
+    """Filter Pi's event stream into terminal output and Sigil state files."""
     started_text = False
     answer_chunks: list[str] = []
     security = env_security()

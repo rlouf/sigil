@@ -1,3 +1,9 @@
+"""Command-line boundary between shell bindings and the Sigil runtime.
+
+The CLI is intentionally boring: shell integrations should call these commands
+instead of reimplementing model calls, selectors, rendering, or state handling.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -14,10 +20,12 @@ from .state import append_event, read_json
 
 
 def project_root() -> Path:
+    """Return the checkout root so helper executables can be found reliably."""
     return Path(__file__).resolve().parents[1]
 
 
 def cmd_command(args: argparse.Namespace) -> int:
+    """Generate command candidates and optionally run the selector UI."""
     candidates = generate(args.prompt)
     source = normalize_security(read_json("last-command.json") or {})
     security = make_security(
@@ -44,6 +52,7 @@ def cmd_command(args: argparse.Namespace) -> int:
 
 
 def cmd_previous_command(args: argparse.Namespace) -> int:
+    """Reopen the previous command candidates for the current shell session."""
     prompt, candidates, security = previous()
     continued = append_event({"type": "command_continued", "prompt": prompt, **security})
     security = {**security, "inputs": [continued["id"]]}
@@ -62,14 +71,17 @@ def cmd_previous_command(args: argparse.Namespace) -> int:
 
 
 def cmd_question(args: argparse.Namespace) -> int:
+    """Answer a fresh shell question and reset the session transcript."""
     return ask(args.question, str(project_root() / "bin" / "stream-pi-json"))
 
 
 def cmd_follow_up(args: argparse.Namespace) -> int:
+    """Continue the current session transcript with a follow-up question."""
     return ask(args.question, str(project_root() / "bin" / "stream-pi-json"), follow_up=True)
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse the shell-agnostic Sigil CLI surface."""
     parser = argparse.ArgumentParser(prog="sigil")
     sub = parser.add_subparsers(dest="command_name", required=True)
 

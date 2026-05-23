@@ -1,3 +1,9 @@
+"""Question and follow-up flow for `?` and `??`.
+
+This module owns discussion continuity. A fresh `?` resets the session question
+transcript; `??` expands the prompt from that transcript before calling Pi.
+"""
+
 from __future__ import annotations
 
 import os
@@ -17,6 +23,7 @@ QUESTION_SYSTEM_PROMPT = (
 
 
 def discussion_turns() -> list[dict[str, object]]:
+    """Load user/assistant turns that should be visible to `??`."""
     return [
         turn
         for turn in read_jsonl("last-question.jsonl")
@@ -25,6 +32,7 @@ def discussion_turns() -> list[dict[str, object]]:
 
 
 def continuation_prompt(question: str, turns: list[dict[str, object]]) -> str:
+    """Build the follow-up prompt from the prior shell discussion."""
     if not turns:
         return question
     transcript = "\n\n".join(
@@ -41,6 +49,7 @@ def continuation_prompt(question: str, turns: list[dict[str, object]]) -> str:
 
 
 def ask(question: str, stream_filter: str, *, follow_up: bool = False) -> int:
+    """Run Pi for a question while recording transcript and tool trace state."""
     if not start_qwen_for_pi():
         return 1
 
