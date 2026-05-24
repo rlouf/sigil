@@ -103,7 +103,7 @@ After install, verify the local pieces:
 
 ```sh
 command -v sigil fzf glow pi
-curl -fsS "${QWEN_URL:-http://127.0.0.1:8080/v1/chat/completions}" >/dev/null
+python3 -c 'import socket; socket.create_connection(("127.0.0.1", 8080), timeout=1).close()'
 ```
 
 The endpoint check is expected to fail unless your local OpenAI-compatible model
@@ -215,11 +215,13 @@ glyph expression at the prompt and press `Ctrl-X ,`.
 - `glow` for Markdown rendering
 - `pi` for question answering
 
-`pi` is the .txt agent CLI used by the `?` and `??` routes. Sigil invokes it as
-`pi --json --tools read,web_search ...`, then renders the event stream through
-`sigil render-pi-stream` so tool calls, answer text, and trust metadata are
-recorded in Sigil state. `pi` must be on `PATH`, and for the current local setup
-it should be able to start or reach the same Qwen endpoint used by Sigil.
+`pi` is the .txt agent CLI used by the `?` and `??` routes. It is not installed
+by Sigil. Install and configure it separately, then verify `pi --help` works.
+Sigil invokes it as `pi --json --tools read,web_search ...`, then renders the
+event stream through `sigil render-pi-stream` so tool calls, answer text, and
+trust metadata are recorded in Sigil state. `pi` must be on `PATH`, and for the
+current local setup it should be able to start or reach the same Qwen endpoint
+used by Sigil.
 
 Environment knobs:
 
