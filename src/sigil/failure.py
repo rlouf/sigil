@@ -140,14 +140,8 @@ def last_failure() -> dict[str, Any]:
     return failure
 
 
-def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
-    """Generate repair candidates for the current session's last failure."""
-    failure = normalize_security(last_failure())
-    if not ensure_server():
-        raise SystemExit(1)
-
-    print(f"{MUTED}❯ sigil ^  · repair · model-authored{RESET}", file=sys.stderr)
-    print(f"{MUTED}⟳ thinking…{RESET}", end="", file=sys.stderr, flush=True)
+def fix_prompt(failure: dict[str, Any]) -> str:
+    """Build the model prompt for repair without inventing missing output."""
     context = failure.get("context") if isinstance(failure.get("context"), dict) else {}
     prompt_lines = [
         f"Failed command: {failure['command']}",
@@ -156,8 +150,21 @@ def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
     ]
     if failure.get("stderr_snippet"):
         prompt_lines.extend(["", "Recent stderr:", str(failure["stderr_snippet"])])
+    else:
+        prompt_lines.extend(["", "Recent stderr: <not captured>"])
     if failure.get("stdout_snippet"):
         prompt_lines.extend(["", "Recent stdout:", str(failure["stdout_snippet"])])
+    else:
+        prompt_lines.extend(["", "Recent stdout: <not captured>"])
+    prompt_lines.extend(
+        [
+            "",
+            "Repair guidance:",
+            "- Do not invent missing stdout or stderr.",
+            "- Use the command, exit status, cwd, git status, and cwd entries first.",
+            "- If output is not captured, say so in the candidate note when relevant.",
+        ]
+    )
     if context:
         prompt_lines.extend(["", "Safe local context:"])
         for key in ("git_root", "git_branch"):
@@ -169,7 +176,18 @@ def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
         if context.get("entries"):
             prompt_lines.append("cwd_entries:")
             prompt_lines.extend(f"  {entry}" for entry in context["entries"])
-    user = "\n".join(prompt_lines)
+    return "\n".join(prompt_lines)
+
+
+def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
+    """Generate repair candidates for the current session's last failure."""
+    failure = normalize_security(last_failure())
+    if not ensure_server():
+        raise SystemExit(1)
+
+    print(f"{MUTED}❯ sigil ^  · repair · model-authored{RESET}", file=sys.stderr)
+    print(f"{MUTED}⟳ thinking…{RESET}", end="", file=sys.stderr, flush=True)
+    user = fix_prompt(failure)
     try:
         data = chat_json(FIX_SYSTEM, user, COMMAND_SCHEMA)
     except RuntimeError as exc:

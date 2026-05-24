@@ -546,6 +546,11 @@ class StateTests(unittest.TestCase):
                 self.assertTrue(security["inputs"][0])
                 self.assertIn("Failed command: bad command", captured_prompts[0])
                 self.assertIn("Working directory: /tmp", captured_prompts[0])
+                self.assertIn("Recent stderr: <not captured>", captured_prompts[0])
+                self.assertIn("Recent stdout: <not captured>", captured_prompts[0])
+                self.assertIn(
+                    "Do not invent missing stdout or stderr.", captured_prompts[0]
+                )
 
                 previous_prompt, previous_candidates, previous_security = previous_fix()
                 self.assertEqual(previous_prompt, "bad command")
