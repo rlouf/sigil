@@ -44,7 +44,7 @@ Current rough install:
 
 ```sh
 uv tool install git+https://github.com/rlouf/sigil
-curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/scripts/install.zsh | zsh
+curl -fsSL https://raw.githubusercontent.com/rlouf/sigil/main/zsh/install.zsh | zsh
 ```
 
 The installer downloads the zsh binding to `~/.sigil/shell/zsh/sigil.zsh` and
@@ -53,9 +53,9 @@ adds an idempotent source block to `~/.zshrc`.
 ## Layout
 
 ```text
-scripts/install.zsh    zsh binding installer
 sigil/                 Python core runtime
-zsh/sigil.zsh          zsh bindings only
+zsh/install.zsh        zsh binding installer
+zsh/sigil.zsh          zsh binding
 ```
 
 Core commands:

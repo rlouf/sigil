@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
 from .ansi import MUTED, RESET
 from .commands import generate, previous, select
@@ -19,11 +18,6 @@ from .question import ask
 from .security import inherited_label, make_security, normalize_security, record_id
 from .session import clear_current_session, current_session_snapshot, known_sessions, session_paths
 from .state import append_event, read_json
-
-
-def project_root() -> Path:
-    """Return the checkout root so helper executables can be found reliably."""
-    return Path(__file__).resolve().parents[1]
 
 
 def cmd_command(args: argparse.Namespace) -> int:
