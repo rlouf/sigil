@@ -120,6 +120,7 @@ sigil fix
 sigil fix --previous
 sigil question "what is tldraw?"
 sigil question --follow-up "how would that work in practice?"
+sigil edit path/to/file.py "make error handling explicit"
 sigil summary
 sigil install zsh
 sigil doctor
@@ -132,6 +133,33 @@ sigil session clear
 
 The zsh binding calls those commands and inserts selected commands back into the
 prompt with `print -z`.
+
+## Single-file edits
+
+`sigil edit` asks Pi to prepare a one-file proposal, opens the proposal in a
+diff editor for hunk-level review, and applies it only after confirmation:
+
+```sh
+sigil edit path/to/file.py "make empty input explicit"
+```
+
+V1 is deliberately narrow: the target must be one existing UTF-8 text file, Pi
+is invoked with only `read,edit` tools, and Sigil refuses to continue if the
+source file changes before review completes. By default the review command is:
+
+```sh
+nvim -d /absolute/path/to/file.py /tmp/sigil-edit-.../file.py.proposed
+```
+
+Use Neovim's normal diff commands to validate hunks:
+
+```text
+]c / [c  move between hunks
+do       get change from the other side
+dp       put change to the other side
+```
+
+After the editor exits, Sigil asks whether to apply the reviewed proposal.
 
 ## State
 

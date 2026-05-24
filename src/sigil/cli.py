@@ -14,6 +14,7 @@ import click
 
 from .ansi import MUTED, RESET
 from .commands import generate, previous as previous_command_state, select
+from .edit import edit_file, result_to_json
 from .failure import record_failure, select_fix, select_previous_fix
 from .install import (
     SUPPORTED_SHELLS,
@@ -135,6 +136,45 @@ def cmd_command(
 def cmd_question(question: str, follow_up: bool, json_output: bool) -> int:
     """Answer a fresh shell question and reset the session transcript."""
     return ask(question, follow_up=follow_up, json_output=json_output)
+
+
+@cli.command("edit")
+@click.argument("file", type=click.Path(path_type=Path, dir_okay=False))
+@click.argument("instruction")
+@click.option("--yes", is_flag=True, help="Apply the reviewed proposal without asking.")
+@click.option(
+    "--editor",
+    help="Diff editor command. Defaults to SIGIL_EDITOR, VISUAL, EDITOR, then nvim.",
+)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_edit(
+    file: Path,
+    instruction: str,
+    yes: bool,
+    editor: str | None,
+    json_output: bool,
+) -> int:
+    """Propose a reviewed single-file edit using Pi and a diff editor."""
+    try:
+        result = edit_file(file, instruction, editor=editor, yes=yes)
+    except FileNotFoundError as error:
+        click.echo(f"sigil: file not found: {error.filename or file}", err=True)
+        return 1
+    except ValueError as error:
+        click.echo(f"sigil: {error}", err=True)
+        return 1
+    except RuntimeError as error:
+        click.echo(f"sigil: {error}", err=True)
+        return 1
+
+    if json_output:
+        print(result_to_json(result))
+        return 0 if result.applied else 1
+    if result.applied:
+        print(f"applied reviewed proposal to {result.path}")
+        return 0
+    print(f"left original unchanged; proposal remains at {result.proposal_path}")
+    return 1
 
 
 def run_install_shell(
