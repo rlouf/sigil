@@ -15,7 +15,7 @@ def make_stub(tmp: Path) -> Path:
     stub = tmp / "sigil-stub"
     stub.write_text(
         textwrap.dedent(
-            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  "command --select hello") printf \'%s\\n\' "echo generated" ;;\n                  "command --previous --select") printf \'%s\\n\' "echo previous" ;;\n                  "fix") printf \'%s\\n\' "echo fix" ;;\n                  "fix --previous") printf \'%s\\n\' "echo previous-fix" ;;\n                  "question hello") printf \'%s\\n\' "answer" ;;\n                  "question --follow-up hello") printf \'%s\\n\' "follow-up" ;;\n                  "summary") printf \'%s\\n\' "summary" ;;\n                  "summary now") printf \'%s\\n\' "summary now" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
+            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  "command --select hello") printf \'%s\\n\' "echo generated" ;;\n                  "command --previous --select") printf \'%s\\n\' "echo previous" ;;\n                  "fix") printf \'%s\\n\' "echo fix" ;;\n                  "fix --previous") printf \'%s\\n\' "echo previous-fix" ;;\n                  "question hello") printf \'%s\\n\' "answer" ;;\n                  "question --follow-up hello") printf \'%s\\n\' "follow-up" ;;\n                  "summary") printf \'%s\\n\' "summary" ;;\n                  "summary now") printf \'%s\\n\' "summary now" ;;\n                  op*) printf \'%s\\n\' "op:$*" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
         ),
         encoding="utf-8",
     )
@@ -59,7 +59,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_previous_command\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_previous_fix\n                    "
+                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_previous_command\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_previous_fix\n                    printf 'pending=%s\\n' \"$__sigil_pending_command\"\n                    printf 'pending_prefix=%s\\n' \"$__sigil_pending_prefix\"\n                    "
             ),
             tmp,
             stub,
@@ -73,11 +73,121 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
             "fix",
             "fix --previous",
         ]
-        assert "echo generated" in result.stdout
-        assert "echo previous-fix" in result.stdout
+        # Proposals set pending state (last call wins), not stdout.
+        assert "pending=echo previous-fix" in result.stdout
+        assert "pending_prefix=[model/propose]" in result.stdout
+
+
+def test_bash_proposals_set_pending_state_not_stdout() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    printf 'pending=%d\\n' \"$__sigil_pending_show\"\n                    printf 'pending_cmd=%s\\n' \"$__sigil_pending_command\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "pending=1" in result.stdout
+        assert "pending_cmd=echo generated" in result.stdout
+        # The command should NOT be printed to stdout.
+        assert "echo generated" not in result.stdout.split("pending_cmd=")[0]
+
+
+def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'files\\n' | sigil_previous_fix rename symbol\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            "op ?? review risky changes",
+            "op , draft executive summary",
+            "op ^^ rename symbol",
+        ]
+
+
+def test_bash_readline_use_inserts_pending_command() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    __sigil_show_pending 'echo hello' '[model/propose]'\n                    READLINE_LINE=''\n                    READLINE_POINT=0\n                    __sigil_readline_use\n                    printf 'buffer=%s\\n' \"$READLINE_LINE\"\n                    printf 'point=%d\\n' \"$READLINE_POINT\"\n                    printf 'show=%d\\n' \"$__sigil_pending_show\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "buffer=echo hello" in result.stdout
+        assert "point=10" in result.stdout
+        assert "show=0" in result.stdout
+
+
+def test_bash_readline_discard_clears_pending_state() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    __sigil_show_pending 'echo hello' '[model/propose]'\n                    READLINE_LINE=''\n                    READLINE_POINT=0\n                    __sigil_readline_discard\n                    printf 'show=%d\\n' \"$__sigil_pending_show\"\n                    printf 'cmd=%s\\n' \"$__sigil_pending_command\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "show=0" in result.stdout
+        assert "cmd=" in result.stdout
+
+
+def test_bash_prompt_setup_wraps_ps1_with_pending_block() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    PS1='$ ' \n                    __sigil_show_pending 'git status' '[model/propose]'\n                    __sigil_prompt_setup\n                    printf 'ps1_has_block=%d\\n' \"$(printf '%s' \"$PS1\" | grep -c 'git status')\"\n                    printf 'ps1_has_prefix=%d\\n' \"$(printf '%s' \"$PS1\" | grep -c 'model/propose')\"\n                    printf 'saved_ps1=%s\\n' \"$__sigil_saved_ps1\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "ps1_has_block=1" in result.stdout
+        assert "ps1_has_prefix=1" in result.stdout
+        assert "saved_ps1=$ " in result.stdout
+
+
+def test_bash_discard_restores_original_ps1() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    PS1='$ ' \n                    __sigil_show_pending 'git status' '[model/propose]'\n                    __sigil_prompt_setup\n                    __sigil_discard_pending\n                    printf 'ps1=%s\\n' \"$PS1\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "ps1=$ " in result.stdout
 
 
 def test_bash_readline_dispatch_inserts_proposals_without_executing() -> None:
+    """The Ctrl-X , readline dispatch still inserts directly into READLINE_LINE."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -220,6 +330,30 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
             "fix",
             "fix --previous",
         ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                "                    source shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'files\\n' | sigil_previous_fix rename symbol\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            "op ?? review risky changes",
+            "op , draft executive summary",
+            "op ^^ rename symbol",
+        ]
+        assert "op:op ?? review risky changes" in result.stdout
+        assert "op:op , draft executive summary" in result.stdout
+        assert "op:op ^^ rename symbol" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
