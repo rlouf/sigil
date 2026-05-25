@@ -12,9 +12,7 @@ from pathlib import Path
 
 import click
 
-from .ansi import MUTED, RESET
-from .commands import generate, previous as previous_command_state, select
-from .failure import record_failure, select_fix, select_previous_fix
+from .failure import record_failure
 from .install import (
     SUPPORTED_SHELLS,
     checks_exit_code,
@@ -25,13 +23,6 @@ from .install import (
 )
 from .operators import create_invocation, run_invocation
 from .pi_stream import stream_events
-from .question import ask
-from .security import (
-    inherited_label,
-    create_trust_metadata,
-    normalize_trust_record,
-    record_id,
-)
 from .session import (
     clear_current_session,
     current_session_snapshot,
@@ -39,83 +30,11 @@ from .session import (
     known_sessions,
     session_paths,
 )
-from .state import append_event, read_json
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
     pass
-
-
-@cli.command("command")
-@click.argument("prompt", required=False)
-@click.option("--previous", "previous_command", is_flag=True)
-@click.option("--select", "select_candidate", is_flag=True)
-@click.option("--json", "json_output", is_flag=True)
-def cmd_command(
-    prompt: str | None,
-    previous_command: bool,
-    select_candidate: bool,
-    json_output: bool,
-) -> int:
-    """Generate command candidates and optionally run the selector UI."""
-    if previous_command:
-        prompt, candidates, security = previous_command_state()
-        continued = append_event(
-            {"type": "command_continued", "prompt": prompt, **security}
-        )
-        security = {**security, "inputs": [continued["id"]]}
-        print(
-            f"{MUTED}❯ sigil ,, · inherited: {inherited_label(security)}{RESET}",
-            file=sys.stderr,
-        )
-        if json_output:
-            print_json_line({"prompt": prompt, "commands": candidates, **security})
-            return 0
-        command = (
-            select(prompt, candidates, security)
-            if select_candidate
-            else candidates[0]["command"]
-        )
-        if command:
-            append_event({"type": "command_selected", "command": command, **security})
-            print(command)
-        return 0
-    if prompt is None:
-        raise click.UsageError("PROMPT is required unless --previous is set.")
-
-    candidates = generate(prompt)
-    source = normalize_trust_record(read_json("last-command.json") or {})
-    security = create_trust_metadata(
-        glyph=",",
-        integrity="local_model",
-        capability="propose",
-        taint=["model"],
-        inputs=[record_id(source)],
-        input_records=[source],
-        fresh_human=True,
-    )
-    if json_output:
-        print_json_line({"prompt": prompt, "commands": candidates})
-        return 0
-    if select_candidate:
-        command = select(prompt, candidates, security)
-        if command:
-            append_event({"type": "command_selected", "command": command, **security})
-            print(command)
-        return 0
-    for item in candidates:
-        print(item["command"])
-    return 0
-
-
-@cli.command("question")
-@click.argument("question")
-@click.option("--follow-up", is_flag=True)
-@click.option("--json", "json_output", is_flag=True)
-def cmd_question(question: str, follow_up: bool, json_output: bool) -> int:
-    """Answer a fresh shell question and reset the session transcript."""
-    return ask(question, follow_up=follow_up, json_output=json_output)
 
 
 @cli.command("op", hidden=True)
@@ -345,17 +264,6 @@ def cmd_record_failure(
 ) -> int:
     """Record a failed shell command for later repair."""
     record_failure(command, status, cwd, stdout_snippet, stderr_snippet)
-    return 0
-
-
-@cli.command("fix")
-@click.option("--previous", is_flag=True)
-def cmd_fix(previous: bool) -> int:
-    """Suggest fixes for the last recorded failed shell command."""
-    command = select_previous_fix() if previous else select_fix()
-    if command:
-        append_event({"type": "fix_selected", "command": command})
-        print(command)
     return 0
 
 

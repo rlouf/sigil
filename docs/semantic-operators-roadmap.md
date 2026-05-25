@@ -311,6 +311,10 @@ Keep output on stdout so normal Unix composition works.
 
 ### Milestone 5: unify interactive glyphs on the operator runtime
 
+Status: implemented. Shell glyph wrappers and prompt dispatch now use `sigil op`
+directly; the old public `command`, `question`, and `fix` CLI routes have been
+removed.
+
 Once stream semantics are stable, make interactive `?`, `,`, and `^` call the
 same operator core where practical.
 

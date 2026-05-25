@@ -203,6 +203,8 @@ def repair_user_prompt(invocation: OperatorInvocation) -> str:
                 content = content[:MAX_REPAIR_FILE_CHARS]
                 label = f"{label} (first {MAX_REPAIR_FILE_CHARS} chars)"
             sections.append(f"--- {label}\n{content}")
+    elif not invocation.stdin and invocation.mode == "interactive":
+        sections.append(interactive_failure_context())
     else:
         sections.append("No readable file snapshots were found from stdin.")
     return "\n\n".join(sections)
@@ -221,6 +223,17 @@ def repair_files(lines: list[str]) -> list[tuple[Path, str]]:
             continue
         files.append((path, content))
     return files
+
+
+def interactive_failure_context() -> str:
+    """Return last-failure context for interactive repair operators."""
+    try:
+        from .failure import fix_prompt, last_failure
+
+        failure = last_failure()
+    except SystemExit:
+        return "No failed command is recorded for interactive repair."
+    return "Last failed command context:\n" + fix_prompt(failure)
 
 
 def max_tokens_for_depth(depth: int) -> int:

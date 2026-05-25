@@ -86,12 +86,9 @@ def test_top_level_help_lists_commands() -> None:
     assert result.exit_code == 0
     assert "Commands:" in result.output
     for command in [
-        "command",
         "doctor",
         "events",
-        "fix",
         "install",
-        "question",
         "session",
     ]:
         assert command in result.output
@@ -102,7 +99,7 @@ def test_main_rewrites_missing_executable_errors() -> None:
     missing = FileNotFoundError(2, "No such file or directory", "pi")
     with patch("sigil.cli.cli.main", side_effect=missing):
         with redirect_stderr(stderr):
-            assert main(["question", "hello"]) == 127
+            assert main(["op", "?", "hello"]) == 127
     assert "missing executable: pi" in stderr.getvalue()
 
 
@@ -111,60 +108,8 @@ def test_main_rewrites_permission_errors() -> None:
     denied = PermissionError(1, "Operation not permitted", "/nope/events.jsonl")
     with patch("sigil.cli.cli.main", side_effect=denied):
         with redirect_stderr(stderr):
-            assert main(["question", "hello"]) == 1
+            assert main(["op", "?", "hello"]) == 1
     assert "permission denied: /nope/events.jsonl" in stderr.getvalue()
-
-
-def test_command_json_invokes_fresh_command_route() -> None:
-    with patch(
-        "sigil.cli.generate",
-        return_value=[{"command": "git status --short", "note": "show status"}],
-    ):
-        result = CliRunner().invoke(cli, ["command", "--json", "status"])
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
-    assert payload["prompt"] == "status"
-    assert payload["commands"][0]["command"] == "git status --short"
-
-
-def test_command_previous_json_invokes_previous_route() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
-        try:
-            write_json(
-                "last-command.json",
-                {
-                    "id": "command-event",
-                    "prompt": "status",
-                    "commands": [
-                        {"command": "git status --short", "note": "show changes"}
-                    ],
-                    "glyph": ",",
-                    "integrity": "local_model",
-                    "capability": "propose",
-                    "taint": ["model"],
-                },
-            )
-            result = CliRunner().invoke(cli, ["command", "--previous", "--json"])
-            assert result.exit_code == 0, result.output
-            payload = json.loads(result.output.splitlines()[0])
-            assert payload["prompt"] == "status"
-            assert payload["commands"][0]["command"] == "git status --short"
-            assert payload["glyph"] == ",,"
-            assert payload["taint"] == ["model"]
-            assert payload["integrity"] == "local_model"
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
 def test_events_lineage_json_follows_transitive_inputs() -> None:

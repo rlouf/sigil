@@ -10,127 +10,45 @@ written to stdout.
 ## Top-level examples
 
 ```sh
-sigil command --select "find large files"
-sigil question --json "what changed in this repo?"
+sigil op "," "find large files"
+sigil op "??" "what changed in this repo?"
+sigil op "^^" "generate a cleanup patch"
 sigil install zsh
 sigil doctor
 sigil events lineage
 sigil session show --json
 ```
 
-## `sigil command --json`
+## `sigil op --json`
 
-Generates fresh command candidates without opening the selector.
+Parses a glyph invocation without running the model. This is the stable
+machine-readable introspection path for shell bindings and tests.
 
 ```json
 {
-  "prompt": "find large files",
-  "commands": [
-    {
-      "command": "find . -type f -size +100M",
-      "note": "Find files larger than 100 MB under the current directory."
-    }
-  ]
+  "glyph": "??",
+  "base": "?",
+  "depth": 2,
+  "name": "inspect",
+  "prompt": "review risky changes",
+  "stdin": "diff --git a/file b/file\n",
+  "mode": "pipeline"
 }
 ```
 
 Stable fields:
-
-- `prompt`: original user prompt.
-- `commands`: ordered candidate list.
-- `commands[].command`: runnable shell command proposal.
-- `commands[].note`: short explanation.
-
-## `sigil command --previous --json`
-
-Reopens the current session's previous command candidates.
-
-```json
-{
-  "prompt": "find large files",
-  "commands": [
-    {
-      "command": "find . -type f -size +100M",
-      "note": "Find files larger than 100 MB under the current directory."
-    }
-  ],
-  "glyph": ",,",
-  "inputs": ["event-id"],
-  "integrity": "local_model",
-  "capability": "propose",
-  "taint": ["model"],
-  "provisional": false
-}
-```
-
-Stable fields are the same as `sigil command --json`, plus trust metadata:
 
 - `glyph`
-- `inputs`
-- `integrity`
-- `capability`
-- `taint`
-- `provisional`
+- `base`: the operator family, currently `?`, `,`, or `^`.
+- `depth`: repeated-glyph count.
+- `name`: semantic operator name.
+- `prompt`: user prompt text after the glyph.
+- `stdin`: captured input stream.
+- `mode`: `pipeline` or `interactive`.
 
-## `sigil question --json`
-
-Runs the Pi question pipeline and emits one JSON object instead of rendering
-Markdown through `glow`.
-
-Non-JSON question output is rendered with `glow --style notty --width 88` when
-Glow is available, otherwise `cat`. Override this with `SIGIL_GLOW_STYLE` and
-`SIGIL_GLOW_WIDTH`.
-
-```json
-{
-  "ok": true,
-  "type": "answer",
-  "question": "what changed in this repo?",
-  "prompt": "what changed in this repo?",
-  "follow_up": false,
-  "answer": "The repository changed ...",
-  "answer_event_id": "event-id",
-  "tools": [
-    {
-      "type": "tool_start",
-      "tool": "web_search",
-      "detail": "query",
-      "args": {"query": "query"},
-      "glyph": "?",
-      "inputs": ["question-event-id"],
-      "integrity": "web",
-      "capability": "read",
-      "taint": ["web"],
-      "provisional": true
-    }
-  ],
-  "malformed_events": 0,
-  "security": {
-    "glyph": "?",
-    "inputs": ["question-event-id"],
-    "integrity": "web",
-    "capability": "read",
-    "taint": ["web"],
-    "provisional": true
-  }
-}
-```
-
-Stable fields:
-
-- `ok`: `true` when the stream renderer completed successfully.
-- `type`: currently always `"answer"`.
-- `question`: user-visible question text.
-- `prompt`: expanded prompt sent to Pi. For follow-ups, this includes context.
-- `follow_up`: whether this was invoked through `sigil question --follow-up --json`.
-- `answer`: concatenated assistant text.
-- `answer_event_id`: event id for the stored answer, or `null` if no answer text
-  was emitted.
-- `tools`: ordered Pi tool trace events.
-- `malformed_events`: count of malformed Pi JSON event lines ignored.
-- `security`: trust metadata applied to the answer and tool trace.
-
-`sigil question --follow-up --json` uses the same shape with `follow_up: true`.
+Without `--json`, `sigil op` runs the operator. Piped `?` / `??` inspect stdin,
+`,` / `,,` synthesize or propose output, and `^` / `^^` generate repair
+previews. Operator output is written to stdout; status and errors go to stderr.
 
 ## `sigil events lineage --json`
 

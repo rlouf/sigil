@@ -28,12 +28,12 @@ sigil_command() {
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" command --select "$*")" || return $?
+  selected="$("$__sigil_bin" op "," "$@")" || return $?
   [[ -n "$selected" ]] && print -z -- "$selected"
 }
 
 __sigil_select_command() {
-  "$__sigil_bin" command --select "$*"
+  "$__sigil_bin" op "," "$@"
 }
 
 sigil_previous_command() {
@@ -42,12 +42,12 @@ sigil_previous_command() {
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" command --previous --select)" || return $?
+  selected="$("$__sigil_bin" op ",," "$@")" || return $?
   [[ -n "$selected" ]] && print -z -- "$selected"
 }
 
 __sigil_select_previous_command() {
-  "$__sigil_bin" command --previous --select
+  "$__sigil_bin" op ",,"
 }
 
 sigil_question() {
@@ -55,7 +55,7 @@ sigil_question() {
     "$__sigil_bin" op "?" "$@"
     return $?
   fi
-  "$__sigil_bin" question "$*"
+  "$__sigil_bin" op "?" "$@"
 }
 
 sigil_follow_up() {
@@ -63,15 +63,15 @@ sigil_follow_up() {
     "$__sigil_bin" op "??" "$@"
     return $?
   fi
-  "$__sigil_bin" question --follow-up "$*"
+  "$__sigil_bin" op "??" "$@"
 }
 
 __sigil_select_fix() {
-  "$__sigil_bin" fix
+  "$__sigil_bin" op "^"
 }
 
 __sigil_select_previous_fix() {
-  "$__sigil_bin" fix --previous
+  "$__sigil_bin" op "^^"
 }
 
 sigil_fix() {
@@ -79,9 +79,7 @@ sigil_fix() {
     "$__sigil_bin" op "^" "$@"
     return $?
   fi
-  local selected
-  selected="$(__sigil_select_fix)" || return $?
-  [[ -n "$selected" ]] && print -z -- "$selected"
+  "$__sigil_bin" op "^" "$@"
 }
 
 sigil_previous_fix() {
@@ -89,9 +87,7 @@ sigil_previous_fix() {
     "$__sigil_bin" op "^^" "$@"
     return $?
   fi
-  local selected
-  selected="$(__sigil_select_previous_fix)" || return $?
-  [[ -n "$selected" ]] && print -z -- "$selected"
+  "$__sigil_bin" op "^^" "$@"
 }
 
 function ',' { sigil_command "$*" }

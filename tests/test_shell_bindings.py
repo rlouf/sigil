@@ -15,7 +15,7 @@ def make_stub(tmp: Path) -> Path:
     stub = tmp / "sigil-stub"
     stub.write_text(
         textwrap.dedent(
-            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  "command --select hello") printf \'%s\\n\' "echo generated" ;;\n                  "command --previous --select") printf \'%s\\n\' "echo previous" ;;\n                  "fix") printf \'%s\\n\' "echo fix" ;;\n                  "fix --previous") printf \'%s\\n\' "echo previous-fix" ;;\n                  "question hello") printf \'%s\\n\' "answer" ;;\n                  "question --follow-up hello") printf \'%s\\n\' "follow-up" ;;\n                  op*) printf \'%s\\n\' "op:$*" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
+            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  op*) printf \'%s\\n\' "op:$*" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
         ),
         encoding="utf-8",
     )
@@ -66,15 +66,15 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "command --select hello",
-            "command --previous --select",
-            "question hello",
-            "question --follow-up hello",
-            "fix",
-            "fix --previous",
+            "op , hello",
+            "op ,,",
+            "op ? hello",
+            "op ?? hello",
+            "op ^",
+            "op ^^",
         ]
         # Proposals set pending state (last call wins), not stdout.
-        assert "pending=echo previous-fix" in result.stdout
+        assert "pending=op:op ,," in result.stdout
         assert "pending_prefix=[model/propose]" in result.stdout
 
 
@@ -92,9 +92,9 @@ def test_bash_proposals_set_pending_state_not_stdout() -> None:
         )
         assert_success(result)
         assert "pending=1" in result.stdout
-        assert "pending_cmd=echo generated" in result.stdout
+        assert "pending_cmd=op:op , hello" in result.stdout
         # The command should NOT be printed to stdout.
-        assert "echo generated" not in result.stdout.split("pending_cmd=")[0]
+        assert "op:op , hello" not in result.stdout.split("pending_cmd=")[0]
 
 
 def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
@@ -200,9 +200,9 @@ def test_bash_readline_dispatch_inserts_proposals_without_executing() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["command --select hello", "fix --previous"]
-        assert "command_buffer=echo generated" in result.stdout
-        assert "fix_buffer=echo previous-fix" in result.stdout
+        assert read_log(tmp) == ["op , hello", "op ^^"]
+        assert "command_buffer=op:op , hello" in result.stdout
+        assert "fix_buffer=op:op ^^" in result.stdout
 
 
 def test_bash_blocks_execute_and_promotion_routes_before_cli() -> None:
@@ -237,7 +237,7 @@ def test_bash_question_routes_clear_the_prompt_buffer() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["question --follow-up hello"]
+        assert read_log(tmp) == ["op ?? hello"]
         assert "follow_up_buffer=" in result.stdout
 
 
@@ -306,12 +306,12 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "command --select hello",
-            "command --previous --select",
-            "question hello",
-            "question --follow-up hello",
-            "fix",
-            "fix --previous",
+            "op , hello",
+            "op ,,",
+            "op ? hello",
+            "op ?? hello",
+            "op ^",
+            "op ^^",
         ]
 
 
@@ -374,11 +374,11 @@ def test_zsh_command_routes_do_not_quote_the_visible_buffer() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "command --select hello",
-            "command --previous --select",
+            "op , hello",
+            "op ,,",
         ]
-        assert "command_buffer=echo generated" in result.stdout
-        assert "previous_buffer=echo previous" in result.stdout
+        assert "command_buffer=op:op , hello" in result.stdout
+        assert "previous_buffer=op:op ,," in result.stdout
         zle_lines = [
             line
             for line in (tmp / "zle.log").read_text(encoding="utf-8").splitlines()
@@ -386,9 +386,9 @@ def test_zsh_command_routes_do_not_quote_the_visible_buffer() -> None:
         ]
         assert zle_lines == [
             "-I:, hello",
-            "reset-prompt:echo generated",
+            "reset-prompt:op:op , hello",
             "-I:,,",
-            "reset-prompt:echo previous",
+            "reset-prompt:op:op ,,",
         ]
 
 
@@ -406,9 +406,9 @@ def test_zsh_accept_line_inserts_fix_proposals_without_executing() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["fix"]
-        assert "buffer=echo fix" in result.stdout
-        assert "cursor=8" in result.stdout
+        assert read_log(tmp) == ["op ^"]
+        assert "buffer=op:op ^" in result.stdout
+        assert "cursor=7" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -425,8 +425,8 @@ def test_zsh_fix_function_inserts_instead_of_printing_to_stdout() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["fix"]
-        assert result.stdout == "done\n"
+        assert read_log(tmp) == ["op ^"]
+        assert result.stdout == "op:op ^\ndone\n"
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -480,7 +480,7 @@ def test_zsh_question_routes_do_not_quote_the_visible_buffer() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["question hello", "question --follow-up hello"]
+        assert read_log(tmp) == ["op ? hello", "op ?? hello"]
         zle_lines = [
             line
             for line in (tmp / "zle.log").read_text(encoding="utf-8").splitlines()

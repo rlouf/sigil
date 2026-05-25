@@ -117,7 +117,7 @@ sigil_command() {
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" command --select "$*")" || return $?
+  selected="$("$__sigil_bin" op "," "$@")" || return $?
   if [[ -n "$selected" ]]; then
     __sigil_show_pending "$selected" "[model/propose]"
   fi
@@ -129,7 +129,7 @@ sigil_previous_command() {
     return $?
   fi
   local selected
-  selected="$("$__sigil_bin" command --previous --select)" || return $?
+  selected="$("$__sigil_bin" op ",," "$@")" || return $?
   if [[ -n "$selected" ]]; then
     __sigil_show_pending "$selected" "[model/propose]"
   fi
@@ -140,7 +140,7 @@ sigil_question() {
     "$__sigil_bin" op "?" "$@"
     return $?
   fi
-  "$__sigil_bin" question "$*"
+  "$__sigil_bin" op "?" "$@"
 }
 
 sigil_follow_up() {
@@ -148,7 +148,7 @@ sigil_follow_up() {
     "$__sigil_bin" op "??" "$@"
     return $?
   fi
-  "$__sigil_bin" question --follow-up "$*"
+  "$__sigil_bin" op "??" "$@"
 }
 
 sigil_fix() {
@@ -156,11 +156,7 @@ sigil_fix() {
     "$__sigil_bin" op "^" "$@"
     return $?
   fi
-  local selected
-  selected="$("$__sigil_bin" fix)" || return $?
-  if [[ -n "$selected" ]]; then
-    __sigil_show_pending "$selected" "[model/propose]"
-  fi
+  "$__sigil_bin" op "^" "$@"
 }
 
 sigil_previous_fix() {
@@ -168,11 +164,7 @@ sigil_previous_fix() {
     "$__sigil_bin" op "^^" "$@"
     return $?
   fi
-  local selected
-  selected="$("$__sigil_bin" fix --previous)" || return $?
-  if [[ -n "$selected" ]]; then
-    __sigil_show_pending "$selected" "[model/propose]"
-  fi
+  "$__sigil_bin" op "^^" "$@"
 }
 
 # ── Glyph functions ──────────────────────────────────────────────────────
@@ -221,7 +213,7 @@ __sigil_readline_dispatch() {
     return 0
   elif [[ "$b" == ,,* ]]; then
     printf '\n' >&2
-    selected="$("$__sigil_bin" command --previous --select)" || return $?
+    selected="$("$__sigil_bin" op ",,")" || return $?
     __sigil_set_readline_buffer "$selected"
     return 0
   elif [[ "$b" == ,* ]]; then
@@ -229,17 +221,17 @@ __sigil_readline_dispatch() {
     rest="$(__sigil_trim_leading_spaces "$rest")"
     [[ -n "$rest" ]] || return 0
     printf '\n' >&2
-    selected="$("$__sigil_bin" command --select "$rest")" || return $?
+    selected="$("$__sigil_bin" op "," "$rest")" || return $?
     __sigil_set_readline_buffer "$selected"
     return 0
   elif [[ "$b" == ^^* ]]; then
     printf '\n' >&2
-    selected="$("$__sigil_bin" fix --previous)" || return $?
+    selected="$("$__sigil_bin" op "^^")" || return $?
     __sigil_set_readline_buffer "$selected"
     return 0
   elif [[ "$b" == ^* ]]; then
     printf '\n' >&2
-    selected="$("$__sigil_bin" fix)" || return $?
+    selected="$("$__sigil_bin" op "^")" || return $?
     __sigil_set_readline_buffer "$selected"
     return 0
   elif [[ "$b" == \?!* ]]; then
@@ -252,7 +244,7 @@ __sigil_readline_dispatch() {
     printf '\n' >&2
     READLINE_LINE=""
     READLINE_POINT=0
-    "$__sigil_bin" question --follow-up "$rest"
+    "$__sigil_bin" op "??" "$rest"
     return $?
   elif [[ "$b" == \?* ]]; then
     rest="${b#?}"
@@ -261,7 +253,7 @@ __sigil_readline_dispatch() {
     printf '\n' >&2
     READLINE_LINE=""
     READLINE_POINT=0
-    "$__sigil_bin" question "$rest"
+    "$__sigil_bin" op "?" "$rest"
     return $?
   fi
 

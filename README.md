@@ -112,13 +112,9 @@ src/sigil/             Python core runtime
 Core commands:
 
 ```sh
-sigil command --select "find wav files"
-sigil command --previous --select
-sigil fix
-sigil fix --previous
-sigil question "what is tldraw?"
-sigil question --follow-up "how would that work in practice?"
-sigil summary
+sigil op "," "find wav files"
+sigil op "??" "review risky changes"
+sigil op "^^" "generate cleanup patch"
 sigil install zsh
 sigil doctor
 sigil events lineage
@@ -128,8 +124,9 @@ sigil session list
 sigil session clear
 ```
 
-The zsh binding calls those commands and inserts selected commands back into the
-prompt with `print -z`.
+The shell bindings call `sigil op` for glyph behavior. zsh inserts selected
+prompt-buffer results with `print -z`; Bash displays pending proposals in the
+next prompt and lets the user accept or discard them.
 
 ## State
 
