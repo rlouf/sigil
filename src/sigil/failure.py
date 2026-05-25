@@ -1,7 +1,7 @@
 """Failure recovery for the caret glyph.
 
 `^` turns the last failed shell command into repair candidates. It deliberately
-stops at proposal: selected fixes are placed on the prompt for review, never
+stops at proposal: selected fixes are written to shell history for review, never
 executed automatically.
 """
 

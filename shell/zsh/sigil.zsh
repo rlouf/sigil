@@ -22,6 +22,11 @@ __sigil_stdin_is_pipe() {
   [[ -p /dev/stdin ]]
 }
 
+__sigil_history_insert() {
+  [[ -n "${1:-}" ]] || return 0
+  print -s -- "$1" 2>/dev/null || true
+}
+
 sigil_command() {
   if __sigil_stdin_is_pipe; then
     "$__sigil_bin" op "," "$@"
@@ -29,11 +34,7 @@ sigil_command() {
   fi
   local selected
   selected="$("$__sigil_bin" op "," "$@")" || return $?
-  [[ -n "$selected" ]] && print -z -- "$selected"
-}
-
-__sigil_select_command() {
-  "$__sigil_bin" op "," "$@"
+  __sigil_history_insert "$selected"
 }
 
 sigil_previous_command() {
@@ -43,11 +44,7 @@ sigil_previous_command() {
   fi
   local selected
   selected="$("$__sigil_bin" op ",," "$@")" || return $?
-  [[ -n "$selected" ]] && print -z -- "$selected"
-}
-
-__sigil_select_previous_command() {
-  "$__sigil_bin" op ",,"
+  __sigil_history_insert "$selected"
 }
 
 sigil_question() {
@@ -66,20 +63,14 @@ sigil_follow_up() {
   "$__sigil_bin" op "??" "$@"
 }
 
-__sigil_select_fix() {
-  "$__sigil_bin" op "^"
-}
-
-__sigil_select_previous_fix() {
-  "$__sigil_bin" op "^^"
-}
-
 sigil_fix() {
   if __sigil_stdin_is_pipe; then
     "$__sigil_bin" op "^" "$@"
     return $?
   fi
-  "$__sigil_bin" op "^" "$@"
+  local selected
+  selected="$("$__sigil_bin" op "^" "$@")" || return $?
+  __sigil_history_insert "$selected"
 }
 
 sigil_previous_fix() {
@@ -87,7 +78,9 @@ sigil_previous_fix() {
     "$__sigil_bin" op "^^" "$@"
     return $?
   fi
-  "$__sigil_bin" op "^^" "$@"
+  local selected
+  selected="$("$__sigil_bin" op "^^" "$@")" || return $?
+  __sigil_history_insert "$selected"
 }
 
 function ',' { sigil_command "$*" }
@@ -128,85 +121,6 @@ __sigil_precmd() {
 
 add-zsh-hook preexec __sigil_preexec
 add-zsh-hook precmd __sigil_precmd
-
-__sigil_accept_line() {
-  emulate -L zsh
-  local b="$BUFFER" rest
-  if [[ "$b" == ,* ]]; then
-    if [[ "$b" == ,!* ]]; then
-      zle -I
-      print -u2 -- "${__sigil_muted}❯ sigil ,! · blocked · bang requires sandbox${__sigil_reset}"
-      zle reset-prompt
-      return
-    elif [[ "$b" == ,,* ]]; then
-      local selected
-      zle -I
-      BUFFER=""
-      selected="$(__sigil_select_previous_command)" || { zle reset-prompt; return }
-      BUFFER="$selected"
-      CURSOR=${#BUFFER}
-      zle reset-prompt
-      return
-    else
-      rest="${b#,}"; rest="${rest## }"
-      if [[ -n "$rest" ]]; then
-        local selected
-        zle -I
-        BUFFER=""
-        selected="$(__sigil_select_command "$rest")" || { zle reset-prompt; return }
-        BUFFER="$selected"
-        CURSOR=${#BUFFER}
-        zle reset-prompt
-        return
-      fi
-    fi
-  elif [[ "$b" == \^\^* ]]; then
-    local selected
-    BUFFER="^^"
-    zle -I
-    BUFFER=""
-    selected="$(__sigil_select_previous_fix)" || { zle reset-prompt; return }
-    BUFFER="$selected"
-    CURSOR=${#BUFFER}
-    zle reset-prompt
-    return
-  elif [[ "$b" == \^* ]]; then
-    local selected
-    BUFFER="^"
-    zle -I
-    BUFFER=""
-    selected="$(__sigil_select_fix)" || { zle reset-prompt; return }
-    BUFFER="$selected"
-    CURSOR=${#BUFFER}
-    zle reset-prompt
-    return
-  elif [[ "$b" == \?!* ]]; then
-    zle -I
-    print -u2 -- "${__sigil_muted}❯ pi ?!    · blocked · no execute path${__sigil_reset}"
-    zle reset-prompt
-    return
-  elif [[ "$b" == \?\?* ]]; then
-    rest="${b#\?\?}"; rest="${rest## }"
-    if [[ -n "$rest" ]]; then
-      zle -I
-      BUFFER=""
-      sigil_follow_up "$rest"
-      zle reset-prompt
-      return
-    fi
-  elif [[ "$b" == \?* ]]; then
-    rest="${b#\?}"; rest="${rest## }"
-    if [[ -n "$rest" ]]; then
-      zle -I
-      BUFFER=""
-      sigil_question "$rest"
-      zle reset-prompt
-      return
-    fi
-  fi
-  zle .accept-line
-}
-zle -N accept-line __sigil_accept_line
 
 zshaddhistory() {
   emulate -L zsh

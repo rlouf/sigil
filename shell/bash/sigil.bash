@@ -1,15 +1,7 @@
 # Sigil bash bindings. Core behavior lives in the `sigil` executable.
 #
-# Bash cannot use zsh's `print -z` to inject text into the prompt buffer.
-# Instead, selected proposals are displayed as a visual block in the next
-# prompt (via PS1). The user can then:
-#
-#   ↑ up-arrow    recall from history (history -s)
-#   Ctrl-X C      insert into buffer for review/edit (use)
-#   Ctrl-X D      discard and start fresh
-#
-# The Ctrl-X , widget remains as a direct dispatch shortcut for users who
-# prefer it.
+# Selected proposals are written to shell history. Press Up-arrow to recall,
+# review, edit, or run the proposal with the same motion used for any command.
 
 if [[ -n "${SIGIL_BIN:-}" ]]; then
   __sigil_bin="$SIGIL_BIN"
@@ -32,81 +24,13 @@ if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   fi
 fi
 
-# Pending proposal state. When a command is selected via fzf, it is stored
-# here and displayed in the next prompt instead of being printed to stdout.
-__sigil_pending_command=""
-__sigil_pending_prefix=""
-__sigil_pending_show=0
-
-# Preserve the original PS1 so we can restore it after pending display.
-__sigil_saved_ps1=""
-
 __sigil_history_insert() {
-  [[ $- == *i* ]] || return 0
   [[ -n "${1:-}" ]] || return 0
   builtin history -s "$1" 2>/dev/null || true
 }
 
 __sigil_stdin_is_pipe() {
   [[ -p /dev/stdin ]]
-}
-
-# ── Pending proposal: show, accept, discard ──────────────────────────────
-
-__sigil_show_pending() {
-  local cmd="$1"
-  local prefix="${2:-}"
-  __sigil_pending_command="$cmd"
-  __sigil_pending_prefix="$prefix"
-  __sigil_pending_show=1
-  __sigil_history_insert "$cmd"
-}
-
-__sigil_discard_pending() {
-  __sigil_pending_command=""
-  __sigil_pending_prefix=""
-  __sigil_pending_show=0
-  if [[ -n "$__sigil_saved_ps1" ]]; then
-    PS1="$__sigil_saved_ps1"
-    __sigil_saved_ps1=""
-  fi
-}
-
-__sigil_use_pending() {
-  if [[ $__sigil_pending_show -eq 1 && -n "$__sigil_pending_command" ]]; then
-    READLINE_LINE="$__sigil_pending_command"
-    READLINE_POINT=${#READLINE_LINE}
-    __sigil_discard_pending
-  fi
-}
-
-__sigil_prompt_setup() {
-  if [[ $__sigil_pending_show -eq 1 && -n "$__sigil_pending_command" ]]; then
-    local cmd="$__sigil_pending_command"
-    local prefix="$__sigil_pending_prefix"
-    local bar
-    bar=$(printf '─%.0s' $(seq 1 $(( ${#cmd} + 4 ))))
-
-    # Save original PS1 only once.
-    if [[ -z "$__sigil_saved_ps1" ]]; then
-      __sigil_saved_ps1="$PS1"
-    fi
-
-    # Escape any existing PS1 escape sequences so they survive in the
-    # expanded string, then wrap with the pending block.
-    local label=" "
-    [[ -n "$prefix" ]] && label="$prefix"
-    PS1="${__sigil_muted}${bar}\n${label} ${cmd}\n${bar}${__sigil_reset}\n"
-  fi
-}
-
-# Readline callbacks for Ctrl-X C (use) and Ctrl-X D (discard).
-__sigil_readline_use() {
-  __sigil_use_pending
-}
-
-__sigil_readline_discard() {
-  __sigil_discard_pending
 }
 
 # ── Command wrappers ─────────────────────────────────────────────────────
@@ -118,9 +42,7 @@ sigil_command() {
   fi
   local selected
   selected="$("$__sigil_bin" op "," "$@")" || return $?
-  if [[ -n "$selected" ]]; then
-    __sigil_show_pending "$selected" "[model/propose]"
-  fi
+  __sigil_history_insert "$selected"
 }
 
 sigil_previous_command() {
@@ -130,9 +52,7 @@ sigil_previous_command() {
   fi
   local selected
   selected="$("$__sigil_bin" op ",," "$@")" || return $?
-  if [[ -n "$selected" ]]; then
-    __sigil_show_pending "$selected" "[model/propose]"
-  fi
+  __sigil_history_insert "$selected"
 }
 
 sigil_question() {
@@ -156,7 +76,9 @@ sigil_fix() {
     "$__sigil_bin" op "^" "$@"
     return $?
   fi
-  "$__sigil_bin" op "^" "$@"
+  local selected
+  selected="$("$__sigil_bin" op "^" "$@")" || return $?
+  __sigil_history_insert "$selected"
 }
 
 sigil_previous_fix() {
@@ -164,7 +86,9 @@ sigil_previous_fix() {
     "$__sigil_bin" op "^^" "$@"
     return $?
   fi
-  "$__sigil_bin" op "^^" "$@"
+  local selected
+  selected="$("$__sigil_bin" op "^^" "$@")" || return $?
+  __sigil_history_insert "$selected"
 }
 
 # ── Glyph functions ──────────────────────────────────────────────────────
@@ -184,85 +108,6 @@ if [[ $- == *i* ]]; then
   alias '^'='sigil_fix'
   alias '^^'='sigil_previous_fix'
 fi
-
-# ── Readline glyph dispatch (Ctrl-X ,) ───────────────────────────────────
-
-__sigil_trim_leading_spaces() {
-  local value="$1"
-  value="${value#"${value%%[![:space:]]*}"}"
-  printf '%s' "$value"
-}
-
-__sigil_block_readline() {
-  printf '\n%s%s%s\n' "$__sigil_muted" "$1" "$__sigil_reset" >&2
-  READLINE_LINE=""
-  READLINE_POINT=0
-}
-
-__sigil_set_readline_buffer() {
-  READLINE_LINE="${1:-}"
-  READLINE_POINT=${#READLINE_LINE}
-}
-
-__sigil_readline_dispatch() {
-  local b="${READLINE_LINE:-}"
-  local rest selected
-
-  if [[ "$b" == ,!* ]]; then
-    __sigil_block_readline "> sigil ,! - blocked - bang requires sandbox"
-    return 0
-  elif [[ "$b" == ,,* ]]; then
-    printf '\n' >&2
-    selected="$("$__sigil_bin" op ",,")" || return $?
-    __sigil_set_readline_buffer "$selected"
-    return 0
-  elif [[ "$b" == ,* ]]; then
-    rest="${b#,}"
-    rest="$(__sigil_trim_leading_spaces "$rest")"
-    [[ -n "$rest" ]] || return 0
-    printf '\n' >&2
-    selected="$("$__sigil_bin" op "," "$rest")" || return $?
-    __sigil_set_readline_buffer "$selected"
-    return 0
-  elif [[ "$b" == ^^* ]]; then
-    printf '\n' >&2
-    selected="$("$__sigil_bin" op "^^")" || return $?
-    __sigil_set_readline_buffer "$selected"
-    return 0
-  elif [[ "$b" == ^* ]]; then
-    printf '\n' >&2
-    selected="$("$__sigil_bin" op "^")" || return $?
-    __sigil_set_readline_buffer "$selected"
-    return 0
-  elif [[ "$b" == \?!* ]]; then
-    __sigil_block_readline "> sigil ?! - blocked - no execute path"
-    return 0
-  elif [[ "$b" == \?\?* ]]; then
-    rest="${b#??}"
-    rest="$(__sigil_trim_leading_spaces "$rest")"
-    [[ -n "$rest" ]] || return 0
-    printf '\n' >&2
-    READLINE_LINE=""
-    READLINE_POINT=0
-    "$__sigil_bin" op "??" "$rest"
-    return $?
-  elif [[ "$b" == \?* ]]; then
-    rest="${b#?}"
-    rest="$(__sigil_trim_leading_spaces "$rest")"
-    [[ -n "$rest" ]] || return 0
-    printf '\n' >&2
-    READLINE_LINE=""
-    READLINE_POINT=0
-    "$__sigil_bin" op "?" "$rest"
-    return $?
-  fi
-
-  printf '\n%s%s%s\n' \
-    "$__sigil_muted" \
-    "> sigil readline - current buffer is not a Sigil glyph" \
-    "$__sigil_reset" >&2
-  return 0
-}
 
 # ── Failure recording ────────────────────────────────────────────────────
 
@@ -307,32 +152,35 @@ __sigil_install_prompt_command() {
   prompt_decl="$(declare -p PROMPT_COMMAND 2>/dev/null || true)"
   case "$prompt_decl" in
     declare\ -a*|declare\ -ax*)
-      local item
+      local item has_precmd=0
+      local new_prompt_command=()
       for item in "${PROMPT_COMMAND[@]}"; do
-        [[ "$item" == "__sigil_precmd" ]] && return 0
-        [[ "$item" == "__sigil_prompt_setup" ]] && return 0
+        [[ "$item" == "__sigil_prompt_setup" ]] && continue
+        [[ "$item" == "__sigil_precmd" ]] && has_precmd=1
+        new_prompt_command+=("$item")
       done
-      PROMPT_COMMAND=(__sigil_precmd __sigil_prompt_setup "${PROMPT_COMMAND[@]}")
+      if [[ $has_precmd -eq 1 ]]; then
+        PROMPT_COMMAND=("${new_prompt_command[@]}")
+      else
+        PROMPT_COMMAND=(__sigil_precmd "${new_prompt_command[@]}")
+      fi
       return 0
       ;;
   esac
 
-  case ";${PROMPT_COMMAND:-};" in
+  local prompt_command="${PROMPT_COMMAND:-}"
+  prompt_command="${prompt_command//__sigil_prompt_setup; /}"
+  prompt_command="${prompt_command//; __sigil_prompt_setup/}"
+  prompt_command="${prompt_command//__sigil_prompt_setup/}"
+
+  case ";${prompt_command};" in
     *";__sigil_precmd;"*) return 0 ;;
   esac
-  if [[ -n "${PROMPT_COMMAND:-}" ]]; then
-    PROMPT_COMMAND="__sigil_precmd; __sigil_prompt_setup; ${PROMPT_COMMAND}"
+  if [[ -n "$prompt_command" ]]; then
+    PROMPT_COMMAND="__sigil_precmd; ${prompt_command}"
   else
-    PROMPT_COMMAND="__sigil_precmd; __sigil_prompt_setup"
+    PROMPT_COMMAND="__sigil_precmd"
   fi
 }
 
-__sigil_install_readline_bindings() {
-  [[ $- == *i* ]] || return 0
-  bind -x '"\C-x,": __sigil_readline_dispatch' 2>/dev/null || true
-  bind -x '"\C-x\C-c": __sigil_readline_use' 2>/dev/null || true
-  bind -x '"\C-x\C-d": __sigil_readline_discard' 2>/dev/null || true
-}
-
 __sigil_install_prompt_command
-__sigil_install_readline_bindings

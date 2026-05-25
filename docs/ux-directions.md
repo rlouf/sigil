@@ -6,19 +6,21 @@ wrong, or annoying to reconstruct from memory.
 Unlike agent TUIs that own the loop and call shell tools from inside an agent
 session, Sigil starts from the shell. The shell remains the place where commands
 are inspected, edited, and executed. Sigil should cross the agent/shell boundary
-by inserting text into the prompt, not by executing actions automatically.
+by writing proposed commands to shell history for explicit recall, not by
+executing actions automatically.
 
 The core trust boundary is:
 
 ```text
 agent proposes
-shell displays
+shell history recalls
 user executes
 ```
 
 This makes handoff quality the central UX problem. Sigil should mostly explain,
-repair, summarize, search, and insert commands into the prompt. Direct execution
-should stay rare and explicit.
+repair, summarize, search, and place proposed commands where the user can recall
+and edit them with normal shell history. Direct execution should stay rare and
+explicit.
 
 ## Command repair
 
@@ -39,8 +41,8 @@ The output should be concise:
 - one or more corrected commands
 - any risk or assumption worth checking before retrying
 
-Repairs should prefer inserting a corrected command into the prompt over running
-it automatically. The user can then edit, pipe, defer, cancel, or execute it
+Repairs should prefer adding a corrected command to history over running it
+automatically. The user can then recall, edit, pipe, defer, cancel, or execute it
 with normal shell affordances. If the fix is destructive, Sigil should show a dry
 run or a verification command first.
 

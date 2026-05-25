@@ -11,9 +11,9 @@ The Python package is named `sigil-sh` because `sigil` was not available as a
 distribution name. The installed command is still `sigil`, and this repository
 uses `sigil` everywhere else.
 
-Sigil is structured as a shell-agnostic core with thin shell bindings. The zsh
-layer owns prompt interception and buffer insertion; the Python CLI owns model
-calls, selection UI, Pi streaming, rendering, and persistent state.
+Sigil is structured as a shell-agnostic core with thin shell bindings. The shell
+layer owns glyph dispatch and proposal history insertion; the Python CLI owns
+model calls, selection UI, Pi streaming, rendering, and persistent state.
 
 ## Grammar
 
@@ -44,10 +44,10 @@ The current grammar maps to:
 ??  question continuation                  inherits prior question taint / provisional
 ```
 
-This matters because Sigil crosses the shell boundary by inserting text into the
-prompt. Model-authored command suggestions are proposals, not executed actions.
-Web-tainted question answers are read-only and provisional, and cannot become an
-executable insertion path through `??`.
+This matters because Sigil crosses the shell boundary by writing proposed
+commands to history for explicit recall. Model-authored command suggestions are
+proposals, not executed actions. Web-tainted question answers are read-only and
+provisional, and cannot become an executable proposal path through `??`.
 
 Current no-execute guarantees:
 
@@ -129,9 +129,9 @@ sigil session list
 sigil session clear
 ```
 
-The shell bindings call `sigil op` for glyph behavior. zsh inserts selected
-prompt-buffer results with `print -z`; Bash displays pending proposals in the
-next prompt and lets the user accept or discard them.
+The shell bindings call `sigil op` for glyph behavior and write selected command
+proposals to shell history. Press Up-arrow to recall, review, edit, or run the
+proposal.
 
 ## State
 
@@ -198,7 +198,7 @@ Source the Bash entrypoint from `.bashrc`:
 source "$HOME/.sigil/shell/bash/sigil.bash"
 ```
 
-Bash supports the same glyph functions:
+zsh and Bash support the same glyph functions:
 
 ```bash
 , find wav files
@@ -209,10 +209,9 @@ Bash supports the same glyph functions:
 ^^
 ```
 
-Because Bash has no zsh-style `print -z` buffer stack, direct `,` and `^`
-commands print the selected proposal and add it to history. To get the zsh-like
-"replace the current prompt buffer, but do not execute it" flow, type a Sigil
-glyph expression at the prompt and press `Ctrl-X ,`.
+For `,`, `,,`, `^`, and `^^`, the selected proposal is added as the newest shell
+history entry. Press Up-arrow to bring it into the prompt for review. Sigil does
+not execute the proposal automatically.
 
 ## Requirements
 

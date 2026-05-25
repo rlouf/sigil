@@ -39,7 +39,7 @@ Important existing foundations:
 - `src/sigil/security.py` owns the trust lattice.
 - `src/sigil/state.py` and `src/sigil/session.py` provide durable event and
   session state.
-- `shell/zsh/sigil.zsh` and `shell/bash/sigil.bash` provide prompt integration.
+- `shell/zsh/sigil.zsh` and `shell/bash/sigil.bash` provide shell integration.
 
 The strongest asset is the security lattice. It already records integrity,
 capability, taint, provisional status, and provenance links. The semantic
@@ -73,7 +73,7 @@ Do not begin by redefining the existing glyphs in the shell bindings.
 
 The current interactive behavior is useful and tested:
 
-- `,` and `^` insert selected commands back into the prompt for human review.
+- `,` and `^` write selected commands to shell history for human review.
 - `?` and `??` produce read-only answers.
 
 These should remain the compatibility surface while the new runtime is added.
@@ -108,7 +108,7 @@ learn separate meanings for `?`, `??`, and `???`.
 
 Update Bash and zsh functions so they branch on whether stdin is a terminal.
 
-When stdin is a terminal, keep the current prompt-buffer behavior.
+When stdin is a terminal, keep the current proposal-to-history behavior.
 
 When stdin is piped, call the operator runtime:
 
@@ -318,7 +318,7 @@ removed.
 Once stream semantics are stable, make interactive `?`, `,`, and `^` call the
 same operator core where practical.
 
-The prompt-buffer UX can remain. The implementation should converge.
+The proposal-to-history UX can remain. The implementation should converge.
 
 ### Milestone 6: gated autonomy
 

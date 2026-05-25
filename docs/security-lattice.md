@@ -134,9 +134,9 @@ Command selectors also prefix candidates:
 [legacy/low-trust] ...
 ```
 
-The selector prefix is part of the interaction contract. A command inserted into
-the shell prompt should reveal whether it was model-authored, web-tainted, or
-legacy.
+The selector prefix is part of the interaction contract. A command written to
+shell history should reveal whether it was model-authored, web-tainted, or
+legacy before the user recalls it for review.
 
 ## Continuation Rules
 
@@ -162,8 +162,8 @@ This does not call a model, append events, or create executable shell text.
 
 Failure repair records may include bounded stdout/stderr snippets and safe local
 cwd/git context. These are inputs to model-authored repair proposals, so `^` and
-`^^` remain `local_model / propose / model-tainted` and still insert only the
-selected command for human review.
+`^^` remain `local_model / propose / model-tainted` and still only write the
+selected command to history for human review.
 
 When repair output is a unified diff, Sigil stores it as a patch preview. The
 preview can be checked with `sigil patch check`; applying it requires
@@ -182,8 +182,8 @@ no promotion mutation
 no bang unless sandbox exists
 ```
 
-The zsh and Bash bindings block `?!`, `,!`, `@`, and `@!` before they can become
-parser routes. The Python security helpers also expose checks for future routes:
+The zsh and Bash bindings do not map `?!`, `,!`, `@`, or `@!` to parser routes.
+The Python security helpers also expose checks for future routes:
 
 ```text
 reject_promotion(...)
@@ -193,7 +193,7 @@ require_sandbox_for_bang(...)
 
 Future grammar must use these helpers or stricter equivalents. In particular:
 
-- `??` after `?` must never produce executable insertion.
+- `??` after `?` must never produce an executable proposal.
 - `,,` must inherit taint from the prior command event.
 - Legacy state must remain visibly low-trust.
 - Event logs must retain enough input IDs to reconstruct continuations.
@@ -209,7 +209,7 @@ The short version:
 - `?` means "answer using read and web search; do not execute."
 - `??` means "continue that read/web discussion; still do not execute."
 
-Sigil inserts text into the prompt only where the route is a proposal route.
-Read/web routes produce answers, not commands. Any future write or execution
-route must be boxed, explicit, and lower or preserve integrity unless the user
-provides fresh input.
+Sigil writes command text to shell history only where the route is a proposal
+route. Read/web routes produce answers, not commands. Any future write or
+execution route must be boxed, explicit, and lower or preserve integrity unless
+the user provides fresh input.
