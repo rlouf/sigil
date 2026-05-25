@@ -23,6 +23,7 @@ from .install import (
     doctor_checks,
     install_shell,
 )
+from .operators import create_invocation
 from .pi_stream import stream_events
 from .question import ask
 from .security import (
@@ -116,6 +117,35 @@ def cmd_command(
 def cmd_question(question: str, follow_up: bool, json_output: bool) -> int:
     """Answer a fresh shell question and reset the session transcript."""
     return ask(question, follow_up=follow_up, json_output=json_output)
+
+
+@cli.command("op", hidden=True)
+@click.argument("glyph")
+@click.argument("prompt_parts", nargs=-1)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_op(glyph: str, prompt_parts: tuple[str, ...], json_output: bool) -> int:
+    """Parse a semantic operator invocation."""
+    stdin_is_tty = sys.stdin.isatty()
+    stdin_text = "" if stdin_is_tty else sys.stdin.read()
+    prompt = " ".join(prompt_parts)
+    mode = "interactive" if stdin_is_tty else "pipeline"
+    try:
+        invocation = create_invocation(
+            glyph,
+            prompt=prompt,
+            stdin=stdin_text,
+            mode=mode,
+        )
+    except ValueError as exc:
+        raise click.BadParameter(str(exc), param_hint="glyph") from exc
+
+    payload = invocation.to_dict()
+    if json_output:
+        print_json_line(payload)
+        return 0
+
+    print(f"{payload['glyph']} {payload['name']} depth={payload['depth']}")
+    return 0
 
 
 def run_install_shell(
