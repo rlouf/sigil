@@ -14,11 +14,10 @@ from .ansi import LOVE, MUTED, RESET
 from .qwen import chat_json, ensure_server
 from .security import (
     candidate_prefix,
-    inherit_security,
     create_trust_metadata,
     normalize_trust_record,
 )
-from .state import append_event, read_json, write_json
+from .state import append_event
 
 COMMAND_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -52,13 +51,8 @@ COMMAND_SYSTEM = (
 )
 
 
-def generate(prompt: str) -> list[dict[str, str]]:
-    """Ask the local model for runnable command candidates.
-
-    The result is stored in session state so the legacy
-    `sigil command --previous` selector can reopen the same candidates without
-    repeating inference.
-    """
+def generate(prompt: str) -> tuple[list[dict[str, str]], dict[str, Any]]:
+    """Ask the local model for runnable command candidates."""
     if not ensure_server():
         raise SystemExit(1)
     print(f"{MUTED}❯ sigil ,  · propose · model-authored{RESET}", file=sys.stderr)
@@ -101,26 +95,16 @@ def generate(prompt: str) -> list[dict[str, str]]:
             **security,
         }
     )
-    state = {
-        "prompt": prompt,
-        "commands": candidates,
-        "event_id": event["id"],
-        **security,
-    }
-    write_json("last-command.json", state)
-    return candidates
-
-
-def previous() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
-    """Load the last generated command set for the current session."""
-    data = read_json("last-command.json")
-    if not data or not data.get("commands"):
-        print(f"{LOVE}✗ no previous command suggestions{RESET}", file=sys.stderr)
-        raise SystemExit(1)
-    security = inherit_security(
-        glyph=",,", input_records=[normalize_trust_record(data)], capability="propose"
+    selection_security = create_trust_metadata(
+        glyph=",",
+        integrity="local_model",
+        capability="propose",
+        taint=["model"],
+        inputs=[str(event["id"])],
+        input_records=[event],
+        fresh_human=True,
     )
-    return str(data.get("prompt", "")), list(data["commands"]), security
+    return candidates, selection_security
 
 
 def select(

@@ -207,7 +207,7 @@ rg -l "FooClient" src | ^^ rename to Client
 
 This mode should treat stdin as a target stream. It should first produce a
 visible patch or command preview. File writes should go through the existing
-capability lattice and should be tested separately from last-command repair.
+capability lattice and should be tested separately from failure repair.
 
 ### 8. Add transform as a first-class operator
 

@@ -15,7 +15,23 @@ def make_stub(tmp: Path) -> Path:
     stub = tmp / "sigil-stub"
     stub.write_text(
         textwrap.dedent(
-            '                #!/usr/bin/env bash\n                printf \'%s\\n\' "$*" >> "$SIGIL_STUB_LOG"\n                case "$*" in\n                  "command --select hello") printf \'%s\\n\' "echo generated" ;;\n                  "command --previous --select") printf \'%s\\n\' "echo previous" ;;\n                  "command draft executive summary") printf \'%s\\n\' "stream command" ;;\n                  "fix") printf \'%s\\n\' "echo fix" ;;\n                  "fix --previous") printf \'%s\\n\' "echo previous-fix" ;;\n                  "fix --previous rename symbol") printf \'%s\\n\' "stream previous-fix" ;;\n                  "ask hello") printf \'%s\\n\' "answer" ;;\n                  "ask --follow-up hello") printf \'%s\\n\' "follow-up" ;;\n                  "ask --follow-up review risky changes") printf \'%s\\n\' "stream follow-up" ;;\n                  "op , hello") printf \'%s\\n%s\\n\' "echo recommended" "because it is safe" ;;\n                  "op , draft executive summary") printf \'%s\\n%s\\n\' "echo stream recommended" "because stdin matters" ;;\n                  op*) printf \'%s\\n\' "op:$*" ;;\n                  record-failure*) printf \'%s\\n\' "recorded" ;;\n                  *) printf \'%s\\n\' "unexpected:$*" >&2; exit 64 ;;\n                esac\n                '
+            """\
+            #!/usr/bin/env bash
+            printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
+            case "$*" in
+              "command --select hello") printf '%s\n' "echo generated" ;;
+              "command draft executive summary") printf '%s\n' "stream command" ;;
+              "fix") printf '%s\n' "echo fix" ;;
+              "ask hello") printf '%s\n' "answer" ;;
+              "ask --follow-up hello") printf '%s\n' "follow-up" ;;
+              "ask --follow-up review risky changes") printf '%s\n' "stream follow-up" ;;
+              "op , hello") printf '%s\n%s\n' "echo recommended" "because it is safe" ;;
+              "op , draft executive summary") printf '%s\n%s\n' "echo stream recommended" "because stdin matters" ;;
+              op*) printf '%s\n' "op:$*" ;;
+              record-failure*) printf '%s\n' "recorded" ;;
+              *) printf '%s\n' "unexpected:$*" >&2; exit 64 ;;
+            esac
+            """
         ),
         encoding="utf-8",
     )
@@ -59,7 +75,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_previous_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_previous_fix\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_deep_fix\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -67,7 +83,6 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "op , hello",
-            "op ,, hello",
             "op ,, hello",
             "ask hello",
             "ask --follow-up hello",
@@ -107,7 +122,7 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    printf 'files\\n' | sigil_previous_fix rename symbol\n                    "
+                "                    source shell/bash/sigil.bash\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    printf 'files\\n' | sigil_deep_fix rename symbol\n                    "
             ),
             tmp,
             stub,
@@ -181,7 +196,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_previous_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_previous_fix\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source shell/zsh/sigil.zsh\n                    sigil_command hello\n                    sigil_execute_command hello\n                    sigil_question hello\n                    sigil_follow_up hello\n                    sigil_fix\n                    sigil_deep_fix\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -189,7 +204,6 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         assert_success(result)
         assert read_log(tmp) == [
             "op , hello",
-            "op ,, hello",
             "op ,, hello",
             "ask hello",
             "ask --follow-up hello",
@@ -212,7 +226,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    printf 'files\\n' | sigil_previous_fix rename symbol\n                    "
+                "                    source shell/zsh/sigil.zsh\n                    printf 'diff\\n' | sigil_follow_up review risky changes\n                    printf 'notes\\n' | sigil_command draft executive summary\n                    printf 'cmd\\n' | sigil_execute_command run it\n                    printf 'files\\n' | sigil_deep_fix rename symbol\n                    "
             ),
             tmp,
             stub,

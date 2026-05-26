@@ -177,9 +177,7 @@ Current files:
 
 ```text
 events.jsonl                                 append-only global event log
-sessions/<session-id>/last-command.json      latest command candidates for `,,`
 sessions/<session-id>/last-failure.json      latest failed shell command
-sessions/<session-id>/last-fix.json          latest fix candidates for `^^`
 sessions/<session-id>/last-patch.json        latest repair patch preview
 sessions/<session-id>/last-question.jsonl    question transcript; reset by `?`
 sessions/<session-id>/last-tools.jsonl       latest Pi tool trace

@@ -51,16 +51,17 @@ Stable fields:
 - `stdin`: captured input stream.
 - `mode`: `pipeline` or `interactive`.
 
-Without `--json`, `sigil op` runs the operator. Piped `?` / `??` inspect stdin,
-`,` recommends a concrete next action, `,,` executes a generated shell command,
-and `^` / `^^` generate repair previews. Operator output is written to stdout;
+Without `--json`, `sigil op` runs the operator. Piped `?` inspects stdin, `,`
+recommends a concrete next action, `,,` executes a generated shell command, and
+`^` / `^^` generate repair previews. Operator output is written to stdout;
 status and errors go to stderr.
 
 ## Verb Pipeline Commands
 
 `sigil command`, `sigil ask`, and `sigil fix` are the public verb layer. When
-stdin is piped into one of these commands, the verb uses the same stream
-operator runtime as the glyph aliases and grounds the result in stdin:
+stdin is piped into `command`, `ask`, or `fix`, the verb uses the stream
+operator runtime and grounds the result in stdin. Piped `ask --follow-up` is the
+web-authorized `??` path and asks before sending stdin to Pi:
 
 ```sh
 cat notes.md | sigil command "draft a release command"
@@ -183,7 +184,7 @@ only setup.
 ```text
 ,   -> sigil op ","
 ,,  -> sigil op ",,"
-?   -> sigil ask
+?   -> sigil op "?"
 ??  -> sigil ask --follow-up
 ^   -> sigil op "^"
 ^^  -> sigil op "^^"

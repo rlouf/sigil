@@ -16,7 +16,7 @@ from typing import Any
 from .ansi import LOVE, MUTED, RESET
 from .commands import COMMAND_SCHEMA, select
 from .qwen import chat_json, ensure_server
-from .security import inherit_security, create_trust_metadata, normalize_trust_record
+from .security import create_trust_metadata, normalize_trust_record
 from .state import append_event, read_json, write_json
 
 FIX_SYSTEM = (
@@ -219,7 +219,7 @@ def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
         input_records=[failure],
         fresh_human=True,
     )
-    event = append_event(
+    append_event(
         {
             "type": "fix_generated",
             "failure": failure,
@@ -227,45 +227,12 @@ def generate_fixes() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
             **security,
         }
     )
-    write_json(
-        "last-fix.json",
-        {
-            "prompt": str(failure["command"]),
-            "failure": failure,
-            "commands": candidates,
-            "event_id": event["id"],
-            **security,
-        },
-    )
     return str(failure["command"]), candidates, security
-
-
-def previous_fix() -> tuple[str, list[dict[str, str]], dict[str, Any]]:
-    """Load the previous repair candidates for `^^`."""
-    data = read_json("last-fix.json")
-    if not isinstance(data, dict) or not data.get("commands"):
-        print(f"{LOVE}✗ no previous fix suggestions{RESET}", file=sys.stderr)
-        raise SystemExit(1)
-    security = inherit_security(
-        glyph="^^", input_records=[normalize_trust_record(data)], capability="propose"
-    )
-    return str(data.get("prompt", "")), list(data["commands"]), security
 
 
 def select_fix() -> str | None:
     """Generate fixes and return the user's selected repair command."""
     prompt, candidates, security = generate_fixes()
-    command = select(prompt, candidates, security)
-    print_selected_fix_note(command, candidates)
-    return command
-
-
-def select_previous_fix() -> str | None:
-    """Reopen previous repair candidates and return the selected command."""
-    prompt, candidates, security = previous_fix()
-    continued = append_event({"type": "fix_continued", "prompt": prompt, **security})
-    security = {**security, "inputs": [continued["id"]]}
-    print(f"{MUTED}❯ sigil ^^ · inherited repair{RESET}", file=sys.stderr)
     command = select(prompt, candidates, security)
     print_selected_fix_note(command, candidates)
     return command

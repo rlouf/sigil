@@ -12,9 +12,8 @@ from pathlib import Path
 
 import click
 
-from .ansi import MUTED, RESET
-from .commands import generate, previous as previous_command_state, select
-from .failure import record_failure, select_fix, select_previous_fix
+from .commands import generate, select
+from .failure import record_failure, select_fix
 from .install import (
     SUPPORTED_SHELLS,
     checks_exit_code,
@@ -34,12 +33,6 @@ from .patches import (
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
 from .question import ask
-from .security import (
-    inherited_label,
-    create_trust_metadata,
-    normalize_trust_record,
-    record_id,
-)
 from .session import (
     clear_current_session,
     current_session_snapshot,
@@ -47,7 +40,7 @@ from .session import (
     known_sessions,
     session_paths,
 )
-from .state import append_event, read_json
+from .state import append_event
 
 MAX_CONFIRM_STDIN_CHARS = 4000
 MAX_CONFIRM_STDIN_LINES = 80
@@ -118,62 +111,27 @@ def piped_stdin_text() -> str | None:
 
 @cli.command("command")
 @click.argument("prompt", required=False)
-@click.option("--previous", "previous_command", is_flag=True)
 @click.option("--select", "select_candidate", is_flag=True)
 @click.option("--json", "json_output", is_flag=True)
 def cmd_command(
     prompt: str | None,
-    previous_command: bool,
     select_candidate: bool,
     json_output: bool,
 ) -> int:
     """Generate command candidates and optionally run the selector UI."""
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
-        glyph = ",," if previous_command else ","
         return run_stream_operator(
-            glyph,
+            ",",
             prompt=prompt or "",
             stdin_text=stdin_text,
             json_output=json_output,
         )
 
-    if previous_command:
-        prompt, candidates, security = previous_command_state()
-        continued = append_event(
-            {"type": "command_continued", "prompt": prompt, **security}
-        )
-        security = {**security, "inputs": [continued["id"]]}
-        print(
-            f"{MUTED}❯ sigil ,, · inherited: {inherited_label(security)}{RESET}",
-            file=sys.stderr,
-        )
-        if json_output:
-            print_json_line({"prompt": prompt, "commands": candidates, **security})
-            return 0
-        command = (
-            select(prompt, candidates, security)
-            if select_candidate
-            else candidates[0]["command"]
-        )
-        if command:
-            append_event({"type": "command_selected", "command": command, **security})
-            print(command)
-        return 0
     if prompt is None:
-        raise click.UsageError("PROMPT is required unless --previous is set.")
+        raise click.UsageError("PROMPT is required unless stdin is piped.")
 
-    candidates = generate(prompt)
-    source = normalize_trust_record(read_json("last-command.json") or {})
-    security = create_trust_metadata(
-        glyph=",",
-        integrity="local_model",
-        capability="propose",
-        taint=["model"],
-        inputs=[record_id(source)],
-        input_records=[source],
-        fresh_human=True,
-    )
+    candidates, security = generate(prompt)
     if json_output:
         print_json_line({"prompt": prompt, "commands": candidates})
         return 0
@@ -585,20 +543,18 @@ def cmd_record_failure(
 
 @cli.command("fix")
 @click.argument("prompt_parts", nargs=-1)
-@click.option("--previous", is_flag=True)
-def cmd_fix(prompt_parts: tuple[str, ...], previous: bool) -> int:
+def cmd_fix(prompt_parts: tuple[str, ...]) -> int:
     """Suggest fixes for the last recorded failed shell command."""
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
-        glyph = "^^" if previous else "^"
         return run_stream_operator(
-            glyph,
+            "^",
             prompt=" ".join(prompt_parts),
             stdin_text=stdin_text,
         )
     if prompt_parts:
         raise click.UsageError("fix does not accept a prompt unless stdin is piped.")
-    command = select_previous_fix() if previous else select_fix()
+    command = select_fix()
     if command:
         append_event({"type": "fix_selected", "command": command})
         print(command)

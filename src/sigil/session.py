@@ -15,11 +15,9 @@ from .security import normalize_trust_record
 from .state import session_dir, session_id, state_dir
 
 SESSION_FILES = (
-    "last-command.json",
     "last-question.jsonl",
     "last-tools.jsonl",
     "last-failure.json",
-    "last-fix.json",
 )
 
 

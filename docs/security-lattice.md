@@ -155,11 +155,6 @@ legacy before the user recalls it for review.
 
 Continuations inherit maximum taint and minimum integrity from their inputs.
 
-For the legacy `sigil command --previous` selector, `last-command.json` stores
-the event ID of the previous command generation. Reopening the selector creates
-a `command_continued` event with that input ID, and the final
-`command_selected` event points to the continuation.
-
 For `??`, `last-question.jsonl` stores the user and assistant transcript turns
 with their originating event IDs. A follow-up consumes those transcript records,
 inherits their taint and integrity, and records the consumed IDs in the new

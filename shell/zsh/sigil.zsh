@@ -39,10 +39,6 @@ sigil_command() {
   __sigil_history_insert "$command"
 }
 
-sigil_previous_command() {
-  sigil_execute_command "$@"
-}
-
 sigil_execute_command() {
   "$__sigil_bin" op ",," "$@"
 }
@@ -67,7 +63,7 @@ sigil_fix() {
   "$__sigil_bin" op "^" "$@"
 }
 
-sigil_previous_fix() {
+sigil_deep_fix() {
   "$__sigil_bin" op "^^" "$@"
 }
 
@@ -77,14 +73,14 @@ if __sigil_glyphs_enabled; then
   function '?' { sigil_question "$*" }
   function '??' { sigil_follow_up "$*" }
   function '^' { sigil_fix "$*" }
-  function '^^' { sigil_previous_fix "$*" }
+  function '^^' { sigil_deep_fix "$*" }
 
   alias ','='noglob sigil_command'
   alias ',,'='noglob sigil_execute_command'
   alias '?'='noglob sigil_question'
   alias '??'='noglob sigil_follow_up'
   alias '^'='noglob sigil_fix'
-  alias '^^'='noglob sigil_previous_fix'
+  alias '^^'='noglob sigil_deep_fix'
 fi
 
 autoload -Uz add-zsh-hook

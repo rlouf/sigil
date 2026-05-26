@@ -12,8 +12,8 @@ from click.testing import CliRunner
 
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
-from sigil.commands import previous, select
-from sigil.failure import generate_fixes, previous_fix, record_failure, select_fix
+from sigil.commands import select
+from sigil.failure import generate_fixes, record_failure, select_fix
 from sigil.pi_stream import should_color, stream_events
 from sigil.question import ask, renderer_command
 from sigil.security import (
@@ -23,7 +23,7 @@ from sigil.security import (
     normalize_trust_record,
     reject_promotion,
 )
-from sigil.state import append_event, append_jsonl, read_jsonl, write_json, write_jsonl
+from sigil.state import append_event, append_jsonl, read_jsonl, write_jsonl
 
 
 class TtyStringIO(StringIO):
@@ -306,40 +306,6 @@ def test_writers_normalize_metadata() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
-def test_previous_command_inherits_legacy_low_trust() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp
-        os.environ["SIGIL_SESSION_ID"] = "test"
-        try:
-            write_json(
-                "last-command.json",
-                {
-                    "id": "legacy-command",
-                    "prompt": "status",
-                    "commands": [
-                        {"command": "git status --short", "note": "show changes"}
-                    ],
-                },
-            )
-            prompt, candidates, security = previous()
-            assert prompt == "status"
-            assert candidates[0]["command"] == "git status --short"
-            assert security["integrity"] == "unknown"
-            assert security["taint"] == ["legacy"]
-            assert security["inputs"] == ["legacy-command"]
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
-
-
 def test_question_and_follow_up_record_web_taint() -> None:
 
     class FakeProc:
@@ -419,7 +385,7 @@ def test_question_and_follow_up_record_web_taint() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
-def test_fix_and_previous_fix_inherit_model_taint() -> None:
+def test_fix_inherits_model_taint() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
@@ -458,14 +424,6 @@ def test_fix_and_previous_fix_inherit_model_taint() -> None:
             assert "Recent stderr: <not captured>" in captured_prompts[0]
             assert "Recent stdout: <not captured>" in captured_prompts[0]
             assert "Do not invent missing stdout or stderr." in captured_prompts[0]
-            previous_prompt, previous_candidates, previous_security = previous_fix()
-            assert previous_prompt == "bad command"
-            assert previous_candidates[0]["command"] == "fixed command"
-            assert previous_security["glyph"] == "^^"
-            assert previous_security["integrity"] == "local_model"
-            assert previous_security["capability"] == "propose"
-            assert previous_security["taint"] == ["model"]
-            assert previous_security["inputs"][0]
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
