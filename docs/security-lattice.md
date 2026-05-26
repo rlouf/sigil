@@ -80,10 +80,13 @@ The implemented grammar is:
 ```text
 ,   recommend a concrete next action
 ,,  generate and execute a shell command
+,,, reserved bounded autonomy loop, rejected for now
 ?   web-authorized question
 ??  web-authorized question continuation
+??? reserved bounded research loop, rejected for now
 ^   recommend a repair for the last failure or stdin targets
 ^^  preview and confirm generated repair application
+^^^ reserved bounded repair loop, rejected for now
 ```
 
 It maps to the lattice as follows:
@@ -100,6 +103,9 @@ It maps to the lattice as follows:
     capability=exec_boxed
     taint=["model"]
 
+,,, reserved bounded autonomy loop
+    rejected before model call or execution
+
 ^   failed command/files -> repair proposal
     integrity=local_model
     capability=propose
@@ -109,6 +115,9 @@ It maps to the lattice as follows:
     integrity=local_model
     capability=propose, then write_boxed or exec_boxed after confirmation
     taint=["model"]
+
+^^^ reserved bounded repair loop
+    rejected before model call or mutation
 
 ?   question
     integrity=web
@@ -121,6 +130,9 @@ It maps to the lattice as follows:
     capability=read
     taint includes "web"
     provisional=true
+
+??? reserved bounded research loop
+    rejected before web call
 ```
 
 The `?` and `??` routes both enter through `sigil op` and then invoke Pi with

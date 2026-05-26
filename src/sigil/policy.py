@@ -120,13 +120,19 @@ def evaluate_policy(
             message=f"{glyph} dry-run: classified output and skipped execution",
             classification=classification,
         )
-    if glyph.startswith(",") and depth >= 2:
+    if depth == 3:
+        return PolicyDecision(
+            status="preview",
+            message=f"{glyph} bounded autonomy loop is reserved but not implemented",
+            classification=classification,
+        )
+    if glyph.startswith(",") and depth == 2:
         return PolicyDecision(
             status="allowed",
             message=f"{glyph} executes the generated command",
             classification=classification,
         )
-    if glyph.startswith("^") and depth >= 2 and policy.confirm_repair:
+    if glyph.startswith("^") and depth == 2 and policy.confirm_repair:
         return PolicyDecision(
             status="allowed",
             message=f"{glyph} applies the generated repair after confirmation",

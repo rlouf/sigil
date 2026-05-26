@@ -98,7 +98,7 @@ def run_stream_operator(
         print(f"sigil {invocation.name}: {exc}", file=sys.stderr)
         return 1
     if result.decision.status != "preview" or (
-        invocation.base == "," and invocation.depth >= 2
+        invocation.base == "," and invocation.depth == 2
     ):
         print(f"sigil {invocation.name}: {result.decision.message}", file=sys.stderr)
     if result.stderr:
@@ -217,6 +217,9 @@ def cmd_op(
         print_json_line(invocation.to_dict())
         return 0
 
+    if should_handle_autonomy_loop(invocation):
+        handle_autonomy_loop(invocation, dry_run=dry_run)
+
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
             print("sigil op: piped input declined", file=sys.stderr)
@@ -268,7 +271,7 @@ def should_confirm_execution(invocation: object) -> bool:
     return (
         getattr(invocation, "base", None) == ","
         and should_confirm_piped_input(invocation)
-        and getattr(invocation, "depth", 0) >= 2
+        and getattr(invocation, "depth", 0) == 2
     )
 
 
@@ -276,8 +279,24 @@ def should_confirm_repair(invocation: object) -> bool:
     """Return whether generated repair application needs confirmation."""
     return (
         getattr(invocation, "base", None) == "^"
-        and getattr(invocation, "depth", 0) >= 2
+        and getattr(invocation, "depth", 0) == 2
     )
+
+
+def should_handle_autonomy_loop(invocation: object) -> bool:
+    """Return whether this invocation targets the reserved loop tier."""
+    return getattr(invocation, "depth", 0) == 3
+
+
+def handle_autonomy_loop(invocation: object, *, dry_run: bool) -> None:
+    """Fail closed for the reserved bounded-autonomy tier."""
+    glyph = str(getattr(invocation, "glyph", ""))
+    message = f"sigil op: {glyph} bounded autonomy loop is reserved but not implemented"
+    if dry_run:
+        print(message)
+        raise click.exceptions.Exit(0)
+    print(message, file=sys.stderr)
+    raise click.exceptions.Exit(2)
 
 
 def confirm_piped_input(stdin_text: str) -> bool:
@@ -299,7 +318,7 @@ def run_question_operator(invocation: object) -> int:
         question = "Answer the current shell question."
     return ask(
         question,
-        follow_up=getattr(invocation, "depth", 0) >= 2,
+        follow_up=getattr(invocation, "depth", 0) == 2,
     )
 
 

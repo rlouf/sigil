@@ -96,6 +96,26 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         assert "history=echo recommended" in result.stdout
 
 
+def test_bash_triple_wrappers_call_reserved_loop_contract() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "bash",
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    sigil_command_loop hello\n                    sigil_question_loop hello\n                    sigil_fix_loop hello\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            "op ,,, hello",
+            "op ??? hello",
+            "op ^^^ hello",
+        ]
+
+
 def test_bash_recommendations_print_stdout_and_command_to_history() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -249,6 +269,27 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         assert "op:op ^" in result.stdout
         assert "op:op ^^" in result.stdout
         assert "history=echo recommended" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_triple_wrappers_call_reserved_loop_contract() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                "                    source shell/zsh/sigil.zsh\n                    sigil_command_loop hello\n                    sigil_question_loop hello\n                    sigil_fix_loop hello\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == [
+            "op ,,, hello",
+            "op ??? hello",
+            "op ^^^ hello",
+        ]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

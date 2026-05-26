@@ -63,12 +63,20 @@ sigil_execute_command() {
   "$__sigil_bin" op ",," "$@"
 }
 
+sigil_command_loop() {
+  "$__sigil_bin" op ",,," "$@"
+}
+
 sigil_question() {
   "$__sigil_bin" op "?" "$@"
 }
 
 sigil_follow_up() {
   "$__sigil_bin" op "??" "$@"
+}
+
+sigil_question_loop() {
+  "$__sigil_bin" op "???" "$@"
 }
 
 sigil_fix() {
@@ -79,23 +87,33 @@ sigil_deep_fix() {
   "$__sigil_bin" op "^^" "$@"
 }
 
+sigil_fix_loop() {
+  "$__sigil_bin" op "^^^" "$@"
+}
+
 # ── Optional glyph functions ─────────────────────────────────────────────
 
 if __sigil_glyphs_enabled; then
   function , { sigil_command "$*"; }
   function ,, { sigil_execute_command "$*"; }
+  function ,,, { sigil_command_loop "$*"; }
   function ? { sigil_question "$*"; }
   function ?? { sigil_follow_up "$*"; }
+  function ??? { sigil_question_loop "$*"; }
   function ^ { sigil_fix "$*"; }
   function ^^ { sigil_deep_fix "$*"; }
+  function ^^^ { sigil_fix_loop "$*"; }
 
   if [[ $- == *i* ]]; then
     alias ,='sigil_command'
     alias ,,='sigil_execute_command'
+    alias ,,,='sigil_command_loop'
     alias '?'='sigil_question'
     alias '??'='sigil_follow_up'
+    alias '???'='sigil_question_loop'
     alias '^'='sigil_fix'
     alias '^^'='sigil_deep_fix'
+    alias '^^^'='sigil_fix_loop'
   fi
 fi
 

@@ -24,10 +24,13 @@ Implemented grammar:
 ```text
 ,   recommend a concrete next action
 ,,  generate and execute a shell command
+,,, reserved bounded autonomy loop, rejected for now
 ?   web-authorized question
 ??  web-authorized question continuation
+??? reserved bounded research loop, rejected for now
 ^   recommend a repair for the last failed command or targets
 ^^  preview and confirm generated repair application
+^^^ reserved bounded repair loop, rejected for now
 ```
 
 Important existing foundations:
@@ -154,8 +157,10 @@ Current semantics:
 ```text
 comma depth 1: recommend one concrete next action
 comma depth 2: generate and execute one shell command
+comma depth 3: reserved bounded autonomy loop; reject for now
 other depth 1: quick, low-context, no mutation
 repair depth 2: preview a generated repair, then apply only after confirmation
+repair depth 3: reserved bounded repair loop; reject for now
 ```
 
 Piped input is treated as opaque context. Comma and repair routes preview piped
@@ -257,6 +262,7 @@ Add `sigil op` and tests for parsing existing glyph families:
 ```text
 ? -> base=?, depth=1
 ?? -> base=?, depth=2
+??? -> base=?, depth=3
 ^^^ -> base=^, depth=3
 ```
 

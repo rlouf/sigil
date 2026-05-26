@@ -43,10 +43,13 @@ the long-form verbs.
 ```text
 ,   -> sigil op ","
 ,,  -> sigil op ",,"
+,,, -> sigil op ",,,"
 ^   -> sigil op "^"
 ^^  -> sigil op "^^"
+^^^ -> sigil op "^^^"
 ?   -> sigil op "?"
 ??  -> sigil op "??"
+??? -> sigil op "???"
 ```
 
 Sigil records every invocation with trust metadata. This is the core trust
@@ -63,10 +66,13 @@ The default glyph aliases map to:
 ```text
 ,   human prompt -> model recommendation   local_model / propose / model-tainted
 ,,  human prompt -> generated command run  local_model / exec_boxed / model-tainted
+,,, reserved bounded autonomy loop         rejected for now
 ^   failed command/files -> repair proposal local_model / propose / model-tainted
 ^^  generated repair apply after confirm    local_model -> write/exec boxed
+^^^ reserved bounded repair loop           rejected for now
 ?   web-authorized question                web / read / provisional
 ??  web-authorized follow-up               inherits prior question taint / provisional
+??? reserved bounded research loop         rejected for now
 ```
 
 This matters because only the explicit comma execution route crosses into
@@ -255,7 +261,8 @@ routes ask before using the input, and piped `,,` asks again before execution.
 `?` answers through the web-authorized read route; `??` continues the same
 question transcript through that route. Piped question routes ask before using
 the input. `^` prints a repair proposal. `^^` previews a generated patch or
-command and asks before applying or executing it.
+command and asks before applying or executing it. Triple glyphs are reserved for
+bounded autonomy loops and are rejected until that loop runtime is implemented.
 
 ## Requirements
 

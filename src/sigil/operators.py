@@ -25,6 +25,7 @@ OPERATOR_NAMES: dict[OperatorBase, str] = {
 }
 
 SUPPORTED_OPERATORS = frozenset(OPERATOR_NAMES)
+MAX_OPERATOR_DEPTH = 3
 MAX_STDIN_CHARS = 120_000
 MAX_EVENT_OUTPUT_CHARS = 4000
 MAX_REPAIR_FILES = 16
@@ -168,6 +169,8 @@ def parse_operator_token(token: str) -> tuple[OperatorBase, int]:
     operator = cast(OperatorBase, base)
     if any(char != base for char in token):
         raise ValueError(f"operator token must repeat one glyph: {token}")
+    if len(token) > MAX_OPERATOR_DEPTH:
+        raise ValueError("operator depth must be 1, 2, or 3")
     return operator, len(token)
 
 
@@ -197,6 +200,10 @@ def run_invocation(
     policy: ExecutionPolicy | None = None,
 ) -> OperatorResult:
     """Run a semantic operator invocation and return stdout text."""
+    if invocation.depth == 3:
+        raise RuntimeError(
+            f"{invocation.glyph} bounded autonomy loop is reserved but not implemented"
+        )
     if not ensure_server():
         raise SystemExit(1)
 
@@ -229,7 +236,7 @@ def run_invocation(
     )
     if invocation.base == "?":
         append_inspect_turns(invocation, output, event, security)
-    if invocation.base == "," and invocation.depth >= 2:
+    if invocation.base == "," and invocation.depth == 2:
         command = executable_command(output)
         if execution_policy.dry_run:
             return OperatorResult(output=command, decision=decision, command=command)
@@ -273,7 +280,7 @@ def run_invocation(
         if execution_policy.dry_run:
             return OperatorResult(output=output, decision=decision)
         stored_patch = None
-        if invocation.depth >= 2:
+        if invocation.depth == 2:
             stored_patch = store_patch_preview(
                 patch_text=output,
                 operator=invocation.to_dict(),
@@ -281,7 +288,7 @@ def run_invocation(
                 decision=decision,
                 security=security,
             )
-        if invocation.depth >= 2 and execution_policy.confirm_repair:
+        if invocation.depth == 2 and execution_policy.confirm_repair:
             if not confirm_repair_application(output):
                 return OperatorResult(
                     output=output,
@@ -365,7 +372,7 @@ def run_model(invocation: OperatorInvocation, system: str, user: str) -> str:
         if not explanation:
             raise RuntimeError(", did not produce an explanation")
         return f"{command}\n{explanation}"
-    if invocation.base == "," and invocation.depth >= 2:
+    if invocation.base == "," and invocation.depth == 2:
         data = chat_json(system, user, EXECUTABLE_COMMAND_SCHEMA)
         command = str(data.get("command", "")).strip()
         if not command:
@@ -380,7 +387,7 @@ def run_model(invocation: OperatorInvocation, system: str, user: str) -> str:
         if not explanation:
             raise RuntimeError("^ did not produce an explanation")
         return f"{repair}\n{explanation}"
-    if invocation.base == "^" and invocation.depth >= 2:
+    if invocation.base == "^" and invocation.depth == 2:
         data = chat_json(system, user, REPAIR_APPLICATION_SCHEMA)
         kind = str(data.get("kind", "")).strip()
         raw_repair = str(data.get("repair", ""))
@@ -400,14 +407,18 @@ def depth_guidance(invocation: OperatorInvocation) -> str:
     if invocation.base == ",":
         if invocation.depth == 1:
             return "Comma means recommend one concrete next action."
-        return "Comma depth two or higher means generate a command that Sigil will execute."
+        if invocation.depth == 2:
+            return "Comma depth two means generate exactly one command that Sigil will execute."
+        return "Comma depth three is reserved for a bounded autonomy loop."
     if invocation.base == "^":
         if invocation.depth == 1:
             return "Caret means recommend one concrete repair action."
-        return (
-            "Caret depth two or higher means generate a concrete repair that "
-            "Sigil will preview and apply only after confirmation."
-        )
+        if invocation.depth == 2:
+            return (
+                "Caret depth two means generate a concrete repair that "
+                "Sigil will preview and apply only after confirmation."
+            )
+        return "Caret depth three is reserved for a bounded autonomy loop."
     return {
         1: "Use a quick pass.",
         2: "Use a deeper pass and call out important caveats.",
@@ -505,11 +516,15 @@ def default_prompt(invocation: OperatorInvocation) -> str:
     if invocation.base == "?":
         return "Inspect and summarize the input."
     if invocation.base == ",":
-        if invocation.depth >= 2:
+        if invocation.depth == 2:
             return "Generate a shell command to execute."
+        if invocation.depth == 3:
+            return "Run a bounded autonomy loop."
         return "Recommend the best next action."
-    if invocation.base == "^" and invocation.depth >= 2:
+    if invocation.base == "^" and invocation.depth == 2:
         return "Generate a concrete repair to preview and apply."
+    if invocation.base == "^" and invocation.depth == 3:
+        return "Run a bounded repair loop."
     return "Repair the input."
 
 
@@ -550,12 +565,14 @@ def repair_user_prompt(invocation: OperatorInvocation) -> str:
 
 def repair_instruction(invocation: OperatorInvocation) -> str:
     """Return application guidance for repair depth."""
-    if invocation.depth >= 2:
+    if invocation.depth == 2:
         return (
             "Return a concrete repair only. Prefer a unified diff. If a diff is "
             "not possible, return one directly runnable shell command. Sigil "
             "will show this preview and ask before applying it."
         )
+    if invocation.depth == 3:
+        return "Return a bounded repair loop plan only. Do not apply changes."
     return "Return a preview only. Do not apply changes."
 
 

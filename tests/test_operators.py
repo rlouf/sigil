@@ -38,6 +38,8 @@ def read_global_events(root: Path) -> list[dict[str, object]]:
     [
         ("?", "?", 1),
         ("??", "?", 2),
+        ("???", "?", 3),
+        (",,,", ",", 3),
         ("^^^", "^", 3),
         (",,", ",", 2),
     ],
@@ -50,7 +52,7 @@ def test_parse_operator_token_repetition(
     assert parse_operator_token(token) == (base, depth)
 
 
-@pytest.mark.parametrize("token", ["", "?^", "?:", "abc", ":"])
+@pytest.mark.parametrize("token", ["", "?^", "?:", "abc", ":", "????", ",,,,", "^^^^"])
 def test_parse_operator_token_rejects_invalid_tokens(token: str) -> None:
     with pytest.raises(ValueError):
         parse_operator_token(token)
@@ -440,16 +442,16 @@ def test_double_comma_policy_allows_execution_classification() -> None:
     assert "delete" in decision.classification.classes
 
 
-def test_deeper_comma_policy_matches_runtime_execution() -> None:
+def test_triple_comma_policy_is_reserved_not_execution() -> None:
     decision = evaluate_policy(
-        glyph=",,,,",
-        depth=4,
+        glyph=",,,",
+        depth=3,
         output="git status --short",
         policy=ExecutionPolicy(),
     )
 
-    assert decision.status == "allowed"
-    assert "executes" in decision.message
+    assert decision.status == "preview"
+    assert "reserved" in decision.message
 
 
 def test_dry_run_policy_previews_without_execution() -> None:
@@ -541,6 +543,26 @@ def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
 
     assert result.exit_code == 0
     assert "read+web question route" in result.output
+
+
+def test_op_cli_rejects_triple_before_model_or_confirmation() -> None:
+    with (
+        patch("sigil.cli.confirm_piped_input", side_effect=AssertionError("no prompt")),
+        patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
+        patch("sigil.operators.subprocess.run", side_effect=AssertionError("no exec")),
+    ):
+        result = CliRunner().invoke(cli, ["op", ",,,", "status"], input="notes\n")
+
+    assert result.exit_code == 2
+    assert "bounded autonomy loop is reserved but not implemented" in result.stderr
+
+
+def test_op_cli_dry_run_triple_reports_reserved_loop() -> None:
+    with patch("sigil.operators.chat_json", side_effect=AssertionError("no model")):
+        result = CliRunner().invoke(cli, ["op", "--dry-run", ",,,", "status"])
+
+    assert result.exit_code == 0
+    assert "bounded autonomy loop is reserved but not implemented" in result.output
 
 
 def test_op_cli_denies_piped_comma_before_model_call() -> None:

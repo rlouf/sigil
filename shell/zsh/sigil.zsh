@@ -58,12 +58,20 @@ sigil_execute_command() {
   "$__sigil_bin" op ",," "$@"
 }
 
+sigil_command_loop() {
+  "$__sigil_bin" op ",,," "$@"
+}
+
 sigil_question() {
   "$__sigil_bin" op "?" "$@"
 }
 
 sigil_follow_up() {
   "$__sigil_bin" op "??" "$@"
+}
+
+sigil_question_loop() {
+  "$__sigil_bin" op "???" "$@"
 }
 
 sigil_fix() {
@@ -74,20 +82,30 @@ sigil_deep_fix() {
   "$__sigil_bin" op "^^" "$@"
 }
 
+sigil_fix_loop() {
+  "$__sigil_bin" op "^^^" "$@"
+}
+
 if __sigil_glyphs_enabled; then
   function ',' { sigil_command "$*" }
   function ',,' { sigil_execute_command "$*" }
+  function ',,,' { sigil_command_loop "$*" }
   function '?' { sigil_question "$*" }
   function '??' { sigil_follow_up "$*" }
+  function '???' { sigil_question_loop "$*" }
   function '^' { sigil_fix "$*" }
   function '^^' { sigil_deep_fix "$*" }
+  function '^^^' { sigil_fix_loop "$*" }
 
   alias ','='noglob sigil_command'
   alias ',,'='noglob sigil_execute_command'
+  alias ',,,'='noglob sigil_command_loop'
   alias '?'='noglob sigil_question'
   alias '??'='noglob sigil_follow_up'
+  alias '???'='noglob sigil_question_loop'
   alias '^'='noglob sigil_fix'
   alias '^^'='noglob sigil_deep_fix'
+  alias '^^^'='noglob sigil_fix_loop'
 fi
 
 autoload -Uz add-zsh-hook

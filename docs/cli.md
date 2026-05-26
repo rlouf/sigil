@@ -219,10 +219,13 @@ only setup.
 ```text
 ,   -> sigil op ","
 ,,  -> sigil op ",,"
+,,, -> sigil op ",,,"
 ?   -> sigil op "?"
 ??  -> sigil op "??"
+??? -> sigil op "???"
 ^   -> sigil op "^"
 ^^  -> sigil op "^^"
+^^^ -> sigil op "^^^"
 ```
 
 ## Hidden plumbing commands
