@@ -38,6 +38,7 @@ from .session import (
     current_session_snapshot,
     event_lineage,
     known_sessions,
+    read_event_log,
     session_paths,
 )
 from .state import append_event
@@ -454,9 +455,71 @@ def print_json_line(value: object) -> None:
     print(json.dumps(value, ensure_ascii=False))
 
 
-@cli.group("events")
-def cmd_events() -> None:
+@cli.group("events", invoke_without_command=True)
+@click.option("--json", "json_output", is_flag=True)
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=20,
+    show_default=True,
+    help="Number of recent events to show.",
+)
+@click.pass_context
+def cmd_events(ctx: click.Context, json_output: bool, limit: int) -> int:
     """Inspect Sigil's read-only event log."""
+    if ctx.invoked_subcommand is not None:
+        return 0
+    return print_events_list(json_output=json_output, limit=limit)
+
+
+@cmd_events.command("list")
+@click.option("--json", "json_output", is_flag=True)
+@click.option(
+    "--limit",
+    type=click.IntRange(min=1),
+    default=20,
+    show_default=True,
+    help="Number of recent events to show.",
+)
+def cmd_events_list(json_output: bool, limit: int) -> int:
+    """Show recent events from the global event log."""
+    return print_events_list(json_output=json_output, limit=limit)
+
+
+def print_events_list(*, json_output: bool, limit: int) -> int:
+    """Print a bounded recent view of the global event log."""
+    events = read_event_log()
+    recent = events[-limit:]
+    if json_output:
+        pretty_print_json(recent)
+        return 0
+    if not recent:
+        print("no events recorded")
+        return 0
+    for event in recent:
+        print(format_event_summary(event))
+    return 0
+
+
+def format_event_summary(event: dict[str, object]) -> str:
+    """Return one compact terminal line for an event log entry."""
+    event_id = str(event.get("id") or "-")
+    event_type = str(event.get("type") or "event")
+    glyph = str(event.get("glyph") or "?")
+    integrity = str(event.get("integrity") or "unknown")
+    capability = str(event.get("capability") or "none")
+    session = str(event.get("session") or "-")
+    cwd = str(event.get("cwd") or "-")
+    return "\t".join(
+        [
+            event_id,
+            event_type,
+            glyph,
+            f"{integrity}/{capability}",
+            session,
+            cwd,
+        ]
+    )
 
 
 @cmd_events.command("lineage")
