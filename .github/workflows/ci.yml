@@ -11,8 +11,12 @@ permissions:
 
 jobs:
   test:
-    name: Tests and pre-commit
+    name: Tests and pre-commit / Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - name: Check out repository
@@ -24,7 +28,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install zsh for shell binding tests
         run: sudo apt-get update && sudo apt-get install -y zsh

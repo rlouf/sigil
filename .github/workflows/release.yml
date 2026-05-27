@@ -33,6 +33,18 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Install zsh for shell binding tests
+        run: sudo apt-get update && sudo apt-get install -y zsh
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Run pre-commit
+        run: uv run pre-commit run --all-files
+
+      - name: Run tests
+        run: uv run pytest
+
       - name: Build distributions
         run: uv build
 

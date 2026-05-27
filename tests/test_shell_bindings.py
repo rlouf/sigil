@@ -17,8 +17,8 @@ def make_stub(tmp: Path) -> Path:
         textwrap.dedent(
             """\
             #!/usr/bin/env bash
-            if [[ "$*" == "handoff pop" ]]; then
-              [[ -n "${SIGIL_STUB_HANDOFF:-}" ]] || exit 1
+            if [ "$*" = "handoff pop" ]; then
+              [ -n "${SIGIL_STUB_HANDOFF:-}" ] || exit 1
               printf '%s\n' "$SIGIL_STUB_HANDOFF"
               exit 0
             fi
