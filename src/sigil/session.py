@@ -22,7 +22,6 @@ SESSION_FILES = (
     "last-bash-handoff.jsonl",
     "pending-bash-handoff.jsonl",
     "last-failure.json",
-    "last-patch.json",
     "last-act.jsonl",
     "last-plan.jsonl",
     "recent-turns.jsonl",

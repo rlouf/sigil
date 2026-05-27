@@ -4,8 +4,8 @@ Sigil's shell glyphs are optional shortcuts installed by `sigil install zsh` or
 `sigil install bash`. They are current user-facing shell APIs.
 
 ```text
-,    recommend one command or patch action
-,,   generate and run one command, or preview and confirm one patch
+,    recommend one command
+,,   generate and run one command
 ,,,  run one confirmed Pi edit action
 
 ?    ask a fresh read/web question
@@ -23,9 +23,9 @@ Use `,` when you want a proposal:
 git diff --name-only | , choose a focused test command
 ```
 
-`comma` prints one proposal. If the proposal is a command, the zsh binding puts
-it in the editable prompt buffer and records it in history; the Bash binding
-records it in history so you can recall, edit, and run it yourself.
+`comma` prints one command proposal. The zsh binding puts it in the editable
+prompt buffer and records it in history; the Bash binding records it in history
+so you can recall, edit, and run it yourself.
 
 Use `,,` when you want Sigil to take one action:
 
@@ -34,8 +34,7 @@ Use `,,` when you want Sigil to take one action:
 ,, check whether this branch builds
 ```
 
-Command proposals run through your shell. Patch proposals are stored, shown as a
-preview, and applied only after confirmation.
+Command proposals run through your shell.
 
 Use `,,,` for one bounded Pi edit action:
 
@@ -69,8 +68,8 @@ Use `???` when you want a more exhaustive read-only answer:
 ??? explain the release options and their risks
 ```
 
-Question routes do not execute commands, apply patches, or expose Bash. If an
-answer recommends a command, it is plain answer text.
+Question routes do not execute commands or expose Bash. If an answer recommends
+a command, it is plain answer text.
 
 ## Piped Input
 

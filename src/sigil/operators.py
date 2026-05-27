@@ -8,8 +8,6 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
-
-from .patches import apply_patch, last_patch, record_patch_apply, store_patch_preview
 from .policy import ExecutionPolicy, PolicyDecision, evaluate_policy
 from .openai_compat import chat_json, chat_text, ensure_server
 from .security import create_trust_metadata
@@ -40,14 +38,14 @@ INSPECT_SYSTEM = (
 RECOMMEND_SYSTEM = (
     "You are a semantic shell operator. Produce one typed proposal from the "
     "input stream, prompt, current project context, and any last-failure "
-    "context. The proposal may be a shell command or a unified diff patch. "
-    "Do not execute or claim to have applied anything."
+    "context. The proposal must be one directly runnable shell command. "
+    "Do not execute it or claim to have changed anything."
 )
 
 APPLY_SYSTEM = (
     "You are a semantic shell operator. Generate exactly one typed proposal "
-    "that Sigil can execute or apply after the appropriate boundary checks. "
-    "Use kind=command for one shell command. Use kind=patch for a unified diff. "
+    "that Sigil can execute after the appropriate boundary checks. "
+    "Use kind=command for one directly runnable shell command. "
     "Do not include Markdown fences, prose, numbering, or explanation in body."
 )
 
@@ -57,12 +55,12 @@ PROPOSAL_SCHEMA = {
     "properties": {
         "kind": {
             "type": "string",
-            "enum": ["command", "patch"],
-            "description": "Whether the proposal is a shell command or unified diff patch.",
+            "enum": ["command"],
+            "description": "The proposal kind. Only shell commands are supported.",
         },
         "body": {
             "type": "string",
-            "description": "One concrete shell command or unified diff patch.",
+            "description": "One concrete shell command.",
         },
         "explanation": {
             "type": "string",
@@ -78,12 +76,12 @@ EXECUTABLE_PROPOSAL_SCHEMA = {
     "properties": {
         "kind": {
             "type": "string",
-            "enum": ["command", "patch"],
-            "description": "Whether the proposal is a shell command or unified diff patch.",
+            "enum": ["command"],
+            "description": "The proposal kind. Only shell commands are supported.",
         },
         "body": {
             "type": "string",
-            "description": "One directly runnable macOS zsh command or unified diff patch.",
+            "description": "One directly runnable macOS zsh command.",
         },
     },
     "required": ["kind", "body"],
@@ -122,7 +120,7 @@ class OperatorResult:
 class TypedProposal:
     """A model proposal with explicit effect kind."""
 
-    kind: Literal["command", "patch"]
+    kind: Literal["command"]
     body: str
     explanation: str = ""
 
@@ -232,44 +230,7 @@ def run_invocation(
             return OperatorResult(
                 output=proposal.body,
                 decision=decision,
-                command=proposal.body if proposal.kind == "command" else None,
-            )
-        if proposal.kind == "patch":
-            stored_patch = store_patch_preview(
-                patch_text=proposal.body,
-                operator=invocation.to_dict(),
-                operator_event=event,
-                decision=decision,
-                security=security,
-            )
-            if not confirm_patch_application(proposal.body):
-                return OperatorResult(
-                    output=proposal.body,
-                    decision=decision,
-                    stderr="sigil op: patch application declined\n",
-                    exit_code=2,
-                )
-            if stored_patch is None:
-                return OperatorResult(
-                    output=proposal.body,
-                    decision=decision,
-                    stderr="sigil op: patch proposal was not a unified diff\n",
-                    exit_code=1,
-                )
-            record = last_patch()
-            applied = apply_patch(record)
-            record_patch_apply(record, applied)
-            if applied.ok:
-                return OperatorResult(
-                    output=proposal.body,
-                    decision=decision,
-                    stderr="sigil op: patch applied\n",
-                )
-            return OperatorResult(
-                output=proposal.body,
-                decision=decision,
-                stderr=applied.stderr or "sigil op: patch apply failed\n",
-                exit_code=applied.status or 1,
+                command=proposal.body,
             )
         command = proposal.body
         if execution_policy.confirm_execution and not confirm_execution(command):
@@ -338,7 +299,7 @@ def run_proposal_model(
         data = chat_json(system, user, EXECUTABLE_PROPOSAL_SCHEMA)
         proposal = proposal_from_json(data)
         if not proposal:
-            raise RuntimeError(",, did not produce a proposal to apply or execute")
+            raise RuntimeError(",, did not produce a command proposal to execute")
         return proposal
     return None
 
@@ -351,14 +312,14 @@ def proposal_from_json(
     """Convert structured model output into a typed proposal."""
     kind = str(data.get("kind", "")).strip()
     raw_body = str(data.get("body", ""))
-    if kind not in {"command", "patch"} or not raw_body.strip():
+    if kind != "command" or not raw_body.strip():
         return None
-    body = raw_body if kind == "patch" else raw_body.strip()
+    body = raw_body.strip()
     explanation = str(data.get("explanation", "")).strip()
     if explanation_required and not explanation:
         return None
     return TypedProposal(
-        kind=cast("Literal['command', 'patch']", kind),
+        kind=cast("Literal['command']", kind),
         body=body,
         explanation=explanation,
     )
@@ -384,7 +345,7 @@ def depth_guidance(invocation: OperatorInvocation) -> str:
         if invocation.depth == 1:
             return "Comma means recommend one concrete next action."
         if invocation.depth == 2:
-            return "Comma depth two means generate exactly one command or patch that Sigil will execute or apply."
+            return "Comma depth two means generate exactly one command that Sigil will execute."
         return "Comma depth three is handled by the confirmed Pi act runner."
     return {
         1: "Use a quick pass.",
@@ -442,14 +403,8 @@ def bounded_stdin(stdin: str) -> tuple[str, str]:
 def proposal_instruction(invocation: OperatorInvocation) -> str:
     """Return proposal guidance for comma depth."""
     if invocation.depth == 2:
-        return (
-            "Return exactly one executable/applicable proposal. Use kind=patch "
-            "for unified diffs that write files, otherwise kind=command."
-        )
-    return (
-        "Return exactly one proposal. Use kind=patch for unified diffs that "
-        "write files, otherwise kind=command."
-    )
+        return "Return exactly one executable proposal. Use kind=command."
+    return "Return exactly one command proposal. Use kind=command."
 
 
 def inspect_user_prompt(invocation: OperatorInvocation) -> str:
@@ -521,7 +476,7 @@ def default_prompt(invocation: OperatorInvocation) -> str:
         return "Inspect and summarize the input."
     if invocation.base == ",":
         if invocation.depth == 2:
-            return "Generate one command or patch proposal to execute or apply."
+            return "Generate one command proposal to execute."
         if invocation.depth == 3:
             return "Run a bounded autonomy loop."
         return "Recommend the best next action."
@@ -625,12 +580,3 @@ def confirm_execution(command: str) -> bool:
     print(command, file=sys.stderr)
     print("", file=sys.stderr)
     return confirm_on_tty("Run it? [y/N] ")
-
-
-def confirm_patch_application(patch: str) -> bool:
-    """Ask the user to confirm a generated patch before applying it."""
-    print("Generated patch preview:", file=sys.stderr)
-    print("", file=sys.stderr)
-    print(patch, file=sys.stderr)
-    print("", file=sys.stderr)
-    return confirm_on_tty("Apply this patch? [y/N] ")

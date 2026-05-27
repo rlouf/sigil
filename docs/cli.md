@@ -13,11 +13,11 @@ written to stdout.
 sigil command [--select] [--json] [PROMPT]
 sigil ask [--follow-up] [--json] [QUESTION]
 sigil act [show|resume|abort] [--json] [--verbose]
-sigil patch [show|check|apply] [--json] [--yes]
 sigil events [--limit N] [--json] [--raw]
 sigil events list [--limit N] [--json] [--raw]
 sigil events lineage [EVENT_ID] [--json]
 sigil session [show|path|list|clear] [--json]
+sigil status [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs] [--json]
 sigil doctor [--shell auto|zsh|bash] [--json]
 ```
@@ -32,9 +32,9 @@ sigil ask --follow-up "what should I test?"
 git diff | sigil ask "review risky changes"
 git diff --name-only | sigil command "run the relevant tests"
 sigil act show --json
-sigil patch check
 sigil events --limit 50
 sigil session show --json
+sigil status
 ```
 
 ## `sigil command`
@@ -175,8 +175,8 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 `sigil install zsh` or `sigil install bash`.
 
 ```text
-,    recommend one command or patch action
-,,   generate and run one command, or preview and confirm one patch
+,    recommend one command
+,,   generate and run one command
 ,,,  run one confirmed Pi edit action
 ?    ask a fresh read/web question
 ??   follow up on the previous question in the same shell session
@@ -194,12 +194,11 @@ Examples:
 ??? explain the options in detail
 ```
 
-`,` prints a proposal. If the proposal is a command, the zsh binding inserts it
-into the editable prompt buffer and adds it to shell history; the Bash binding
-adds it to history. `,,` runs command proposals through your shell. Patch
-proposals are previewed and require confirmation before apply. `,,,` asks for
-confirmation, invokes Pi with read/search/edit/write tools, blocks Bash tool
-execution as a handoff, and then returns control to the shell.
+`,` prints a command proposal. The zsh binding inserts it into the editable
+prompt buffer and adds it to shell history; the Bash binding adds it to history.
+`,,` runs command proposals through your shell. `,,,` asks for confirmation,
+invokes Pi with read/search/edit/write tools, blocks Bash tool execution as a
+handoff, and then returns control to the shell.
 
 To install bindings without glyphs:
 
@@ -250,34 +249,6 @@ JSON output for `show` is the stored act object, or `null`:
 
 ```json
 {"aborted":true,"act":{ "...": "..." }}
-```
-
-## `sigil patch`
-
-Inspects, validates, or applies the latest patch preview stored by `,,`.
-
-```sh
-sigil patch show
-sigil patch check
-sigil patch apply --yes
-```
-
-`show` prints the stored unified diff. `check` runs `git apply --check` in the
-working directory where the preview was created. `apply` requires `--yes` and
-then runs `git apply`; without `--yes`, it exits with status `2` and does not
-modify files.
-
-JSON output for `check` and `apply`:
-
-```json
-{
-  "ok": true,
-  "status": 0,
-  "command": ["git", "apply", "--check"],
-  "cwd": "/path/to/repo",
-  "stdout": "",
-  "stderr": ""
-}
 ```
 
 ## `sigil events`
@@ -375,7 +346,6 @@ continuity files:
     "last-question.jsonl": [],
     "last-tools.jsonl": [],
     "last-failure.json": null,
-    "last-patch.json": null,
     "last-act.jsonl": [],
     "recent-turns.jsonl": []
   }
@@ -396,6 +366,42 @@ continuity files:
 `list --json` returns known session directories, file names present in each
 session, and latest event metadata when available. `clear --json` returns the
 session files removed.
+
+## `sigil status`
+
+Shows the shortest useful current-session state without calling the model or
+mutating session files.
+
+```sh
+sigil status
+sigil status --json
+```
+
+When there is no live state that needs attention, it prints:
+
+```text
+clean
+```
+
+When attention is needed, it exits with status `1` and prints the highest
+priority condition plus exact next commands. Priority is active act, pending
+bash handoff, latest failed shell turn, then latest failed Sigil execution.
+
+JSON output:
+
+```json
+{
+  "state": "attention",
+  "reason": "last command failed",
+  "session_id": "2e9a0b3c-...",
+  "cwd": "/path/to/repo",
+  "actions": [", suggest a fix"],
+  "details": {
+    "command": "uv run pytest",
+    "status": 1
+  }
+}
+```
 
 ## `sigil install`
 
@@ -467,7 +473,6 @@ By default, Sigil writes state under `~/.sigil/`.
 ```text
 events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
-sessions/<session-id>/last-patch.json     latest patch preview
 sessions/<session-id>/last-act.jsonl      confirmed Pi edit action snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
 sessions/<session-id>/last-bash-handoff.jsonl latest blocked Bash handoff

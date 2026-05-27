@@ -49,7 +49,7 @@ sigil act show
 The shell remains the review boundary:
 
 - `,` proposes and does not execute.
-- `,,` executes one command proposal or previews and confirms one patch.
+- `,,` executes one command proposal.
 - `,,,` asks before one Pi edit action, blocks Pi Bash calls as handoffs, and
   then returns control to the shell.
 - `?`, `??`, and `???` answer questions with read/web tools only.
@@ -57,8 +57,8 @@ The shell remains the review boundary:
 ## Session Continuity
 
 Installed shell bindings set `SIGIL_SESSION_ID` once when the shell starts.
-That keeps question transcripts, patch previews, failure context, and act state
-scoped to one terminal window by default.
+That keeps question transcripts, failure context, and act state scoped to one
+terminal window by default.
 
 Useful inspection commands:
 

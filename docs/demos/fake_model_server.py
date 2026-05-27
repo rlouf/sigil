@@ -11,27 +11,7 @@ import argparse
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
-
-
-PATCH = """diff --git a/src/parser.py b/src/parser.py
---- a/src/parser.py
-+++ b/src/parser.py
-@@ -1,2 +1,2 @@
- def parse_value(value: str):
--    return value
-+    return int(value) if value.isdigit() else value
-diff --git a/tests/test_parser.py b/tests/test_parser.py
---- a/tests/test_parser.py
-+++ b/tests/test_parser.py
-@@ -1 +1,6 @@
- from src.parser import parse_value
-+
-+
-+def test_parse_value_keeps_numbers_numeric():
-+    assert parse_value("42") == 42
-+    assert parse_value("name") == "name"
-"""
+from typing import Any, cast
 
 
 def command_for(text: str) -> str:
@@ -49,20 +29,12 @@ def command_for(text: str) -> str:
     return "git status --short"
 
 
-def requested_prompt(text: str) -> str:
-    for line in text.splitlines():
-        if line.startswith("Prompt:"):
-            return line.split(":", 1)[1].strip().lower()
-    return text.lower()
-
-
 def completion_for(body: dict[str, Any]) -> dict[str, Any]:
     messages = body.get("messages") or []
     text = "\n\n".join(str(message.get("content", "")) for message in messages)
-    schema = (
-        ((body.get("response_format") or {}).get("json_schema") or {}).get("schema")
-        or {}
-    )
+    schema = ((body.get("response_format") or {}).get("json_schema") or {}).get(
+        "schema"
+    ) or {}
     properties = schema.get("properties") or {}
 
     if "commands" in properties:
@@ -91,30 +63,18 @@ def completion_for(body: dict[str, Any]) -> dict[str, Any]:
                 {
                     "title": "Check the diff",
                     "command": "git diff --check",
-                    "explanation": "Catch whitespace and patch hygiene issues.",
+                    "explanation": "Catch whitespace issues before review.",
                 },
             ]
         }
         return chat_response(json.dumps(content))
 
     if "kind" in properties:
-        lowered_prompt = requested_prompt(text)
-        if (
-            "fix" in lowered_prompt
-            or "patch" in lowered_prompt
-            or "smallest" in lowered_prompt
-        ):
-            content = {
-                "kind": "patch",
-                "body": PATCH,
-                "explanation": "Small parser fix with one focused test.",
-            }
-        else:
-            content = {
-                "kind": "command",
-                "body": command_for(text),
-                "explanation": "Runs only the relevant local check.",
-            }
+        content = {
+            "kind": "command",
+            "body": command_for(text),
+            "explanation": "Runs only the relevant local check.",
+        }
         return chat_response(json.dumps(content))
 
     if "risky" in text.lower() or "staged" in text.lower():
@@ -167,7 +127,7 @@ def main() -> int:
     parser.add_argument("--port-file", type=Path, required=True)
     args = parser.parse_args()
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    host, port = server.server_address
+    host, port = cast("tuple[str, int]", server.server_address)
     args.port_file.write_text(
         f"http://{host}:{port}/v1/chat/completions", encoding="utf-8"
     )

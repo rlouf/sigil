@@ -8,8 +8,8 @@
 Natural-language shell assistant.
 
 Sigil turns short terminal intents into explicit, inspectable shell actions. Ask
-for one command, run one confirmed action, review one patch, or ask a read-only
-question without leaving your prompt.
+for one command, run one confirmed command, or ask a read-only question without
+leaving your prompt.
 
 ![15-second Sigil terminal demo](docs/demo.gif)
 
@@ -31,8 +31,8 @@ executing, and explaining. Sigil keeps those routes separate.
 
 | Need | Route | What happens |
 | --- | --- | --- |
-| "Give me the command." | `,` | Proposes one command or patch action. Nothing runs. |
-| "Do the next step." | `,,` | Runs one generated command, or previews and confirms one patch. |
+| "Give me the command." | `,` | Proposes one command. Nothing runs. |
+| "Do the next step." | `,,` | Runs one generated command. |
 | "Make one edit pass." | `,,,` | Runs one confirmed Pi read/edit/write action, then returns control. |
 | "Answer this." | `?` | Uses Pi with read and web tools only. No Bash tool is exposed. |
 | "Continue that answer." | `??` | Follows up in the same terminal session. |
@@ -114,7 +114,7 @@ Once the shell binding is installed, use glyphs directly:
 # Propose one command. In zsh, the command is inserted into the prompt buffer.
 , find wav files larger than 50 MB
 
-# Execute one generated command, or preview and confirm one generated patch.
+# Execute one generated command.
 ,, run the relevant tests
 
 # Ask a read/web question with no execute path.
@@ -147,19 +147,14 @@ path and do not expose Bash to Pi.
 # 3. Let Sigil run exactly one action.
 ,, run the focused tests
 
-# 4. If a patch was generated, inspect it before applying.
-sigil patch show
-sigil patch check
-sigil patch apply --yes
-
-# 5. Audit what happened.
+# 4. Audit what happened.
 sigil events
 sigil events lineage
 ```
 
-Sigil stores command suggestions, question answers, patch previews, and act
-steps with trust metadata so you can inspect where a recommendation came from
-and what it was allowed to do.
+Sigil stores command suggestions, question answers, and act steps with trust
+metadata so you can inspect where a recommendation came from and what it was
+allowed to do.
 
 ## Glyph Reference
 
@@ -167,8 +162,8 @@ Installed zsh and Bash bindings expose these optional shortcuts:
 
 | Glyph | Name | Behavior |
 | --- | --- | --- |
-| `,` | recommend | Recommend one command or patch action. |
-| `,,` | execute | Generate and run one command, or preview and confirm one patch. |
+| `,` | recommend | Recommend one command. |
+| `,,` | execute | Generate and run one command. |
 | `,,,` | act | Run one confirmed Pi edit action. |
 | `?` | ask | Ask a fresh read/web question. |
 | `??` | follow up | Continue the previous question in the same shell session. |
@@ -185,10 +180,9 @@ Examples:
 ??? explain the release options and their risks
 ```
 
-`,` prints a proposal. When the proposal is a command, the zsh binding puts it
-in the editable prompt buffer with `print -z` and records it in shell history.
-Bash records it in history. `,,` executes command proposals through your shell.
-Patch proposals are shown first and applied only after confirmation.
+`,` prints a command proposal. The zsh binding puts it in the editable prompt
+buffer with `print -z` and records it in shell history. Bash records it in
+history. `,,` executes command proposals through your shell.
 
 `,,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
 tools, and returns control to the shell after one bounded edit pass. Bash calls
@@ -214,10 +208,10 @@ The glyphs are thin shell functions over a regular CLI:
 sigil command [--select] [--json] [PROMPT]
 sigil ask [--follow-up] [--json] [QUESTION]
 sigil act [show|resume|abort] [--json] [--verbose]
-sigil patch [show|check|apply] [--json] [--yes]
 sigil events [--limit N] [--json] [--raw]
 sigil events lineage [EVENT_ID] [--json]
 sigil session [show|path|list|clear] [--json]
+sigil status [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--shell auto|zsh|bash] [--json]
 ```
@@ -231,12 +225,13 @@ sigil ask "what changed in this repo?"
 sigil ask --follow-up "what should I run next?"
 git diff | sigil ask "review risky changes"
 git diff --name-only | sigil command "run the relevant tests"
+sigil status
 ```
 
 See [docs/cli.md](docs/cli.md) for the user-facing CLI contract and JSON
 examples.
 
-## Acts And Patches
+## Acts
 
 Run one confirmed Pi edit action with the triple-comma glyph:
 
@@ -252,18 +247,6 @@ sigil act resume
 sigil act abort
 ```
 
-When `,,` produces a unified diff, Sigil stores it as the latest patch preview
-for the current shell session:
-
-```sh
-sigil patch show
-sigil patch check
-sigil patch apply --yes
-```
-
-`patch check` and `patch apply` run `git apply --check` and `git apply` in the
-working directory where the preview was created.
-
 ## Trust Model
 
 Sigil's important user rules are:
@@ -271,7 +254,7 @@ Sigil's important user rules are:
 | Route | Capability | Rule |
 | --- | --- | --- |
 | `,` | propose | Model-authored proposal only. |
-| `,,` | exec/write boxed | One generated command or one confirmed patch boundary. |
+| `,,` | exec boxed | One generated command. |
 | `,,,` | exec/write boxed | One confirmed Pi edit action at a time. |
 | `?`, `??`, `???` | read | Read/web question routes with no Bash tool. |
 
@@ -294,7 +277,6 @@ it.
 ```text
 events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
-sessions/<session-id>/last-patch.json     latest patch preview
 sessions/<session-id>/last-act.jsonl      confirmed Pi edit action snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
 sessions/<session-id>/last-bash-handoff.jsonl latest blocked Bash handoff
@@ -330,7 +312,7 @@ Sigil is not:
 
 - A public Python library. The Python package does not expose a supported API.
 - A background autonomous agent.
-- A replacement for reviewing commands, patches, and model output.
+- A replacement for reviewing commands and model output.
 
 ## Development
 

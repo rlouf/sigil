@@ -41,10 +41,9 @@ Fields:
      capability=propose
      taint=["model"]
 
-,,   local model command execution or patch preview/application
+,,   local model command execution
      proposal event: capability=propose
      command execution event: capability=exec_boxed
-     patch application event: capability=write_boxed
      taint=["model"]
 
 ,,,  confirmed Pi edit action
@@ -142,11 +141,8 @@ current context.
 ## User Rules
 
 - `,` recommends; it does not execute.
-- `,,` can execute a generated command, or preview and confirm a generated
-  patch.
+- `,,` can execute a generated command.
 - `,,,` executes at most one confirmed Pi edit action per invocation.
 - `?`, `??`, and `???` are read/web question routes with no Bash tool.
 - `??` continues the same-session question transcript; it does not switch to a
   command route.
-- `sigil patch apply --yes` is the explicit command for applying the latest
-  stored patch preview later.

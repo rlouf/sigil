@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import shlex
 from dataclasses import asdict, dataclass
 from typing import Literal
@@ -22,7 +21,6 @@ WRITE_COMMANDS = {
     "install",
     "mkdir",
     "mv",
-    "patch",
     "perl",
     "sed",
     "tee",
@@ -93,9 +91,6 @@ def classify_output(text: str) -> ActionClassification:
     """Classify operator output into broad action classes."""
     classes: set[ActionClass] = {"stdout"}
     reasons: list[str] = []
-    if looks_like_patch(text):
-        classes.add("file_write")
-        reasons.append("unified diff or patch-like output")
     for line in command_lines(text):
         classify_command_line(line, classes, reasons)
     return ActionClassification(
@@ -134,22 +129,13 @@ def evaluate_policy(
     if glyph.startswith(",") and depth == 2:
         return PolicyDecision(
             status="allowed",
-            message=f"{glyph} executes or applies the generated proposal",
+            message=f"{glyph} executes the generated command",
             classification=classification,
         )
     return PolicyDecision(
         status="preview",
         message="stdout-only preview",
         classification=classification,
-    )
-
-
-def looks_like_patch(text: str) -> bool:
-    """Return true when text appears to be a unified diff."""
-    return bool(
-        re.search(r"(?m)^---\s+\S+", text)
-        and re.search(r"(?m)^\+\+\+\s+\S+", text)
-        and re.search(r"(?m)^@@", text)
     )
 
 

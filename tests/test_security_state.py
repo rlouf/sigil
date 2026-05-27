@@ -106,8 +106,8 @@ def test_top_level_help_lists_commands() -> None:
         "doctor",
         "events",
         "install",
-        "patch",
         "session",
+        "status",
     ]:
         assert command in result.output
     assert "\n  question" not in result.output
@@ -294,7 +294,7 @@ def test_confirmation_failure_is_visible() -> None:
     assert "tried /dev/tty" in stderr.getvalue()
 
 
-def test_session_show_and_clear_include_patch_preview() -> None:
+def test_session_show_and_clear_include_act_state() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         old_state_dir = os.environ.get("SIGIL_STATE_DIR")
         old_session_id = os.environ.get("SIGIL_SESSION_ID")
@@ -302,11 +302,6 @@ def test_session_show_and_clear_include_patch_preview() -> None:
         os.environ["SIGIL_SESSION_ID"] = "test"
         session_root = Path(tmp) / "sessions" / "test"
         session_root.mkdir(parents=True)
-        patch_path = session_root / "last-patch.json"
-        patch_path.write_text(
-            json.dumps({"patch": "diff --git a/a b/a\n", "glyph": ",,"}),
-            encoding="utf-8",
-        )
         act_path = session_root / "last-act.jsonl"
         act_path.write_text(
             json.dumps({"act": {"act_id": "act", "status": "active"}}) + "\n",
@@ -328,12 +323,9 @@ def test_session_show_and_clear_include_patch_preview() -> None:
 
     assert shown.exit_code == 0, shown.output
     snapshot = json.loads(shown.output)
-    assert snapshot["files"]["last-patch.json"]["glyph"] == ",,"
     assert snapshot["files"]["last-act.jsonl"][0]["act"]["act_id"] == "act"
     assert cleared.exit_code == 0, cleared.output
-    assert str(patch_path) in removed["removed"]
     assert str(act_path) in removed["removed"]
-    assert not patch_path.exists()
     assert not act_path.exists()
 
 

@@ -26,13 +26,6 @@ from .install import (
     install_shell,
 )
 from .operators import create_invocation, run_invocation
-from .patches import (
-    apply_patch,
-    check_patch,
-    last_patch,
-    record_patch_apply,
-    record_patch_check,
-)
 from .acts import abort_active_act, last_act, print_act, run_act_stepper
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
@@ -47,6 +40,7 @@ from .session import (
     session_paths,
 )
 from .state import append_event
+from .status import current_status, format_status
 from .tty import confirm_on_tty
 
 MAX_CONFIRM_STDIN_CHARS = 4000
@@ -264,7 +258,7 @@ def cmd_op(
         )
     except RuntimeError as exc:
         print(f"sigil op: {exc}", file=sys.stderr)
-        return 1
+        raise click.exceptions.Exit(1) from exc
     if dry_run:
         print(f"sigil op: {result.decision.message}", file=sys.stderr)
     if result.stderr:
@@ -480,6 +474,20 @@ def cmd_doctor(shell_name: str, json_output: bool) -> int:
     return checks_exit_code(checks)
 
 
+@cli.command("status")
+@click.option("--json", "json_output", is_flag=True)
+def cmd_status(json_output: bool) -> int:
+    """Show the current session's shortest useful status."""
+    status = current_status()
+    if json_output:
+        pretty_print_json(status.to_dict())
+    else:
+        print(format_status(status))
+    if status.state != "clean":
+        raise click.exceptions.Exit(1)
+    return 0
+
+
 @cli.command("render-pi-stream", hidden=True)
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--compact", is_flag=True)
@@ -513,63 +521,6 @@ def cmd_handoff(handoff_command: str, json_output: bool) -> int:
         print(command)
         return 0
     return 1
-
-
-@cli.command("patch")
-@click.argument(
-    "patch_command",
-    required=False,
-    default="show",
-    type=click.Choice(["show", "check", "apply"]),
-)
-@click.option("--json", "json_output", is_flag=True)
-@click.option("--yes", is_flag=True, help="Apply the stored patch preview.")
-def cmd_patch(patch_command: str, json_output: bool, yes: bool) -> int:
-    """Inspect, validate, or explicitly apply the latest patch preview."""
-    try:
-        record = last_patch()
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    if patch_command == "show":
-        if json_output:
-            pretty_print_json(record)
-        else:
-            print(
-                str(record["patch"]),
-                end="" if str(record["patch"]).endswith("\n") else "\n",
-            )
-        return 0
-
-    if patch_command == "check":
-        result = check_patch(record)
-        record_patch_check(record, result)
-        if json_output:
-            pretty_print_json(result.to_dict())
-        elif result.ok:
-            print("patch applies cleanly")
-        else:
-            print(result.stderr or "patch check failed", file=sys.stderr, end="")
-        if not result.ok:
-            raise click.exceptions.Exit(result.status or 1)
-        return 0
-
-    if not yes:
-        print(
-            "sigil patch apply: pass --yes to apply the stored patch", file=sys.stderr
-        )
-        raise click.exceptions.Exit(2)
-    result = apply_patch(record)
-    record_patch_apply(record, result)
-    if json_output:
-        pretty_print_json(result.to_dict())
-    elif result.ok:
-        print("patch applied")
-    else:
-        print(result.stderr or "patch apply failed", file=sys.stderr, end="")
-    if not result.ok:
-        raise click.exceptions.Exit(result.status or 1)
-    return 0
 
 
 def pretty_print_json(value: object) -> None:
@@ -724,10 +675,6 @@ def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
         "tool_start": "tool start",
         "tool_end": "tool end",
         "operator_command_executed": "executed",
-        "patch_preview_stored": "patch preview",
-        "patch_checked": "patch check",
-        "patch_applied": "patch applied",
-        "patch_apply_failed": "patch failed",
         "act_created": "act created",
         "act_step_decision": "act decision",
         "act_step_executed": "act executed",
@@ -764,8 +711,6 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
     if event_type == "tool_end":
         return clean_summary_text(event.get("tool")) or "tool finished"
     if event_type == "operator_command_executed":
-        return command_status_summary(event)
-    if event_type in {"patch_checked", "patch_applied", "patch_apply_failed"}:
         return command_status_summary(event)
     if event_type.startswith("act_"):
         if event_type == "act_step_executed":
