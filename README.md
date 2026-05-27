@@ -82,7 +82,8 @@ SIGIL_GLOW_WIDTH=88
 
 By default, command generation expects a local OpenAI-compatible endpoint at
 `http://127.0.0.1:8080/v1/chat/completions`. The question route uses `pi` with
-`read,web_search` tools.
+`read,web_search,bash` tools, but Sigil loads a Pi extension that blocks Bash
+execution and hands the proposed command back to your terminal for editing.
 
 ## Quick Start
 
@@ -113,7 +114,7 @@ Installed zsh and Bash bindings expose these optional shortcuts:
 ,    recommend one command or patch action
 ,,   generate and run one command, or preview and confirm one patch
 ,,,  run one confirmed Pi edit action
-?    ask a fresh read/web question
+?    ask a fresh read/web question; Bash calls are handed off, not executed
 ??   follow up on the previous question in the same shell session
 ???  ask for a more exhaustive read-only answer
 ```
@@ -129,12 +130,17 @@ Examples:
 ??? explain the tradeoffs in detail
 ```
 
-`,` prints a proposal and, when the proposal is a command, the shell binding
-adds that command to shell history for review and editing. `,,` executes command
-proposals through your shell. Patch proposals are shown first and applied only
-after confirmation. `,,,` asks before handing the objective to Pi, gives Pi
+`,` prints a proposal and, when the proposal is a command, the zsh binding puts
+that command in the editable prompt buffer with `print -z` and also records it
+in shell history. Bash records it in history. `,,` executes command proposals
+through your shell. Patch proposals are shown first and applied only after
+confirmation. `,,,` asks before handing the objective to Pi, gives Pi
 read/search/edit/write tools, and returns control to the shell after one
 bounded edit pass.
+
+When `?`, `??`, or `???` need a shell command, Pi may call Bash, but Sigil
+blocks execution. In zsh, the proposed command is inserted into the prompt so
+you can edit and run it yourself. In Bash, it is added to history.
 
 ## CLI Commands
 
@@ -205,6 +211,7 @@ sessions/<session-id>/last-failure.json   latest failed shell command
 sessions/<session-id>/last-patch.json     latest patch preview
 sessions/<session-id>/last-act.jsonl      confirmed Pi edit action snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
+sessions/<session-id>/last-bash-handoff.jsonl latest blocked Bash handoff
 sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
 sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
 ```
@@ -231,7 +238,8 @@ steps with trust metadata. The important user model is:
 
 ```text
 , and ,, are model-authored command/patch routes.
-? and ?? are read/web question routes with no execute path.
+? and ?? are read/web question routes. Bash tool calls from Pi are blocked and
+handed off to the user's shell; they are not executed by Sigil.
 ,,, runs only one confirmed Pi edit action at a time.
 ```
 

@@ -16,6 +16,7 @@ import click
 
 from .commands import generate, select
 from .failure import record_failure
+from .handoff import consume_latest_bash_handoff, latest_bash_handoff
 from .install import (
     SUPPORTED_SHELLS,
     checks_exit_code,
@@ -476,6 +477,33 @@ def cmd_doctor(shell_name: str, json_output: bool) -> int:
 def cmd_render_pi_stream(json_output: bool) -> int:
     """Render Pi's JSON event stream for the question pipeline."""
     return stream_events(json_output=json_output)
+
+
+@cli.command("handoff", hidden=True)
+@click.argument(
+    "handoff_command",
+    required=False,
+    default="show",
+    type=click.Choice(["show", "pop"]),
+)
+@click.option("--json", "json_output", is_flag=True)
+def cmd_handoff(handoff_command: str, json_output: bool) -> int:
+    """Inspect or consume the latest Pi bash handoff."""
+    record = (
+        consume_latest_bash_handoff()
+        if handoff_command == "pop"
+        else latest_bash_handoff()
+    )
+    if json_output:
+        pretty_print_json(record)
+        return 0 if record else 1
+    if not record:
+        return 1
+    command = str(record.get("command") or "")
+    if command:
+        print(command)
+        return 0
+    return 1
 
 
 @cli.command("patch")

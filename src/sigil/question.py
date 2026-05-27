@@ -13,6 +13,11 @@ import subprocess
 import sys
 
 from .ansi import MUTED, RESET
+from .handoff import (
+    bash_handoff_extension_path,
+    prepare_bash_handoff,
+    record_bash_handoffs,
+)
 from .security import (
     inherit_security,
     inherited_label,
@@ -30,7 +35,9 @@ QUESTION_SYSTEM_PROMPT = (
     "answer with the best available uncertainty and say what single follow-up "
     "would help. If a 'Recent shell activity' block appears in the user "
     "message, it already shows the last few commands. For older sessions or "
-    "full provenance, the read tool can access ~/.sigil/events.jsonl."
+    "full provenance, the read tool can access ~/.sigil/events.jsonl. If a "
+    "bash command would help, call the bash tool; Sigil will block execution "
+    "and hand the command to the user's terminal for review."
 )
 DEFAULT_GLOW_STYLE = "notty"
 DEFAULT_GLOW_WIDTH = "88"
@@ -161,8 +168,14 @@ def ask(
             file=sys.stderr,
         )
     else:
-        print(f"{MUTED}❯ pi ?     · read+web · no execute path{RESET}", file=sys.stderr)
+        print(
+            f"{MUTED}❯ pi ?     · read+web+bash-handoff · no execute path{RESET}",
+            file=sys.stderr,
+        )
 
+    handoff_path = prepare_bash_handoff()
+    extension_path = bash_handoff_extension_path()
+    tools = "read,web_search,bash" if extension_path is not None else "read,web_search"
     pi_cmd = [
         "pi",
         "-p",
@@ -170,11 +183,22 @@ def ask(
         "json",
         "--no-session",
         "--tools",
-        "read,web_search",
-        "--append-system-prompt",
-        QUESTION_SYSTEM_PROMPT,
-        prompt,
+        tools,
     ]
+    if extension_path is not None:
+        pi_cmd.extend(
+            [
+                "--extension",
+                str(extension_path),
+            ]
+        )
+    pi_cmd.extend(
+        [
+            "--append-system-prompt",
+            QUESTION_SYSTEM_PROMPT,
+            prompt,
+        ]
+    )
     filter_cmd = (
         [stream_filter, "render-pi-stream"]
         if stream_filter
@@ -196,6 +220,7 @@ def ask(
         "SIGIL_QUESTION": question,
         "SIGIL_PROMPT": prompt,
         "SIGIL_FOLLOW_UP": "1" if follow_up else "0",
+        "SIGIL_BASH_HANDOFF_PATH": str(handoff_path),
     }
 
     pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)
@@ -215,6 +240,16 @@ def ask(
 
     filter_code = filter_proc.wait()
     pi_code = pi_proc.wait()
+    handoffs = record_bash_handoffs(
+        question_event=question_event,
+        question_security=security,
+    )
+    if handoffs and not json_output:
+        latest = str(handoffs[-1].get("command") or "")
+        print(
+            f"{MUTED}❯ bash handoff  {latest}{RESET}",
+            file=sys.stderr,
+        )
     if not json_output:
         print()
     if pi_code:

@@ -55,6 +55,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 sigil = [
+  "pi_extensions/bash_handoff.ts",
   "shell/bash/sigil.bash",
   "shell/zsh/sigil.zsh",
 ]

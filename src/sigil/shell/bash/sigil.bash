@@ -41,6 +41,12 @@ __sigil_history_insert() {
   builtin history -s "$1" 2>/dev/null || true
 }
 
+__sigil_insert_pending_handoff() {
+  local command
+  command="$("$__sigil_bin" handoff pop 2>/dev/null)" || return 0
+  __sigil_history_insert "$command"
+}
+
 __sigil_stdin_is_pipe() {
   [[ -p /dev/stdin ]]
 }
@@ -69,14 +75,23 @@ sigil_command_loop() {
 
 sigil_question() {
   "$__sigil_bin" op "?" "$@"
+  local status=$?
+  __sigil_insert_pending_handoff
+  return "$status"
 }
 
 sigil_follow_up() {
   "$__sigil_bin" op "??" "$@"
+  local status=$?
+  __sigil_insert_pending_handoff
+  return "$status"
 }
 
 sigil_question_loop() {
   "$__sigil_bin" op "???" "$@"
+  local status=$?
+  __sigil_insert_pending_handoff
+  return "$status"
 }
 
 # ── Optional glyph functions ─────────────────────────────────────────────

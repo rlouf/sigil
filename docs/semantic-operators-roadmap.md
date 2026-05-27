@@ -23,8 +23,9 @@ Use `,` when you want a proposal:
 git diff --name-only | , choose a focused test command
 ```
 
-`comma` prints one proposal. If the proposal is a command, the shell binding
-adds it to shell history so you can recall, edit, and run it yourself.
+`comma` prints one proposal. If the proposal is a command, the zsh binding puts
+it in the editable prompt buffer and records it in history; the Bash binding
+records it in history so you can recall, edit, and run it yourself.
 
 Use `,,` when you want Sigil to take one action:
 

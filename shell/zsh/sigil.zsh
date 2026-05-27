@@ -42,6 +42,18 @@ __sigil_history_insert() {
   print -s -- "$1" 2>/dev/null || true
 }
 
+__sigil_prompt_insert() {
+  [[ -n "${1:-}" ]] || return 0
+  print -z -- "$1" 2>/dev/null || true
+  __sigil_history_insert "$1"
+}
+
+__sigil_insert_pending_handoff() {
+  local command
+  command="$("$__sigil_bin" handoff pop 2>/dev/null)" || return 0
+  __sigil_prompt_insert "$command"
+}
+
 __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
@@ -51,7 +63,7 @@ sigil_command() {
   response="$("$__sigil_bin" op "," "$@")" || return $?
   print -r -- "$response"
   command="${response%%$'\n'*}"
-  __sigil_history_insert "$command"
+  __sigil_prompt_insert "$command"
 }
 
 sigil_execute_command() {
@@ -64,14 +76,23 @@ sigil_command_loop() {
 
 sigil_question() {
   "$__sigil_bin" op "?" "$@"
+  local exit_status=$?
+  __sigil_insert_pending_handoff
+  return "$exit_status"
 }
 
 sigil_follow_up() {
   "$__sigil_bin" op "??" "$@"
+  local exit_status=$?
+  __sigil_insert_pending_handoff
+  return "$exit_status"
 }
 
 sigil_question_loop() {
   "$__sigil_bin" op "???" "$@"
+  local exit_status=$?
+  __sigil_insert_pending_handoff
+  return "$exit_status"
 }
 
 if __sigil_glyphs_enabled; then

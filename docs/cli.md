@@ -92,7 +92,9 @@ printf 'README.md\n' | sigil command --json "summarize this target"
 
 ## `sigil ask`
 
-Answers a shell question using Pi with `read,web_search` tools.
+Answers a shell question using Pi with `read,web_search,bash` tools. Sigil
+loads a Pi extension that blocks Bash execution and records the proposed
+command as a terminal handoff.
 
 ```sh
 sigil ask "what is this error?"
@@ -106,6 +108,10 @@ continues that transcript.
 When stdin is piped into a fresh question, Sigil previews the input and asks
 before sending it to Pi. Piped follow-ups also ask before attaching stdin to the
 follow-up prompt.
+
+If Pi calls Bash while answering, the command is not executed. With the zsh
+binding, Sigil inserts the command into the editable prompt buffer with
+`print -z`; with the Bash binding, Sigil adds it to history for review.
 
 JSON output:
 
@@ -177,7 +183,7 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 ,    recommend one command or patch action
 ,,   generate and run one command, or preview and confirm one patch
 ,,,  run one confirmed Pi edit action
-?    ask a fresh read/web question
+?    ask a fresh read/web question; Bash calls are handed off, not executed
 ??   follow up on the previous question in the same shell session
 ???  ask for a more exhaustive read-only answer
 ```
@@ -193,8 +199,9 @@ Examples:
 ??? explain the options in detail
 ```
 
-`,` prints a proposal. If the proposal is a command, the shell binding adds the
-command to shell history. `,,` runs command proposals through your shell. Patch
+`,` prints a proposal. If the proposal is a command, the zsh binding inserts it
+into the editable prompt buffer and adds it to shell history; the Bash binding
+adds it to history. `,,` runs command proposals through your shell. Patch
 proposals are previewed and require confirmation before apply. `,,,` asks for
 confirmation, invokes Pi with read/search/edit/write tools, and then returns
 control to the shell.
@@ -463,6 +470,7 @@ sessions/<session-id>/last-failure.json   latest failed shell command
 sessions/<session-id>/last-patch.json     latest patch preview
 sessions/<session-id>/last-act.jsonl      confirmed Pi edit action snapshots
 sessions/<session-id>/last-question.jsonl same-session question transcript
+sessions/<session-id>/last-bash-handoff.jsonl latest blocked Bash handoff
 sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
 sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
 ```

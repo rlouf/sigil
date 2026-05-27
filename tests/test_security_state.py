@@ -14,6 +14,13 @@ from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.commands import select
 from sigil.failure import failure_context_prompt, record_failure
+from sigil.handoff import (
+    LAST_BASH_HANDOFF_FILE,
+    PENDING_BASH_HANDOFF_FILE,
+    consume_latest_bash_handoff,
+    prepare_bash_handoff,
+    record_bash_handoffs,
+)
 from sigil.pi_stream import should_color, stream_events
 from sigil.question import QUESTION_SYSTEM_PROMPT, ask, renderer_command
 from sigil.security import (
@@ -571,6 +578,8 @@ def test_question_and_follow_up_record_web_taint() -> None:
             pi_calls = [cmd for cmd in popen_calls if cmd[0] == "pi"]
             assert pi_calls
             for cmd in pi_calls:
+                assert cmd[cmd.index("--tools") + 1] == "read,web_search,bash"
+                assert "--extension" in cmd
                 system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
                 assert system_prompt == QUESTION_SYSTEM_PROMPT
                 assert "at most one tool call" in system_prompt
@@ -583,6 +592,52 @@ def test_question_and_follow_up_record_web_taint() -> None:
                 os.environ.pop("SIGIL_SESSION_ID", None)
             else:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+
+def test_bash_handoff_records_and_consumes_blocked_command() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            pending = prepare_bash_handoff()
+            pending.write_text(
+                json.dumps(
+                    {
+                        "toolCallId": "call-1",
+                        "toolName": "bash",
+                        "command": "git diff --stat",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            records = record_bash_handoffs(
+                question_event={
+                    "id": "question-event",
+                    "integrity": "web",
+                    "capability": "read",
+                    "taint": ["web"],
+                },
+                question_security={
+                    "glyph": "?",
+                    "integrity": "web",
+                    "taint": ["web"],
+                },
+            )
+
+            assert records[0]["command"] == "git diff --stat"
+            assert records[0]["capability"] == "propose"
+            assert records[0]["taint"] == ["model", "web"]
+            assert records[0]["inputs"] == ["question-event"]
+            assert not (
+                Path(tmp) / "sessions/test" / PENDING_BASH_HANDOFF_FILE
+            ).exists()
+
+            consumed = consume_latest_bash_handoff()
+            assert consumed is not None
+            assert consumed["command"] == "git diff --stat"
+            assert read_jsonl(LAST_BASH_HANDOFF_FILE) == []
 
 
 def test_failure_context_prompt_uses_recorded_failure_without_inventing_output() -> (

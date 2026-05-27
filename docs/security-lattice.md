@@ -57,6 +57,7 @@ Fields:
      capability=read
      taint=["web"]
      provisional=true
+     Bash tool calls are blocked and recorded as capability=propose handoffs
 
 ??   read/web follow-up
      inherits prior question transcript inputs
@@ -70,9 +71,11 @@ Fields:
      provisional=true
 ```
 
-Question routes produce answers only. They do not become executable proposals.
-Execution and file writes happen through comma routes and require the explicit
-comma depth that represents that effect.
+Question routes produce answers and may hand off a proposed Bash command, but
+they do not execute it. In zsh the shell binding inserts the handed-off command
+into the editable prompt buffer; Bash stores it in history. Execution and file
+writes happen through comma routes or through the user pressing Enter on an
+edited handoff command.
 
 ## Practical Examples
 
@@ -142,7 +145,8 @@ current context.
 - `,,` can execute a generated command, or preview and confirm a generated
   patch.
 - `,,,` executes at most one confirmed Pi edit action per invocation.
-- `?`, `??`, and `???` are read-only question routes.
+- `?`, `??`, and `???` are read/web question routes. Bash tool calls are
+  blocked and handed off to the user's shell instead of executed.
 - `??` continues the same-session question transcript; it does not switch to a
   command route.
 - `sigil patch apply --yes` is the explicit command for applying the latest
