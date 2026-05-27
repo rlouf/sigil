@@ -1,28 +1,48 @@
 # Sigil
 
-Verb-first LLM interaction for the shell, with optional punctuation shortcuts.
+[![CI](https://github.com/rlouf/sigil/actions/workflows/ci.yml/badge.svg)](https://github.com/rlouf/sigil/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/sigil-sh.svg)](https://pypi.org/project/sigil-sh/)
+[![Python](https://img.shields.io/pypi/pyversions/sigil-sh.svg)](https://pypi.org/project/sigil-sh/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+Natural-language shell assistant.
+
+Sigil turns short terminal intents into explicit, inspectable shell actions. Ask
+for one command, run one confirmed action, review one patch, or ask a read-only
+question without leaving your prompt.
 
 ![15-second Sigil terminal demo](docs/demo.gif)
 
-Status: Sigil is alpha software. It is ready for early shell users who are
-comfortable with local LLM tooling, explicit confirmations, and occasional
-interface changes.
+```sh
+, find files over 10 MB in this repo excluding .git
+,, run the relevant tests
+? what changed in this repo?
+?? what should I run next?
+```
 
-The Python package is named `sigil-sh` because `sigil` was not available as a
-distribution name. The installed command is still `sigil`.
+Sigil is alpha software. It is ready for early shell users who are comfortable
+with local LLM tooling, explicit confirmations, and occasional interface
+changes.
 
-Sigil has two user-facing surfaces:
+## Why Sigil?
 
-- CLI verbs such as `sigil command`, `sigil ask`, `sigil act`, and
-  `sigil patch`.
-- Optional shell glyphs such as `,`, `,,`, `?`, and `??`, installed by
-  `sigil install`.
+Most shell assistants blur together three very different operations: suggesting,
+executing, and explaining. Sigil keeps those routes separate.
 
-The Python package does not expose a public Python API.
+| Need | Route | What happens |
+| --- | --- | --- |
+| "Give me the command." | `,` | Proposes one command or patch action. Nothing runs. |
+| "Do the next step." | `,,` | Runs one generated command, or previews and confirms one patch. |
+| "Make one edit pass." | `,,,` | Runs one confirmed Pi read/edit/write action, then returns control. |
+| "Answer this." | `?` | Uses Pi with read and web tools only. No Bash tool is exposed. |
+| "Continue that answer." | `??` | Follows up in the same terminal session. |
+
+The result is a shell workflow with small blast radius, durable state, and a
+plain CLI underneath the punctuation.
 
 ## Install
 
-Install the Python command, then install the binding for your shell:
+Install the Python command, then install the shell binding:
 
 ```sh
 uv tool install sigil-sh
@@ -50,24 +70,30 @@ To try the current main branch before a tagged release:
 uv tool install git+https://github.com/rlouf/sigil
 ```
 
+The Python package is named `sigil-sh` because `sigil` was not available as a
+distribution name. The installed command is still `sigil`.
+
 `sigil install` copies the bundled binding to `~/.sigil/shell/<shell>/` and
 adds an idempotent source block to `.zshrc` or `.bashrc`. Running it again
 updates the binding without duplicating the rc block.
 
-To install without punctuation shortcuts:
-
-```sh
-sigil install zsh --no-glyphs
-```
-
 ## Requirements
+
+Sigil expects:
 
 - Python 3.11+
 - zsh or Bash for shell bindings
 - A local OpenAI-compatible chat completions endpoint for command generation
-- `pi` for `sigil ask` and question glyphs
+  and Pi-backed routes
+- `pi` for `sigil ask`, `?`, `??`, `???`, and `,,,`
 - `glow` for Markdown rendering, optional but recommended
 - `fzf` for `sigil command --select`, optional
+
+By default, command generation expects a local OpenAI-compatible endpoint at:
+
+```sh
+http://127.0.0.1:8080/v1/chat/completions
+```
 
 Useful environment variables:
 
@@ -80,20 +106,22 @@ SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88
 ```
 
-By default, command generation expects a local OpenAI-compatible endpoint at
-`http://127.0.0.1:8080/v1/chat/completions`. The question route uses `pi` with
-`read,web_search,bash` tools, but Sigil loads a Pi extension that blocks Bash
-execution and hands the proposed command back to your terminal for editing.
-
 ## Quick Start
 
 Once the shell binding is installed, use glyphs directly:
 
 ```sh
-, find files over 10 MB in this repo excluding .git
+# Propose one command. In zsh, the command is inserted into the prompt buffer.
+, find wav files larger than 50 MB
+
+# Execute one generated command, or preview and confirm one generated patch.
 ,, run the relevant tests
-? what changed in this repo?
-?? what should I run next?
+
+# Ask a read/web question with no execute path.
+? why did the last command fail?
+
+# Follow up in the same shell session.
+?? what should I try first?
 ```
 
 Use stdin as context:
@@ -105,20 +133,46 @@ git diff --name-only | , run the relevant tests
 
 When stdin is piped into comma routes, Sigil previews the input and asks before
 using it. Question routes use piped input directly because they have no execute
-path; Bash tool calls from Pi are still blocked and handed off.
+path and do not expose Bash to Pi.
 
-## Shell Glyphs
+## A Typical Flow
+
+```sh
+# 1. Ask what changed.
+? summarize this repo state
+
+# 2. Ask for the smallest useful command.
+, run the focused tests for this change
+
+# 3. Let Sigil run exactly one action.
+,, run the focused tests
+
+# 4. If a patch was generated, inspect it before applying.
+sigil patch show
+sigil patch check
+sigil patch apply --yes
+
+# 5. Audit what happened.
+sigil events
+sigil events lineage
+```
+
+Sigil stores command suggestions, question answers, patch previews, and act
+steps with trust metadata so you can inspect where a recommendation came from
+and what it was allowed to do.
+
+## Glyph Reference
 
 Installed zsh and Bash bindings expose these optional shortcuts:
 
-```text
-,    recommend one command or patch action
-,,   generate and run one command, or preview and confirm one patch
-,,,  run one confirmed Pi edit action
-?    ask a fresh read/web question; Bash calls are handed off, not executed
-??   follow up on the previous question in the same shell session
-???  ask for a more exhaustive read-only answer
-```
+| Glyph | Name | Behavior |
+| --- | --- | --- |
+| `,` | recommend | Recommend one command or patch action. |
+| `,,` | execute | Generate and run one command, or preview and confirm one patch. |
+| `,,,` | act | Run one confirmed Pi edit action. |
+| `?` | ask | Ask a fresh read/web question. |
+| `??` | follow up | Continue the previous question in the same shell session. |
+| `???` | exhaustive | Ask for a more exhaustive read-only answer. |
 
 Examples:
 
@@ -126,29 +180,40 @@ Examples:
 , find wav files
 ,, run the relevant tests
 ,,, fix the failing parser test
-? why did this git command fail?
-?? what should I try first?
-??? explain the tradeoffs in detail
+? why does git say this branch diverged?
+?? what is the safest next command?
+??? explain the release options and their risks
 ```
 
-`,` prints a proposal and, when the proposal is a command, the zsh binding puts
-that command in the editable prompt buffer with `print -z` and also records it
-in shell history. Bash records it in history. `,,` executes command proposals
-through your shell. Patch proposals are shown first and applied only after
-confirmation. `,,,` asks before handing the objective to Pi, gives Pi
-read/search/edit/write tools, and returns control to the shell after one
-bounded edit pass. Bash calls inside that pass are blocked and handed off.
+`,` prints a proposal. When the proposal is a command, the zsh binding puts it
+in the editable prompt buffer with `print -z` and records it in shell history.
+Bash records it in history. `,,` executes command proposals through your shell.
+Patch proposals are shown first and applied only after confirmation.
 
-When `?`, `??`, or `???` need a shell command, Pi may call Bash, but Sigil
-blocks execution. In zsh, the proposed command is inserted into the prompt so
-you can edit and run it yourself. In Bash, it is added to history.
+`,,,` asks before handing the objective to Pi, gives Pi read/search/edit/write
+tools, and returns control to the shell after one bounded edit pass. Bash calls
+inside that pass are blocked and handed off.
+By default, Sigil shows a compact tool trace and a short completion summary;
+use `,,, --verbose ...` or `sigil act resume --verbose` for Pi's raw tool
+stream and prose.
 
-## CLI Commands
+Question routes do not expose Bash. If an answer recommends a command, it is
+plain answer text, not a tool call or terminal handoff.
+
+To install the CLI without punctuation shortcuts:
+
+```sh
+sigil install zsh --no-glyphs
+```
+
+## CLI
+
+The glyphs are thin shell functions over a regular CLI:
 
 ```text
 sigil command [--select] [--json] [PROMPT]
 sigil ask [--follow-up] [--json] [QUESTION]
-sigil act [show|resume|abort] [--json]
+sigil act [show|resume|abort] [--json] [--verbose]
 sigil patch [show|check|apply] [--json] [--yes]
 sigil events [--limit N] [--json] [--raw]
 sigil events lineage [EVENT_ID] [--json]
@@ -157,7 +222,7 @@ sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--shell auto|zsh|bash] [--json]
 ```
 
-Examples:
+Copy-pasteable examples:
 
 ```sh
 sigil command "find files over 10 MB in this repo excluding .git"
@@ -171,7 +236,7 @@ git diff --name-only | sigil command "run the relevant tests"
 See [docs/cli.md](docs/cli.md) for the user-facing CLI contract and JSON
 examples.
 
-## Acts and Patches
+## Acts And Patches
 
 Run one confirmed Pi edit action with the triple-comma glyph:
 
@@ -199,12 +264,32 @@ sigil patch apply --yes
 `patch check` and `patch apply` run `git apply --check` and `git apply` in the
 working directory where the preview was created.
 
+## Trust Model
+
+Sigil's important user rules are:
+
+| Route | Capability | Rule |
+| --- | --- | --- |
+| `,` | propose | Model-authored proposal only. |
+| `,,` | exec/write boxed | One generated command or one confirmed patch boundary. |
+| `,,,` | exec/write boxed | One confirmed Pi edit action at a time. |
+| `?`, `??`, `???` | read | Read/web question routes with no Bash tool. |
+
+Trust records include route, integrity, capability, taint, provisional status,
+and input event ids. Inspect them with:
+
+```sh
+sigil events
+sigil events lineage
+sigil session show --json
+```
+
+For details, see [docs/security-lattice.md](docs/security-lattice.md).
+
 ## State
 
 Sigil writes state under `~/.sigil/` by default. Set `SIGIL_STATE_DIR` to move
 it.
-
-Current user-visible state:
 
 ```text
 events.jsonl                              global event log
@@ -232,16 +317,46 @@ sigil events
 sigil events lineage
 ```
 
-## Trust Model
+## Project Scope
 
-Sigil records command suggestions, question answers, patch previews, and act
-steps with trust metadata. The important user model is:
+Sigil is:
 
-```text
-, and ,, are model-authored command/patch routes.
-? and ?? are read/web question routes. Bash tool calls from Pi are blocked and
-handed off to the user's shell; they are not executed by Sigil.
-,,, runs only one confirmed Pi edit action at a time.
+- A command-line tool and optional shell binding.
+- A local-model command proposal route.
+- A Pi-backed question and one-step edit route.
+- An evented state layer for shell continuity and provenance.
+
+Sigil is not:
+
+- A public Python library. The Python package does not expose a supported API.
+- A background autonomous agent.
+- A replacement for reviewing commands, patches, and model output.
+
+## Development
+
+Set up the repo:
+
+```sh
+uv sync --group dev
 ```
 
-For details, see [docs/security-lattice.md](docs/security-lattice.md).
+Run the checks used by CI:
+
+```sh
+uv run pre-commit run --all-files
+uv run pytest
+```
+
+Render deterministic demo GIFs:
+
+```sh
+scripts/render-demo-gifs.sh
+```
+
+Demo tapes live in [docs/demos](docs/demos/). They run the real Sigil CLI from
+this checkout while shimming only external dependencies such as the model
+server, `pi`, and `uv`.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

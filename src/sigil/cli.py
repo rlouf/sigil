@@ -191,11 +191,13 @@ def question_with_stdin(question: str, stdin_text: str) -> str:
 @click.argument("prompt_parts", nargs=-1)
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--dry-run", is_flag=True, help="Classify output and skip execution.")
+@click.option("--verbose", is_flag=True, help="Show raw Pi tool and prose output.")
 def cmd_op(
     glyph: str,
     prompt_parts: tuple[str, ...],
     json_output: bool,
     dry_run: bool,
+    verbose: bool,
 ) -> int:
     """Parse a semantic operator invocation."""
     stdin_is_tty = sys.stdin.isatty()
@@ -222,13 +224,18 @@ def cmd_op(
                 objective=prompt,
                 stdin_text=stdin_text,
                 dry_run=True,
+                verbose=verbose,
             )
         if should_confirm_piped_input(invocation):
             if not confirm_piped_input(stdin_text):
                 print("sigil op: piped input declined", file=sys.stderr)
                 raise click.exceptions.Exit(2)
         try:
-            return run_act_stepper(objective=prompt, stdin_text=stdin_text)
+            return run_act_stepper(
+                objective=prompt,
+                stdin_text=stdin_text,
+                verbose=verbose,
+            )
         except RuntimeError as exc:
             print(f"sigil op: {exc}", file=sys.stderr)
             return 1
@@ -241,7 +248,7 @@ def cmd_op(
     if invocation.base == "?":
         if dry_run:
             print(
-                "sigil op: ? dry-run: would call read+web+bash-handoff question route",
+                "sigil op: ? dry-run: would call read+web question route",
                 file=sys.stderr,
             )
             return 0
@@ -343,9 +350,10 @@ def stdin_preview(text: str) -> str:
     type=click.Choice(["show", "resume", "abort"]),
 )
 @click.option("--json", "json_output", is_flag=True)
-def cmd_act(act_command: str, json_output: bool) -> int:
+@click.option("--verbose", is_flag=True, help="Show raw Pi tool and prose output.")
+def cmd_act(act_command: str, json_output: bool, verbose: bool) -> int:
     """Inspect, resume, or abort the current Pi edit action."""
-    return run_act_command(act_command, json_output)
+    return run_act_command(act_command, json_output, verbose=verbose)
 
 
 @cli.command("plan", hidden=True)
@@ -356,15 +364,18 @@ def cmd_act(act_command: str, json_output: bool) -> int:
     type=click.Choice(["show", "resume", "abort"]),
 )
 @click.option("--json", "json_output", is_flag=True)
-def cmd_plan(act_command: str, json_output: bool) -> int:
+@click.option("--verbose", is_flag=True, help="Show raw Pi tool and prose output.")
+def cmd_plan(act_command: str, json_output: bool, verbose: bool) -> int:
     """Compatibility alias for `sigil act`."""
-    return run_act_command(act_command, json_output)
+    return run_act_command(act_command, json_output, verbose=verbose)
 
 
-def run_act_command(act_command: str, json_output: bool) -> int:
+def run_act_command(
+    act_command: str, json_output: bool, *, verbose: bool = False
+) -> int:
     """Run the act control subcommands."""
     if act_command == "resume":
-        return run_act_stepper(objective="")
+        return run_act_stepper(objective="", verbose=verbose)
     if act_command == "abort":
         act = abort_active_act()
         if json_output:
@@ -471,9 +482,10 @@ def cmd_doctor(shell_name: str, json_output: bool) -> int:
 
 @cli.command("render-pi-stream", hidden=True)
 @click.option("--json", "json_output", is_flag=True)
-def cmd_render_pi_stream(json_output: bool) -> int:
+@click.option("--compact", is_flag=True)
+def cmd_render_pi_stream(json_output: bool, compact: bool) -> int:
     """Render Pi's JSON event stream for the question pipeline."""
-    return stream_events(json_output=json_output)
+    return stream_events(json_output=json_output, compact=compact)
 
 
 @cli.command("handoff", hidden=True)

@@ -71,6 +71,71 @@ def summarize(tool: str, args: object) -> str:
     )
 
 
+def compact_tool_label(tool: object) -> str:
+    """Return the short label used in compact act traces."""
+    if tool == "bash":
+        return "check"
+    if tool == "grep":
+        return "search"
+    if tool == "ls":
+        return "list"
+    return str(tool or "tool")
+
+
+def compact_detail(detail: str, *, limit: int = 120) -> str:
+    """Shorten paths and commands for compact terminal display."""
+    text = " ".join(detail.split())
+    if not text:
+        return ""
+    try:
+        path = os.path.relpath(text, os.getcwd())
+    except ValueError:
+        path = text
+    if not path.startswith(".."):
+        text = path
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def compact_answer_summary(answer: str, *, limit: int = 180) -> str:
+    """Return a one-line completion summary from Pi's final answer."""
+    lines = []
+    in_fence = False
+    for raw_line in answer.splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not line:
+            continue
+        line = line.strip("*`- ")
+        if line.lower().startswith("verification command"):
+            break
+        lines.append(line)
+    start = None
+    for index in range(len(lines) - 1, -1, -1):
+        lower = lines[index].lower()
+        if "all tests pass" in lower or "what changed" in lower:
+            start = index
+            break
+    if start is None:
+        for index in range(len(lines) - 1, -1, -1):
+            lower = lines[index].lower()
+            if lower.startswith(("updated", "changed", "done")):
+                start = index
+                break
+    if start is None:
+        selected = lines[-2:]
+    else:
+        selected = lines[start : start + 3]
+    text = " ".join(selected) or "completed"
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
 def env_security() -> dict[str, object]:
     """Recover trust metadata passed from the parent operator or ask process."""
     taint = [
@@ -95,6 +160,7 @@ def stream_events(
     stderr: TextIO = sys.stderr,
     *,
     json_output: bool = False,
+    compact: bool = False,
 ) -> int:
     """Filter Pi's event stream into terminal output and Sigil state files."""
     started_text = False
@@ -104,7 +170,7 @@ def stream_events(
     security = env_security()
     interactive_stderr = is_interactive(stderr)
     color_enabled = should_color(stderr)
-    spinner_running = not json_output and interactive_stderr
+    spinner_running = not json_output and not compact and interactive_stderr
     spinner_paused = False
     spinner_lock = threading.Lock()
     spinner_thread: threading.Thread | None = None
@@ -175,7 +241,14 @@ def stream_events(
                 if os.environ.get("SIGIL_CAPTURE_TRACE") == "1":
                     append_jsonl("last-tools.jsonl", trace_event)
                 append_event(trace_event)
-                if not json_output:
+                if compact and not json_output:
+                    label = compact_tool_label(tool)
+                    short_detail = compact_detail(detail)
+                    status = (
+                        f"  {label:<6} {short_detail}" if short_detail else f"  {label}"
+                    )
+                    print(status, file=stderr, flush=True)
+                elif not json_output:
                     status = f"❯ {tool}  {detail}" if detail else f"❯ {tool}"
                     if detail:
                         print(
@@ -210,6 +283,10 @@ def stream_events(
 
             update = event.get("assistantMessageEvent") or {}
             if update.get("type") == "text_delta":
+                if compact:
+                    delta = update.get("delta", "")
+                    answer_chunks.append(delta)
+                    continue
                 if not json_output and not started_text:
                     stop_spinner()
                     stdout.write("\n")
@@ -262,6 +339,9 @@ def stream_events(
                 )
                 + "\n"
             )
+            stdout.flush()
+        elif compact:
+            stdout.write(f"done: {compact_answer_summary(answer)}\n")
             stdout.flush()
         elif malformed_events:
             noun = "event" if malformed_events == 1 else "events"

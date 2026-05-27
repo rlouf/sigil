@@ -578,8 +578,8 @@ def test_question_and_follow_up_record_web_taint() -> None:
             pi_calls = [cmd for cmd in popen_calls if cmd[0] == "pi"]
             assert pi_calls
             for cmd in pi_calls:
-                assert cmd[cmd.index("--tools") + 1] == "read,web_search,bash"
-                assert "--extension" in cmd
+                assert cmd[cmd.index("--tools") + 1] == "read,web_search"
+                assert "--extension" not in cmd
                 system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
                 assert system_prompt == QUESTION_SYSTEM_PROMPT
                 assert "at most one tool call" in system_prompt
@@ -1246,6 +1246,84 @@ def test_pi_stream_non_tty_status_has_no_control_codes_or_color() -> None:
             assert "web_search" in status
             assert "\x1b" not in status
             assert "\r" not in status
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def test_pi_stream_compact_mode_suppresses_prose_and_summarizes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = {
+            key: os.environ.get(key)
+            for key in [
+                "SIGIL_STATE_DIR",
+                "SIGIL_SESSION_ID",
+                "SIGIL_CAPTURE_ANSWER",
+                "SIGIL_CAPTURE_TRACE",
+            ]
+        }
+        os.environ["SIGIL_STATE_DIR"] = tmp
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        os.environ["SIGIL_CAPTURE_ANSWER"] = "1"
+        os.environ["SIGIL_CAPTURE_TRACE"] = "1"
+        try:
+            stdin = StringIO(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "tool_execution_start",
+                                "toolName": "read",
+                                "args": {"path": str(Path(tmp) / "src/parser.py")},
+                            }
+                        ),
+                        json.dumps({"type": "tool_execution_end", "toolName": "read"}),
+                        json.dumps(
+                            {
+                                "type": "message_update",
+                                "assistantMessageEvent": {
+                                    "type": "text_delta",
+                                    "delta": "I will explain too much.\n\n",
+                                },
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "message_update",
+                                "assistantMessageEvent": {
+                                    "type": "text_delta",
+                                    "delta": "All tests pass.\n\nUpdated parser and tests.",
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+            stderr = StringIO()
+            assert (
+                stream_events(
+                    stdin=stdin,
+                    stdout=stdout,
+                    stderr=stderr,
+                    compact=True,
+                )
+                == 0
+            )
+            assert "read" in stderr.getvalue()
+            assert "src/parser.py" in stderr.getvalue()
+            assert stdout.getvalue().startswith("done: ")
+            assert "All tests pass" in stdout.getvalue()
+            assert "I will explain too much" not in stdout.getvalue()
+            assert (
+                "I will explain too much."
+                in read_jsonl("last-question.jsonl")[-1]["content"]
+            )
+            assert len(read_jsonl("last-tools.jsonl")) == 2
         finally:
             for key, value in saved.items():
                 if value is None:

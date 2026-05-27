@@ -134,21 +134,21 @@ def test_bash_recommendations_print_stdout_and_command_to_history() -> None:
         )
 
 
-def test_bash_question_handoff_adds_command_to_history() -> None:
+def test_bash_question_does_not_consume_handoff() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source shell/bash/sigil.bash\n                    export SIGIL_STUB_HANDOFF='git diff --stat'\n                    sigil_question review\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source shell/bash/sigil.bash\n                    sigil_command hello\n                    export SIGIL_STUB_HANDOFF='git diff --stat'\n                    sigil_question review\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert "op:op ? review" in result.stdout
-        assert "history=git diff --stat" in result.stdout
+        assert "history=echo recommended" in result.stdout
 
 
 def test_bash_act_handoff_adds_command_to_history() -> None:
@@ -341,21 +341,21 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_question_handoff_adds_command_to_history() -> None:
+def test_zsh_question_does_not_consume_handoff() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source shell/zsh/sigil.zsh\n                    export SIGIL_STUB_HANDOFF="git diff --stat"\n                    sigil_question review\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source shell/zsh/sigil.zsh\n                    sigil_command hello\n                    export SIGIL_STUB_HANDOFF="git diff --stat"\n                    sigil_question review\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
         )
         assert_success(result)
         assert "op:op ? review" in result.stdout
-        assert "history=git diff --stat" in result.stdout
+        assert "history=echo recommended" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

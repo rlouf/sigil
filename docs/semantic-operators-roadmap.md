@@ -69,8 +69,8 @@ Use `???` when you want a more exhaustive read-only answer:
 ??? explain the release options and their risks
 ```
 
-Question routes do not execute commands or apply patches. If Pi proposes a Bash
-command, Sigil blocks execution and hands the command to the shell.
+Question routes do not execute commands, apply patches, or expose Bash. If an
+answer recommends a command, it is plain answer text.
 
 ## Piped Input
 

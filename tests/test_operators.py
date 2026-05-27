@@ -577,7 +577,7 @@ def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
         result = CliRunner().invoke(cli, ["op", "--dry-run", "?", "status"])
 
     assert result.exit_code == 0
-    assert "read+web+bash-handoff question route" in result.output
+    assert "read+web question route" in result.output
 
 
 def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
@@ -704,10 +704,56 @@ def test_act_pi_step_uses_bash_handoff_extension() -> None:
     pi_cmd, _ = next(call for call in popen_calls if call[0][0] == "pi")
     assert pi_cmd[pi_cmd.index("--tools") + 1] == "read,grep,find,ls,bash,edit,write"
     assert "--extension" in pi_cmd
-    _, filter_kwargs = next(call for call in popen_calls if call[0][0] != "pi")
+    filter_cmd, filter_kwargs = next(call for call in popen_calls if call[0][0] != "pi")
+    assert "--compact" in filter_cmd
     filter_env = filter_kwargs["env"]
     assert isinstance(filter_env, dict)
     assert "SIGIL_BASH_HANDOFF_PATH" in filter_env
+
+
+def test_act_pi_step_verbose_uses_raw_stream_renderer() -> None:
+    class FakeProc:
+        def __init__(self, stdout: object | None = None) -> None:
+            self.stdout = stdout
+
+        def wait(self) -> int:
+            return 0
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
+        ):
+            popen_calls: list[tuple[list[str], dict[str, object]]] = []
+
+            def fake_popen(cmd: list[str], *args: object, **kwargs: object) -> FakeProc:
+                del args
+                popen_calls.append((cmd, kwargs))
+                return FakeProc(stdout=StringIO(""))
+
+            with (
+                patch("sigil.acts.ensure_model_for_pi", return_value=True),
+                patch("sigil.acts.subprocess.Popen", side_effect=fake_popen),
+                patch("sigil.acts.renderer_command", return_value=["cat"]),
+                patch("sigil.acts.record_bash_handoffs", return_value=[]),
+            ):
+                from sigil.acts import run_pi_agent_step
+
+                result = run_pi_agent_step(
+                    {"objective": "repair"},
+                    {"id": "1"},
+                    {
+                        "id": "decision",
+                        "integrity": "human",
+                        "capability": "none",
+                        "taint": [],
+                    },
+                    verbose=True,
+                )
+
+    assert result == 0
+    filter_cmd, _ = next(call for call in popen_calls if call[0][0] != "pi")
+    assert "--compact" not in filter_cmd
 
 
 def test_act_resume_executes_pending_step_without_regenerating() -> None:

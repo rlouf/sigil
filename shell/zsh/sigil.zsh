@@ -79,23 +79,14 @@ sigil_command_loop() {
 
 sigil_question() {
   "$__sigil_bin" op "?" "$@"
-  local exit_status=$?
-  __sigil_insert_pending_handoff
-  return "$exit_status"
 }
 
 sigil_follow_up() {
   "$__sigil_bin" op "??" "$@"
-  local exit_status=$?
-  __sigil_insert_pending_handoff
-  return "$exit_status"
 }
 
 sigil_question_loop() {
   "$__sigil_bin" op "???" "$@"
-  local exit_status=$?
-  __sigil_insert_pending_handoff
-  return "$exit_status"
 }
 
 if __sigil_glyphs_enabled; then

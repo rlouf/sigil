@@ -52,8 +52,7 @@ The shell remains the review boundary:
 - `,,` executes one command proposal or previews and confirms one patch.
 - `,,,` asks before one Pi edit action, blocks Pi Bash calls as handoffs, and
   then returns control to the shell.
-- `?`, `??`, and `???` answer questions. If Pi proposes a Bash command, Sigil
-  blocks execution and hands the command to the shell for user review.
+- `?`, `??`, and `???` answer questions with read/web tools only.
 
 ## Session Continuity
 

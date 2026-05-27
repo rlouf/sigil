@@ -44,6 +44,7 @@ def run_act_stepper(
     objective: str,
     stdin_text: str = "",
     dry_run: bool = False,
+    verbose: bool = False,
 ) -> int:
     """Create or resume a confirmed one-step Pi edit action."""
     act = active_act()
@@ -97,7 +98,7 @@ def run_act_stepper(
         return 0
 
     decision_event = record_step_decision(act, step, "accepted")
-    status = run_pi_agent_step(act, step, decision_event)
+    status = run_pi_agent_step(act, step, decision_event, verbose=verbose)
     step["status"] = "done" if status == 0 else "failed"
     step["exit_code"] = status
     record_step_executed(act, step, status)
@@ -222,6 +223,8 @@ def run_pi_agent_step(
     act: dict[str, Any],
     step: dict[str, Any],
     decision_event: dict[str, Any],
+    *,
+    verbose: bool = False,
 ) -> int:
     """Run one non-interactive Pi edit step and stream tool events."""
     if not ensure_model_for_pi():
@@ -272,6 +275,8 @@ def run_pi_agent_step(
         ]
     )
     filter_cmd = [sys.argv[0], "render-pi-stream"]
+    if not verbose:
+        filter_cmd.append("--compact")
     filter_env = {
         **os.environ,
         "SIGIL_CAPTURE_ANSWER": "1",

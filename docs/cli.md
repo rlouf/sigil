@@ -12,7 +12,7 @@ written to stdout.
 ```text
 sigil command [--select] [--json] [PROMPT]
 sigil ask [--follow-up] [--json] [QUESTION]
-sigil act [show|resume|abort] [--json]
+sigil act [show|resume|abort] [--json] [--verbose]
 sigil patch [show|check|apply] [--json] [--yes]
 sigil events [--limit N] [--json] [--raw]
 sigil events list [--limit N] [--json] [--raw]
@@ -92,9 +92,8 @@ printf 'README.md\n' | sigil command --json "summarize this target"
 
 ## `sigil ask`
 
-Answers a shell question using Pi with `read,web_search,bash` tools. Sigil
-loads a Pi extension that blocks Bash execution and records the proposed
-command as a terminal handoff.
+Answers a shell question using Pi with `read,web_search` tools. Question routes
+can inspect local files and use the web, but they do not expose Bash to Pi.
 
 ```sh
 sigil ask "what is this error?"
@@ -106,12 +105,8 @@ A fresh `sigil ask` starts a new same-session question transcript. `--follow-up`
 continues that transcript.
 
 When stdin is piped into a question, Sigil attaches it to the prompt without an
-extra confirmation. Question routes have no execute path; any Bash tool call
-from Pi is still blocked and handed off to the shell.
-
-If Pi calls Bash while answering, the command is not executed. With the zsh
-binding, Sigil inserts the command into the editable prompt buffer with
-`print -z`; with the Bash binding, Sigil adds it to history for review.
+extra confirmation. Question routes have no execute path and no Bash tool. If
+an answer recommends a command, it is plain answer text.
 
 JSON output:
 
@@ -183,7 +178,7 @@ Glyphs are installed shell functions over the CLI runtime. Install them with
 ,    recommend one command or patch action
 ,,   generate and run one command, or preview and confirm one patch
 ,,,  run one confirmed Pi edit action
-?    ask a fresh read/web question; Bash calls are handed off, not executed
+?    ask a fresh read/web question
 ??   follow up on the previous question in the same shell session
 ???  ask for a more exhaustive read-only answer
 ```
@@ -220,12 +215,17 @@ Inspects or controls the Pi edit action used by `,,,`.
 sigil act
 sigil act show
 sigil act resume
+sigil act resume --verbose
 sigil act abort
 sigil act show --json
 ```
 
 `resume` runs the pending action only after confirmation. If there is no active
 action, it exits with status `2`.
+
+Act output is compact by default: Sigil prints a short tool trace and a final
+`done:` summary while recording the full Pi transcript and tool events in
+session state. Use `--verbose` to stream Pi's raw tool calls and prose.
 
 JSON output for `show` is the stored act object, or `null`:
 
