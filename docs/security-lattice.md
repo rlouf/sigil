@@ -1,17 +1,12 @@
-# Security Lattice
+# Sigil Trust Model
 
-Sigil treats shell interaction as a trust boundary. A glyph can ask a model for a
-proposal, continue a prior interaction, read local or web material, or eventually
-request boxed writes/execution. The security lattice is the ABI that keeps those
-steps explicit.
+Sigil records where an answer or action came from and what it was allowed to
+do. This metadata is visible through `sigil events`, `sigil events lineage`,
+and `sigil session show --json`.
 
-The implementation lives in `src/sigil/security.py`. Event writers in
-`src/sigil/state.py` normalize the fields for global events and per-session JSONL
-state.
+## Trust Fields
 
-## Primitives
-
-Every event and session record can carry:
+User-facing event records can include:
 
 ```json
 {
@@ -19,200 +14,136 @@ Every event and session record can carry:
   "inputs": ["event-id"],
   "integrity": "web",
   "capability": "read",
-  "taint": ["web", "model"],
+  "taint": ["web"],
   "provisional": true
 }
 ```
 
-`glyph` is the grammar token that produced the record.
+Fields:
 
-`inputs` is the list of event IDs consumed to produce this record. Continuations
-must include the previous event IDs they inherit from, so the event log can
-reconstruct why a later answer or proposal has its trust level.
+- `glyph`: route that produced the record, such as `,`, `,,`, `,,,`, `?`, or
+  `??`.
+- `inputs`: previous event ids used as context.
+- `integrity`: origin label, ordered as `human > local_model > local_file > web
+  > unknown`.
+- `capability`: maximum effect class, ordered as `none < propose < read <
+  write_boxed < exec_boxed`.
+- `taint`: accumulated source labels, currently most often `model`, `web`, or
+  `legacy`.
+- `provisional`: whether the record should be treated as provisional context
+  rather than stable authority.
 
-`integrity` is the origin-quality label:
-
-```text
-human > local_model > local_file > web > unknown
-```
-
-Integrity only descends across continuations. A continuation can preserve or
-lower integrity, but it cannot raise it. Only fresh human input can create a new
-higher-integrity boundary.
-
-`capability` is the maximum action class the invocation is allowed to represent:
+## Route Mapping
 
 ```text
-none < propose < read < write_boxed < exec_boxed
+,    local model proposal
+     integrity=local_model
+     capability=propose
+     taint=["model"]
+
+,,   local model command execution or patch preview/application
+     proposal event: capability=propose
+     command execution event: capability=exec_boxed
+     patch application event: capability=write_boxed
+     taint=["model"]
+
+,,,  durable plan
+     plan proposal events: capability=propose
+     confirmed step execution events: capability=exec_boxed
+     taint=["model"]
+
+?    read/web question
+     integrity=web
+     capability=read
+     taint=["web"]
+     provisional=true
+
+??   read/web follow-up
+     inherits prior question transcript inputs
+     capability=read
+     taint includes "web"
+     provisional=true
+
+???  exhaustive read/web question
+     capability=read
+     taint includes "web"
+     provisional=true
 ```
 
-Capability is capped by the invocation route. The implemented routes include
-`propose`, `read`, and boxed write/exec after explicit comma depth.
+Question routes produce answers only. They do not become executable proposals.
+Execution and file writes happen through comma routes and require the explicit
+comma depth that represents that effect.
 
-`taint` is the accumulated source set. It is intentionally simple and visible:
-`model`, `web`, and `legacy` are the important current labels. Continuations
-inherit the union of previous taint labels.
+## Practical Examples
 
-`provisional` marks output that should not be treated as stable authority. The
-current web-backed question path is provisional by construction.
+List recent events:
+
+```sh
+sigil events
+```
+
+Example table:
+
+```text
+time      id        action       trust                   session   summary
+12:00:01  e3b0c442  ? question   web/read                9aa2f6e1  what changed?
+12:01:10  2f7d6a8c  , recommend  local_model/propose     9aa2f6e1  run the tests
+12:01:18  b1c4a901  ,, executed  local_model/exec_boxed  9aa2f6e1  uv run pytest -> 0
+```
+
+Inspect provenance:
+
+```sh
+sigil events lineage b1c4a901
+```
+
+JSON lineage includes the selected event, any input events, and missing input
+ids if an event references records that are no longer present:
+
+```json
+{
+  "event_id": "b1c4a901-...",
+  "nodes": [
+    {
+      "id": "b1c4a901-...",
+      "depth": 0,
+      "event": {
+        "type": "operator_command_executed",
+        "glyph": ",,",
+        "integrity": "local_model",
+        "capability": "exec_boxed",
+        "taint": ["model"]
+      }
+    }
+  ],
+  "missing_inputs": []
+}
+```
 
 ## Legacy State
 
-Old Sigil state did not have trust fields. When a JSON or JSONL record is read
-without `integrity` and `taint`, Sigil normalizes it as:
+Older state records may not contain trust fields. When Sigil reads those
+records, it treats them conservatively:
 
 ```text
-integrity = unknown
-capability = none
-taint = ["legacy"]
-provisional = false
-inputs = []
+integrity=unknown
+capability=none
+taint=["legacy"]
+provisional=false
+inputs=[]
 ```
 
-This is deliberately conservative. Legacy command suggestions can still be
-reopened, but they display as low-trust and continuations inherit that low-trust
-state.
+That lets old records remain inspectable without treating them as trusted
+current context.
 
-## Current Grammar Mapping
+## User Rules
 
-The implemented grammar is:
-
-```text
-,   recommend a concrete next action
-,,  generate and execute/apply one typed command or patch proposal
-,,, durable plan stepper, one confirmed boxed step at a time
-?   web-authorized question
-??  web-authorized question continuation
-??? exhaustive web-authorized question
-```
-
-It maps to the lattice as follows:
-
-```text
-,   human prompt -> model recommendation
-    integrity=local_model
-    capability=propose
-    taint=["model"]
-    provisional=false
-
-,,  human prompt -> generated command execution or patch application
-    integrity=local_model
-    capability=exec_boxed or write_boxed
-    taint=["model"]
-
-,,, durable plan stepper
-    integrity=local_model for plan proposals
-    capability=propose, then exec_boxed per confirmed step
-    taint=["model"]
-
-?   question
-    integrity=web
-    capability=read
-    taint=["web"]
-    provisional=true
-
-??  question continuation
-    inherits previous question transcript integrity and taint
-    capability=read
-    taint includes "web"
-    provisional=true
-
-??? exhaustive question
-    integrity=web
-    capability=read
-    taint includes "web"
-    provisional=true
-```
-
-The `?`, `??`, and `???` routes all enter through `sigil op` and then invoke Pi
-with `read,web_search`, so they are web-tainted by construction. All question
-routes are read-only and have no execute path.
-
-## Visible Descent
-
-Sigil makes trust visible in the terminal.
-
-Headers:
-
-```text
-❯ sigil ,  · propose · model-authored
-❯ sigil ,, · inherited: model
-❯ sigil ?  · read · model-authored
-❯ pi ??    · inherited: web · provisional
-```
-
-Command selectors also prefix candidates:
-
-```text
-[model/propose] git status --short
-[web-tainted/provisional] ...
-[legacy/low-trust] ...
-```
-
-The selector prefix is part of the interaction contract. A command written to
-shell history should reveal whether it was model-authored, web-tainted, or
-legacy before the user recalls it for review.
-
-## Continuation Rules
-
-Continuations inherit maximum taint and minimum integrity from their inputs.
-
-For question routes, `last-question.jsonl` stores user and assistant transcript
-turns with their originating event IDs. Fresh `?` starts a new web-authorized
-question transcript. `??` consumes prior transcript records, inherits their
-taint and integrity, and records the consumed IDs in the new question event.
-
-This means the event log can reconstruct every continuation input instead of
-relying on shell globals or implicit session memory.
-
-Use `sigil events lineage [event-id]` to inspect the recorded provenance chain.
-Without an event id, Sigil shows the latest event from the current shell session.
-
-Session state files can be inspected with `sigil session show` for debugging.
-This does not call a model, append events, or create executable shell text. A
-session is one terminal shell by default; `SIGIL_SESSION_ID` or
-`SIGIL_SESSION_DIR` can intentionally override that boundary.
-
-Failure records may include bounded stdout/stderr snippets and safe local
-cwd/git context. These are inputs to model-authored comma proposals, so `,`
-remains `local_model / propose / model-tainted`. `,,` starts with the same
-model-authored proposal, then crosses into `exec_boxed` for command execution or
-`write_boxed` for patch application.
-
-When a double-comma proposal is a unified diff, Sigil stores it as a patch
-preview before confirmation. The preview can also be checked later with `sigil
-patch check`; applying it later requires `sigil patch apply --yes` and records a
-`write_boxed` event linked to the patch preview.
-
-## Enforcement Before New Glyphs
-
-The lattice exists before higher-risk glyphs are added. Current enforcement is
-fail-closed:
-
-```text
-no ?! parser route
-no promotion mutation
-```
-
-The zsh and Bash bindings do not map `?!`, `,!`, `@`, or `@!` to parser routes.
-Current grammar must preserve these constraints:
-
-- `??` after `?` must never produce an executable proposal.
-- `,,` must record the generated-command event and the boxed execution event.
-- Legacy state must remain visibly low-trust.
-- Event logs must retain enough input IDs to reconstruct continuations.
-- Tests must fail for any path that increases integrity without fresh human
-  input.
-
-## User Mental Model
-
-The short version:
-
-- `,` means "ask the local model to recommend one concrete command or patch action."
-- `,,` means "ask the local model for one command or patch and do it."
-- `?` means "answer using read and web search; do not execute."
-- `??` means "continue that read/web discussion; still do not execute."
-- `???` means "answer exhaustively through the same read/web route."
-
-Read/web routes produce answers, not commands. Execution routes must be boxed,
-explicit, and lower or preserve integrity unless the user provides fresh input.
+- `,` recommends; it does not execute.
+- `,,` can execute a generated command, or preview and confirm a generated
+  patch.
+- `,,,` executes at most one confirmed plan step per invocation.
+- `?`, `??`, and `???` are read-only question routes.
+- `??` continues the same-session question transcript; it does not switch to a
+  command route.
+- `sigil patch apply --yes` is the explicit command for applying the latest
+  stored patch preview later.

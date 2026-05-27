@@ -8,95 +8,25 @@ Status: this is currently a "works on my machine" repo. If you are interested
 in an easier-to-install version, please open an issue.
 
 The Python package is named `sigil-sh` because `sigil` was not available as a
-distribution name. The installed command is still `sigil`, and this repository
-uses `sigil` everywhere else.
+distribution name. The installed command is still `sigil`.
 
-Sigil is structured as a shell-agnostic core with thin shell bindings. The shell
-layer owns glyph dispatch; the Python CLI owns model calls, selection UI, Pi
-streaming, rendering, and persistent state.
+Sigil has two user-facing surfaces:
 
-## Commands
+- CLI verbs such as `sigil command`, `sigil ask`, `sigil plan`, and
+  `sigil patch`.
+- Optional shell glyphs such as `,`, `,,`, `?`, and `??`, installed by
+  `sigil install`.
 
-```text
-sigil command "find wav files"              generate command candidates
-sigil ask "what changed in this repo?"      answer a question with Pi
-sigil ask --follow-up "what should I run?"  continue the prior answer
-sigil plan show                             inspect the current durable plan
-sigil plan resume                           run the next confirmed plan step
-sigil plan abort                            abort the active plan
-```
-
-Piped stdin is first-class:
-
-```sh
-git diff | sigil ask "review risky changes"
-cat notes.md | sigil command "turn this into a release command"
-printf '%s\n' src/sigil/cli.py | sigil op "," "preview a small cleanup"
-```
-
-## Optional Glyphs
-
-Glyphs are a shortcut layer on top of the CLI runtime. Installed shell bindings
-enable them by default. Use `sigil install <shell> --no-glyphs` if you only want
-the long-form verbs.
-
-```text
-,   -> sigil op ","
-,,  -> sigil op ",,"
-,,, -> sigil op ",,,"   durable plan stepper
-?   -> sigil op "?"
-??  -> sigil op "??"
-??? -> sigil op "???"
-```
-
-Sigil records every invocation with trust metadata. This is the core trust
-lattice:
-
-```text
-integrity:  human > local_model > local_file > web > unknown
-capability: none < propose < read < write_boxed < exec_boxed
-taint:      model, web, legacy
-```
-
-The default glyph aliases map to:
-
-```text
-,   human prompt -> model recommendation   local_model / propose / model-tainted
-,,  human prompt -> generated command or patch apply  exec/write boxed
-,,, durable plan stepper                 per-step confirmed exec_boxed events
-?   web-authorized question                web / read / provisional
-??  web-authorized follow-up               inherits prior question taint / provisional
-??? exhaustive web-authorized question     web / read / provisional
-```
-
-This matters because only the explicit comma route crosses into `exec_boxed` or
-`write_boxed`. Web-tainted question answers are read-only and provisional, and
-cannot become an executable proposal path through `??`.
-
-Current no-execute guarantees:
-
-```text
-no ?! parser route
-no promotion mutation
-```
-
-The full trust model is documented in
-[docs/security-lattice.md](docs/security-lattice.md).
+The Python package does not expose a public Python API.
 
 ## Install
 
-Install the Python command, then install the shell binding you use:
+Install the Python command, then install the binding for your shell:
 
 ```sh
 uv tool install git+https://github.com/rlouf/sigil
 sigil install zsh
 sigil doctor
-```
-
-To install without punctuation shortcuts:
-
-```sh
-sigil install zsh --no-glyphs
 ```
 
 For Bash:
@@ -107,182 +37,188 @@ sigil install bash
 sigil doctor --shell bash
 ```
 
-`install` copies the bundled binding to `~/.sigil/shell/<shell>/` and adds an
-idempotent source block to `.zshrc` or `.bashrc`. Running it again updates the
-binding without duplicating the rc block.
+`sigil install` copies the bundled binding to `~/.sigil/shell/<shell>/` and
+adds an idempotent source block to `.zshrc` or `.bashrc`. Running it again
+updates the binding without duplicating the rc block.
 
-`sigil doctor` checks the local pieces:
-
-```sh
-sigil
-glow
-pi
-QWEN_URL / local model endpoint
-QWEN_MODEL
-state directory writability
-shell support
-installed shell binding
-loaded shell binding
-```
-
-The endpoint check is expected to warn unless your local OpenAI-compatible model
-server is already running.
-
-## Layout
-
-```text
-shell/bash/sigil.bash    Bash binding
-shell/zsh/sigil.zsh    zsh binding
-src/sigil/             Python core runtime
-```
-
-Core commands:
+To install without punctuation shortcuts:
 
 ```sh
-sigil command --select "find wav files"
-sigil op "," "recommend next cleanup"
-sigil op ",," "run the relevant tests"
-sigil ask "what is tldraw?"
-sigil ask --follow-up "how would that work in practice?"
-sigil op --dry-run ",," "clean build outputs"
-sigil patch show
-sigil patch check
-sigil patch apply --yes
-sigil install zsh
-sigil doctor
-sigil events
-sigil events lineage
-sigil session show
-sigil session path
-sigil session list
-sigil session clear
+sigil install zsh --no-glyphs
 ```
-
-The shell bindings call `sigil op` for glyph behavior. `,` prints one
-recommended command or patch action with an explanation. When the proposal is a
-command, the shell binding adds that command to shell history. `,,` asks for one
-typed proposal: command proposals execute through the user's shell, while patch
-proposals are shown as a preview and applied only after confirmation. When comma
-routes receive piped input, Sigil previews that input and asks for confirmation
-before using it; piped `,,` also asks before executing a generated command.
-
-## State
-
-Sigil writes state under:
-
-```text
-~/.sigil/
-```
-
-Current files:
-
-```text
-events.jsonl                                 append-only global event log
-sessions/<session-id>/last-failure.json      latest failed shell command
-sessions/<session-id>/last-patch.json        latest patch preview
-sessions/<session-id>/last-question.jsonl    same-terminal question transcript
-sessions/<session-id>/last-tools.jsonl       latest Pi tool trace
-```
-
-By default, a session is one terminal shell: installed Bash and zsh bindings set
-`SIGIL_SESSION_ID` once when the shell starts, so separate terminal windows or
-tabs keep separate continuity. The global `events.jsonl` remains the audit log
-across all sessions. Advanced callers can override the boundary with
-`SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
-
-Failure records include command, status, cwd, safe cwd/git context, and optional
-bounded stdout/stderr snippets when a wrapper provides them. Comma proposals use
-the last failure as context when available.
-
-Double comma proposals that emit a unified diff store it as the current patch
-preview before confirmation. `sigil patch show` prints that preview,
-`sigil patch check` validates it with `git apply --check`, and `sigil patch
-apply --yes` applies it explicitly with `git apply`.
-
-Events and session JSONL entries include these trust fields:
-
-```json
-{
-  "glyph": "?",
-  "inputs": ["event-id"],
-  "integrity": "web",
-  "capability": "read",
-  "taint": ["web"],
-  "provisional": true
-}
-```
-
-Legacy state that predates those fields is treated as low-trust:
-`integrity=unknown`, `capability=none`, and `taint=["legacy"]`.
-
-The event log is the durable substrate for session continuity. Shell globals are
-intentionally not used for that state.
-
-## zsh
-
-Source the zsh entrypoint from `.zshrc`:
-
-```zsh
-source "$HOME/.sigil/shell/zsh/sigil.zsh"
-```
-
-## Bash
-
-Source the Bash entrypoint from `.bashrc`:
-
-```bash
-source "$HOME/.sigil/shell/bash/sigil.bash"
-```
-
-Use the `sigil command` and `sigil ask` verbs directly in Bash.
-When glyphs are enabled, Bash also supports:
-
-```bash
-, find wav files
-,, run the relevant tests
-? what is tldraw?
-?? how would that work in practice?
-```
-
-`,` prints a recommended command or patch action plus explanation. Command
-proposals are added to shell history. Non-piped `,,` executes a generated command
-immediately, while patch proposals are previewed and require confirmation before
-apply. Piped comma routes ask before using the input, and piped `,,` asks again
-before executing a command. `?` answers through the web-authorized read route;
-`??` continues the same question transcript through that route; `???` asks for
-an exhaustive read-only answer. Piped question routes ask before using the input.
-`,,,` creates or resumes a durable plan and offers one confirmed boxed step at a
-time.
 
 ## Requirements
 
-- `python3`
-- `curl`-compatible local llama.cpp/OpenAI endpoint for command generation
-- `fzf` optionally improves `sigil command --select`; a built-in selector is used
-  when it is unavailable
-- `glow` for Markdown rendering
-- `pi` for question answering
+- Python 3.11+
+- zsh or Bash for shell bindings
+- A local OpenAI-compatible chat completions endpoint for command generation
+- `pi` for `sigil ask` and question glyphs
+- `glow` for Markdown rendering, optional but recommended
+- `fzf` for `sigil command --select`, optional
 
-`pi` is the .txt agent CLI used by the `?`, `??`, and `???` routes. It is not installed
-by Sigil. Install and configure it separately, then verify `pi --help` works.
-Sigil invokes it as `pi --json --tools read,web_search ...` with a prompt-level
-limit of at most one tool call, then renders the event stream through
-`sigil render-pi-stream` so tool calls, answer text, and trust metadata are
-recorded in Sigil state. `pi` must be on `PATH`, and for the
-current local setup it should be able to start or reach the same Qwen endpoint
-used by Sigil.
-
-Environment knobs:
+Useful environment variables:
 
 ```sh
 QWEN_URL=http://127.0.0.1:8080/v1/chat/completions
 QWEN_MODEL=qwen3.6-27b-q8-local
 QWEN_MODEL_PATH=/path/to/model.gguf
+SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88
 ```
 
-By convention this repo expects the helper script
-`~/.config/pi/run-qwen36-q8.sh` to start a llama.cpp-compatible server on
-`127.0.0.1:8080`. You can also run `llama-server` yourself with the same alias
-and port.
+By default, command generation expects a local endpoint at
+`http://127.0.0.1:8080/v1/chat/completions`. The question route uses `pi` with
+`read,web_search` tools and may start the helper script at
+`~/.config/pi/run-qwen36-q8.sh` if the local server is not already listening.
+
+## Quick Start
+
+Generate command candidates:
+
+```sh
+sigil command "find files over 10 MB in this repo excluding .git"
+```
+
+Use an interactive selector:
+
+```sh
+sigil command --select "show the largest directories"
+```
+
+Ask a question:
+
+```sh
+sigil ask "what changed in this repo?"
+sigil ask --follow-up "what should I run next?"
+```
+
+Use piped input as context:
+
+```sh
+git diff | sigil ask "review risky changes"
+git diff --name-only | sigil command "run the relevant tests"
+```
+
+When stdin is piped into command or question routes, Sigil previews the input
+and asks before using it.
+
+## Shell Glyphs
+
+Installed zsh and Bash bindings expose these optional shortcuts:
+
+```text
+,    recommend one command or patch action
+,,   generate and run one command, or preview and confirm one patch
+,,,  create or resume a durable plan, one confirmed step at a time
+?    ask a fresh read/web question
+??   follow up on the previous question in the same shell session
+???  ask for a more exhaustive read-only answer
+```
+
+Examples:
+
+```sh
+, find wav files
+,, run the relevant tests
+,,, clean up this branch and verify it
+? why did this git command fail?
+?? what should I try first?
+??? explain the tradeoffs in detail
+```
+
+`,` prints a proposal and, when the proposal is a command, the shell binding
+adds that command to shell history for review and editing. `,,` executes command
+proposals through your shell. Patch proposals are shown first and applied only
+after confirmation. `,,,` stores a plan and asks for confirmation before each
+step; each invocation runs at most one accepted step.
+
+## CLI Commands
+
+```text
+sigil command [--select] [--json] [PROMPT]
+sigil ask [--follow-up] [--json] [QUESTION]
+sigil plan [show|resume|abort] [--json]
+sigil patch [show|check|apply] [--json] [--yes]
+sigil events [--limit N] [--json] [--raw]
+sigil events lineage [EVENT_ID] [--json]
+sigil session [show|path|list|clear] [--json]
+sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
+sigil doctor [--shell auto|zsh|bash] [--json]
+```
+
+See [docs/cli.md](docs/cli.md) for the user-facing CLI contract and JSON
+examples.
+
+## Plans and Patches
+
+Create a durable plan with the triple-comma glyph:
+
+```sh
+,,, migrate this package to the new API and run the tests
+```
+
+Inspect or continue it later:
+
+```sh
+sigil plan show
+sigil plan resume
+sigil plan abort
+```
+
+When `,,` produces a unified diff, Sigil stores it as the latest patch preview
+for the current shell session:
+
+```sh
+sigil patch show
+sigil patch check
+sigil patch apply --yes
+```
+
+`patch check` and `patch apply` run `git apply --check` and `git apply` in the
+working directory where the preview was created.
+
+## State
+
+Sigil writes state under `~/.sigil/` by default. Set `SIGIL_STATE_DIR` to move
+it.
+
+Current user-visible state:
+
+```text
+events.jsonl                              global event log
+sessions/<session-id>/last-failure.json   latest failed shell command
+sessions/<session-id>/last-patch.json     latest patch preview
+sessions/<session-id>/last-plan.jsonl     durable plan snapshots
+sessions/<session-id>/last-question.jsonl same-session question transcript
+sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
+sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
+```
+
+Installed Bash and zsh bindings set `SIGIL_SESSION_ID` once when the shell
+starts, so separate terminal windows keep separate continuity. You can override
+the boundary with `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`.
+
+Inspect state without calling a model:
+
+```sh
+sigil session show
+sigil session path
+sigil session list
+sigil session clear
+sigil events
+sigil events lineage
+```
+
+## Trust Model
+
+Sigil records command suggestions, question answers, patch previews, and plan
+steps with trust metadata. The important user model is:
+
+```text
+, and ,, are model-authored command/patch routes.
+? and ?? are read/web question routes with no execute path.
+,,, executes only one confirmed plan step at a time.
+```
+
+For details, see [docs/security-lattice.md](docs/security-lattice.md).

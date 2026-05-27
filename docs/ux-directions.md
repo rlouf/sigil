@@ -1,100 +1,72 @@
-# Sigil UX directions
+# Shell Workflow
 
-Sigil should help with terminal work that is stateful, easy to get subtly
-wrong, or annoying to reconstruct from memory.
+Sigil keeps the shell as the main interface. Use the long-form CLI verbs when
+you want explicit commands, and use glyphs when you want fast interactive
+handoffs.
 
-Unlike agent TUIs that own the loop and call shell tools from inside an agent
-session, Sigil starts from the shell. The shell remains the place where commands
-are inspected, edited, and executed. Sigil should cross the agent/shell boundary
-only through explicit glyph semantics: `,` recommends, and `,,` executes.
+## Common Workflows
 
-The core trust boundary is:
+Generate commands:
 
-```text
-agent recommends
-double comma executes
-```
-
-This makes handoff quality the central UX problem. Sigil should mostly explain,
-repair, summarize, search, and recommend concrete next actions. Direct execution
-should stay rare and explicit.
-
-## Command repair
-
-After a command fails, Sigil should be able to inspect the last command, stderr,
-exit status, cwd, and relevant project files, then propose a repair.
-
-Possible interaction:
-
-```text
-?!          explain the last failure and suggest a fix
-?! retry    suggest a corrected command for the last failure
-```
-
-The output should be concise:
-
-- what failed
-- why it likely failed
-- one or more corrected commands
-- any risk or assumption worth checking before retrying
-
-Repairs should prefer visible previews over running automatically. If the fix is
-destructive, Sigil should show a dry run or a verification command first.
-
-## Project conventions through skills
-
-Sigil should learn local project conventions before suggesting commands. This
-could be modeled as lightweight skills: small convention packs discovered from
-the repo, user config, or explicit files.
-
-Useful convention sources:
-
-- `AGENTS.md`, `CLAUDE.md`, `README.md`, and local docs
-- `package.json`, `pyproject.toml`, `Cargo.toml`, `Makefile`, `justfile`
-- existing shell history and Sigil event history
-- user-defined skills under a Sigil config directory
-
-Examples:
-
-```text
+```sh
+sigil command "find large files"
+sigil command --select "show modified Python files"
 , run the relevant tests
-, lint what I changed
-, start the app
-, make a commit message
 ```
 
-Sigil should use conventions to choose the right local command shape, not to add
-a large planning layer. A good result is boring and specific: the command the
-project already expects people to run.
+Ask questions:
 
-## Session summary and past memory
-
-The event log should become a useful terminal memory layer. Sigil can summarize
-the current session and search past sessions without requiring the user to
-manually reconstruct context.
-
-Possible interactions:
-
-```text
-@@ query    search past Sigil memory
+```sh
+sigil ask "what changed in this repo?"
+sigil ask --follow-up "what should I test?"
+? why did that command fail?
+?? what should I try first?
 ```
 
-Session summaries should focus on operational state:
+Work from stdin:
 
-- commands generated or selected
-- questions asked and useful answers
-- failed commands and repairs
-- files, branches, servers, or directories that mattered
-- open follow-ups or unresolved errors
-
-Past memory search should answer questions like:
-
-```text
-@@ how did I run the release script last time?
-@@ what command converted mov files to mp4?
-@@ when did I debug port 3000?
+```sh
+git diff | sigil ask "review risky changes"
+git diff --name-only | sigil command "choose a focused test command"
+git diff | ? explain the riskiest part
 ```
 
-Memory should be transparent. Sigil should show the source session, cwd, and
-timestamp for retrieved entries, and avoid treating stale history as current
-truth without checking local state.
+Run one generated action:
+
+```sh
+,, run the formatter for files I changed
+```
+
+Manage a longer task one step at a time:
+
+```sh
+,,, clean up this branch and verify it
+sigil plan show
+sigil plan resume
+```
+
+## Review Points
+
+The shell remains the review boundary:
+
+- `,` proposes and does not execute.
+- `,,` executes one command proposal or previews and confirms one patch.
+- `,,,` asks before each plan step and runs at most one step per invocation.
+- `?`, `??`, and `???` answer questions and have no execute path.
+
+## Session Continuity
+
+Installed shell bindings set `SIGIL_SESSION_ID` once when the shell starts.
+That keeps question transcripts, patch previews, failure context, and durable
+plans scoped to one terminal window by default.
+
+Useful inspection commands:
+
+```sh
+sigil session show
+sigil session path
+sigil events
+sigil events lineage
+```
+
+Use `sigil session clear` to remove the current session's continuity files.

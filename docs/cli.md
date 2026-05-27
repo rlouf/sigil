@@ -1,129 +1,252 @@
-# Sigil CLI contract
+# Sigil CLI
 
-Sigil's human-readable output is allowed to evolve. Machine-readable output is
-available through explicit `--json` flags and should remain stable across
-compatible releases.
+This document describes Sigil's user-facing command-line API. Human-readable
+output may evolve. JSON output is available through explicit `--json` flags and
+is the preferred integration surface.
 
 Status, progress, warnings, and errors are written to stderr. JSON output is
 written to stdout.
 
-## Top-level examples
+## Top-Level Commands
+
+```text
+sigil command [--select] [--json] [PROMPT]
+sigil ask [--follow-up] [--json] [QUESTION]
+sigil plan [show|resume|abort] [--json]
+sigil patch [show|check|apply] [--json] [--yes]
+sigil events [--limit N] [--json] [--raw]
+sigil events list [--limit N] [--json] [--raw]
+sigil events lineage [EVENT_ID] [--json]
+sigil session [show|path|list|clear] [--json]
+sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs] [--json]
+sigil doctor [--shell auto|zsh|bash] [--json]
+```
+
+Examples:
 
 ```sh
-sigil command --select "find large files"
-sigil ask --json "what changed in this repo?"
+sigil command "find large files"
+sigil command --select "show modified Python files"
+sigil ask "what changed in this repo?"
+sigil ask --follow-up "what should I test?"
 git diff | sigil ask "review risky changes"
-printf '%s\n' src/sigil/cli.py | sigil op "," "preview a cleanup"
-sigil op --dry-run ",," "clean build outputs"
+git diff --name-only | sigil command "run the relevant tests"
+sigil plan show --json
 sigil patch check
-sigil patch apply --yes
-sigil install zsh
-sigil install zsh --no-glyphs
-sigil doctor
-sigil events lineage
+sigil events --limit 50
 sigil session show --json
 ```
 
-## `sigil op --json`
+## `sigil command`
 
-Parses a glyph invocation without running the model. This is the stable
-machine-readable introspection path for shell bindings and tests.
+Generates command candidates from a prompt.
+
+```sh
+sigil command "find files over 10 MB"
+sigil command --select "show the largest directories"
+git diff --name-only | sigil command "run the relevant tests"
+```
+
+Without `--select`, Sigil prints candidate commands to stdout, one per line.
+With `--select`, Sigil opens `fzf` when available and falls back to a numbered
+selector.
+
+When stdin is piped, Sigil uses the comma proposal route and asks before using
+the piped text.
+
+JSON output:
+
+```sh
+sigil command --json "find Python tests"
+```
+
+```json
+{"prompt":"find Python tests","commands":[{"command":"find . -name 'test_*.py' -o -name '*_test.py'","note":"Finds common Python test filenames."}]}
+```
+
+Stable fields:
+
+- `prompt`: prompt text.
+- `commands`: ordered candidate list.
+- `commands[].command`: directly runnable shell command.
+- `commands[].note`: short explanation from the model.
+
+With piped stdin and `--json`, the current command emits pipeline metadata
+instead of calling the model:
+
+```sh
+printf 'README.md\n' | sigil command --json "summarize this target"
+```
 
 ```json
 {
-  "glyph": "??",
-  "base": "?",
-  "depth": 2,
-  "name": "inspect",
-  "prompt": "review risky changes",
-  "stdin": "diff --git a/file b/file\n",
+  "glyph": ",",
+  "base": ",",
+  "depth": 1,
+  "name": "recommend",
+  "prompt": "summarize this target",
+  "stdin": "README.md\n",
   "mode": "pipeline"
+}
+```
+
+## `sigil ask`
+
+Answers a shell question using Pi with `read,web_search` tools.
+
+```sh
+sigil ask "what is this error?"
+sigil ask --follow-up "what should I try next?"
+git diff | sigil ask "review this diff"
+```
+
+A fresh `sigil ask` starts a new same-session question transcript. `--follow-up`
+continues that transcript.
+
+When stdin is piped into a fresh question, Sigil previews the input and asks
+before sending it to Pi. Piped follow-ups also ask before attaching stdin to the
+follow-up prompt.
+
+JSON output:
+
+```sh
+sigil ask --json "summarize this repository"
+```
+
+The JSON form is one object:
+
+```json
+{
+  "ok": true,
+  "type": "answer",
+  "question": "summarize this repository",
+  "prompt": "summarize this repository",
+  "follow_up": false,
+  "answer": "Sigil is a shell assistant...",
+  "answer_event_id": "c8ad3f8e-...",
+  "tools": [],
+  "malformed_events": 0,
+  "security": {
+    "glyph": "?",
+    "integrity": "web",
+    "capability": "read",
+    "taint": ["web"],
+    "provisional": true
+  }
 }
 ```
 
 Stable fields:
 
-- `glyph`
-- `base`: the operator family, currently `?` or `,`.
-- `depth`: repeated-glyph count.
-- `name`: semantic operator name.
-- `prompt`: user prompt text after the glyph.
-- `stdin`: captured input stream.
-- `mode`: `pipeline` or `interactive`.
+- `ok`: whether stream rendering completed successfully.
+- `type`: currently `"answer"`.
+- `question`: user-visible question text.
+- `prompt`: prompt sent to Pi. Follow-ups include transcript context.
+- `follow_up`: whether `--follow-up` was used.
+- `answer`: concatenated assistant text.
+- `answer_event_id`: stored answer event id, or `null`.
+- `tools`: ordered Pi tool trace events.
+- `malformed_events`: malformed Pi JSON event lines ignored.
+- `security`: trust metadata recorded for the answer.
 
-Without `--json`, `sigil op` runs the operator. `?` answers through the
-web-authorized read route, `??` continues that route, `???` asks for an
-exhaustive read-only answer, `,` recommends one typed command or patch proposal,
-`,,` executes a generated command or previews and confirms a generated patch, and
-`,,,` runs the durable plan stepper. Operator output is written to stdout; status
-and errors go to stderr.
-
-## Verb Pipeline Commands
-
-`sigil command` and `sigil ask` are the public verb layer. When stdin is piped
-into `command` or `ask`, the verb uses the stream operator runtime and grounds
-the result in stdin. Piped question routes ask before sending stdin to Pi:
+With piped stdin and `--json`, a fresh `sigil ask` currently emits pipeline
+metadata instead of calling Pi:
 
 ```sh
-cat notes.md | sigil command "draft a release command"
-git diff | sigil ask "review risky changes"
+printf 'hello\n' | sigil ask --json "summarize"
 ```
 
-## `sigil ask --json`
+```json
+{
+  "glyph": "?",
+  "base": "?",
+  "depth": 1,
+  "name": "inspect",
+  "prompt": "summarize",
+  "stdin": "hello\n",
+  "mode": "pipeline"
+}
+```
 
-Runs the Pi question pipeline and emits one JSON object instead of rendering
-Markdown through `glow`. `sigil ask --follow-up --json` uses the same shape with
-`follow_up: true`.
+## Shell Glyphs
 
-Stable fields:
+Glyphs are installed shell functions over the CLI runtime. Install them with
+`sigil install zsh` or `sigil install bash`.
 
-- `ok`: `true` when the stream renderer completed successfully.
-- `type`: currently always `"answer"`.
-- `question`: user-visible question text.
-- `prompt`: expanded prompt sent to Pi. For follow-ups, this includes context.
-- `follow_up`: whether this was invoked through `sigil ask --follow-up --json`.
-- `answer`: concatenated assistant text.
-- `answer_event_id`: event id for the stored answer, or `null` if no answer text
-  was emitted.
-- `tools`: ordered Pi tool trace events.
-- `malformed_events`: count of malformed Pi JSON event lines ignored.
+```text
+,    recommend one command or patch action
+,,   generate and run one command, or preview and confirm one patch
+,,,  create or resume a durable plan, one confirmed step at a time
+?    ask a fresh read/web question
+??   follow up on the previous question in the same shell session
+???  ask for a more exhaustive read-only answer
+```
+
+Examples:
+
+```sh
+, find files larger than 10 MB
+,, run the relevant tests
+,,, clean up this branch and verify it
+? why does git say this branch diverged?
+?? what is the safest next command?
+??? explain the options in detail
+```
+
+`,` prints a proposal. If the proposal is a command, the shell binding adds the
+command to shell history. `,,` runs command proposals through your shell. Patch
+proposals are previewed and require confirmation before apply. `,,,` persists a
+plan and executes at most one accepted step per invocation.
+
+To install bindings without glyphs:
+
+```sh
+sigil install zsh --no-glyphs
+```
 
 ## `sigil plan`
 
-`sigil plan show`, `sigil plan resume`, and `sigil plan abort` inspect and
-control the durable plan used by `,,,`. A plan resume executes at most one
-confirmed boxed step, then returns to the shell.
-- `security`: trust metadata applied to the answer and tool trace.
-
-Double comma is the comma execution route:
+Inspects or controls the durable plan used by `,,,`.
 
 ```sh
-sigil op ",," "find all Python files"
-git diff | sigil op ",," "run the relevant formatter"
-sigil op --dry-run ",," "find all Python files"
+sigil plan
+sigil plan show
+sigil plan resume
+sigil plan abort
+sigil plan show --json
 ```
 
-Current comma behavior:
+`resume` runs the next pending step only after confirmation. If there is no
+active plan, it exits with status `2`.
 
-- `,` asks for structured JSON with `kind`, `body`, and `explanation`, prints
-  the body followed by the explanation, and the shell binding adds command
-  proposals to shell history.
-- non-piped `,,` asks the model for one typed proposal. Command proposals execute
-  through the user's shell, emit command stdout, and forward command
-  stderr/status. Patch proposals are stored, previewed, and applied only after
-  confirmation.
-- piped comma routes preview stdin and ask before using it; piped `,,` also
-  shows generated commands and asks before execution.
-- `--dry-run` prints the generated command or patch without executing/applying it.
+JSON output for `show` is the stored plan object, or `null`:
 
-The policy classifier records broad action classes such as `execute`,
-`file_write`, `network`, `delete`, and `privileged` in the event log.
+```json
+{
+  "plan_id": "1a4e...",
+  "objective": "clean up this branch and verify it",
+  "status": "active",
+  "steps": [
+    {
+      "id": "1",
+      "title": "Inspect changes",
+      "command": "git status --short",
+      "explanation": "Check the worktree before editing.",
+      "status": "pending"
+    }
+  ]
+}
+```
+
+`abort --json` returns:
+
+```json
+{"aborted":true,"plan":{ "...": "..." }}
+```
 
 ## `sigil patch`
 
-Double comma patch proposals store unified diffs as the current session's patch
-preview before asking to apply them. The explicit patch commands remain available
-for reviewing or applying the latest stored preview later.
+Inspects, validates, or applies the latest patch preview stored by `,,`.
 
 ```sh
 sigil patch show
@@ -131,23 +254,25 @@ sigil patch check
 sigil patch apply --yes
 ```
 
-`show` prints the stored diff. `check` runs `git apply --check` in the working
-directory where the preview was created. `apply` requires `--yes` and then runs
-`git apply`; without `--yes`, it exits with status `2` and does not modify
-files.
+`show` prints the stored unified diff. `check` runs `git apply --check` in the
+working directory where the preview was created. `apply` requires `--yes` and
+then runs `git apply`; without `--yes`, it exits with status `2` and does not
+modify files.
 
-The JSON form is available for every subcommand:
+JSON output for `check` and `apply`:
 
-```sh
-sigil patch show --json
-sigil patch check --json
-sigil patch apply --yes --json
+```json
+{
+  "ok": true,
+  "status": 0,
+  "command": ["git", "apply", "--check"],
+  "cwd": "/path/to/repo",
+  "stdout": "",
+  "stderr": ""
+}
 ```
 
-`check` and `apply` record audit events with the patch event id, command,
-status, cwd, and bounded stdout/stderr snippets.
-
-## `sigil events --json`
+## `sigil events`
 
 Shows recent records from the read-only global event log.
 
@@ -159,121 +284,140 @@ sigil events --json --raw
 sigil events list --json
 ```
 
-Without `--json`, each event is printed as a width-aligned activity feed:
+Without `--json`, each event is printed as a table:
 
 ```text
-time  id  action  trust  session  summary
+time      id        action      trust                session   summary
+12:34:56  7c0d5a11  ? question  web/read             2e9a0b3c  what changed?
 ```
 
-`action` combines the route glyph and lifecycle event, for example `? inspect`,
-`,, executed`, or `,, patch check`. The JSON form returns the same summary
-fields plus the full event id, cwd, raw type, raw glyph, and a ready-to-run
-`lineage` command. Use `--raw --json` when you need exact stored event payloads.
-The explicit `list` subcommand is an alias for the default `sigil events` view.
+The summary JSON form returns:
 
-## `sigil events lineage --json`
+```json
+[
+  {
+    "id": "7c0d5a11-...",
+    "short_id": "7c0d5a11",
+    "time": 1760000000.0,
+    "time_label": "12:34:56",
+    "type": "question",
+    "glyph": "?",
+    "action": "? question",
+    "trust": "web/read",
+    "session": "2e9a0b3c-...",
+    "short_session": "2e9a0b3c",
+    "cwd": "/path/to/repo",
+    "summary": "what changed?",
+    "lineage": "sigil events lineage 7c0d5a11-..."
+  }
+]
+```
 
-Inspects the read-only global event log and returns the selected event plus the
-transitive input events it inherited from.
+Use `--raw --json` to return exact stored event payloads.
+
+## `sigil events lineage`
+
+Shows the selected event and the transitive input events it inherited from.
 
 ```sh
 sigil events lineage
-sigil events lineage <event-id>
-sigil events lineage <event-id> --json
+sigil events lineage 7c0d5a11-...
+sigil events lineage 7c0d5a11-... --json
 ```
 
 When no event id is provided, Sigil uses the latest event from the current
-session, falling back to the latest global event. The JSON form returns:
+session, falling back to the latest global event.
 
-- `event_id`: selected event id.
-- `nodes`: ordered lineage nodes starting with the selected event.
-- `nodes[].depth`: distance from the selected event.
-- `nodes[].event`: normalized event payload with trust metadata.
-- `missing_inputs`: input ids referenced by events but absent from the log.
+JSON output:
 
-## `sigil session --json`
+```json
+{
+  "event_id": "7c0d5a11-...",
+  "nodes": [
+    {
+      "id": "7c0d5a11-...",
+      "depth": 0,
+      "event": { "type": "question", "glyph": "?" }
+    }
+  ],
+  "missing_inputs": []
+}
+```
 
-`session` has four JSON forms:
+## `sigil session`
+
+Inspects or clears current shell-session state.
 
 ```sh
+sigil session show
+sigil session path
+sigil session list
+sigil session clear
 sigil session show --json
-sigil session path --json
-sigil session list --json
-sigil session clear --json
 ```
 
-`show` returns the current session id, path, and parsed continuity files.
-`path` returns the global state path, current session path, session id, and
-global event log path. `list` returns known session directories, files present in
-each, and the latest event cwd/type/time when available. `clear` returns the
+`show --json` returns the current session id, session path, and parsed
+continuity files:
+
+```json
+{
+  "session_id": "2e9a0b3c-...",
+  "path": "/Users/me/.sigil/sessions/2e9a0b3c-...",
+  "files": {
+    "last-question.jsonl": [],
+    "last-tools.jsonl": [],
+    "last-failure.json": null,
+    "last-patch.json": null,
+    "last-plan.jsonl": [],
+    "recent-turns.jsonl": []
+  }
+}
+```
+
+`path --json` returns:
+
+```json
+{
+  "state": "/Users/me/.sigil",
+  "session": "/Users/me/.sigil/sessions/2e9a0b3c-...",
+  "session_id": "2e9a0b3c-...",
+  "events": "/Users/me/.sigil/events.jsonl"
+}
+```
+
+`list --json` returns known session directories, file names present in each
+session, and latest event metadata when available. `clear --json` returns the
 session files removed.
-
-A session is one terminal shell by default. Installed Bash and zsh bindings set
-`SIGIL_SESSION_ID` once when the shell starts, so separate terminal windows or
-tabs keep separate `last-*` continuity. Override `SIGIL_SESSION_ID` or
-`SIGIL_SESSION_DIR` only when you intentionally want to share or pin a session.
-
-## Optional Glyph Aliases
-
-Glyphs are a shell alias layer over the CLI runtime. Installed shell bindings
-enable them by default; use `sigil install <shell> --no-glyphs` for a long-form
-only setup.
-
-```text
-,   -> sigil op ","
-,,  -> sigil op ",,"
-,,, -> sigil op ",,,"   durable plan stepper
-?   -> sigil op "?"
-??  -> sigil op "??"
-??? -> sigil op "???"
-```
-
-## Hidden plumbing commands
-
-These commands are intentionally not shown in top-level help and are not stable
-user-facing API:
-
-- `sigil render-pi-stream`
-- `sigil record-failure`
-- `sigil op`
-
-They exist so shell bindings can keep a small, explicit boundary with the Python
-runtime.
-
-`record-failure` accepts optional `--stdout-snippet` and `--stderr-snippet`
-fields. The passive shell hooks cannot safely capture arbitrary command output
-by themselves, but callers that already have bounded snippets can pass them
-through this stable hidden boundary.
 
 ## `sigil install`
 
-Installs or updates a shell binding from the installed Sigil package and adds an
-idempotent source block to the shell rc file.
+Installs or updates a shell binding and adds an idempotent source block to the
+shell rc file.
 
 ```sh
 sigil install zsh
 sigil install bash
-```
-
-Useful options:
-
-```sh
+sigil install zsh --no-glyphs
 sigil install bash --install-dir ~/.sigil/shell/bash --rc ~/.bashrc
 sigil install zsh --json
 ```
 
-The JSON form reports:
+JSON output:
 
-- `shell`: installed shell binding.
-- `binding_path`: binding file written by Sigil.
-- `rc_path`: rc file inspected or updated.
-- `source_path`: bundled binding source copied from.
-- `wrote_rc`: whether Sigil appended a source block.
-- `glyphs_enabled`: whether the rc snippet enables punctuation aliases.
+```json
+{
+  "shell": "zsh",
+  "binding_path": "/Users/me/.sigil/shell/zsh/sigil.zsh",
+  "rc_path": "/Users/me/.zshrc",
+  "source_path": "/path/to/package/sigil/shell/zsh/sigil.zsh",
+  "wrote_rc": true,
+  "glyphs_enabled": true
+}
+```
 
 ## `sigil doctor`
 
-Checks local install readiness:
+Checks whether the local install is ready.
 
 ```sh
 sigil doctor
@@ -284,14 +428,55 @@ sigil doctor --json
 Doctor checks:
 
 - `sigil`, `glow`, and `pi` are on `PATH`.
-- the local model endpoint is reachable from `QWEN_URL`, or the default local
-  endpoint.
+- The local model endpoint is reachable from `QWEN_URL`, or from the default
+  local endpoint.
 - `QWEN_MODEL` is set when the endpoint needs an explicit model name.
 - Sigil's state directory is writable.
-- the selected shell is supported.
-- the selected shell binding is installed.
-- the current environment looks like it inherited a loaded binding.
+- The selected shell is supported.
+- The selected shell binding is installed.
+- The current environment looks like it inherited a loaded binding.
 
-The JSON form returns an ordered list of checks with `name`, `status`, `detail`,
-and optional `hint`. `doctor` exits nonzero when any check has `status: "fail"`;
-warnings do not change the exit code.
+JSON output is an ordered list:
+
+```json
+[
+  {
+    "name": "executable:sigil",
+    "status": "ok",
+    "detail": "/Users/me/.local/bin/sigil",
+    "hint": null
+  }
+]
+```
+
+`doctor` exits nonzero when any check has `status: "fail"`. Warnings do not
+change the exit code.
+
+## State and Environment
+
+By default, Sigil writes state under `~/.sigil/`.
+
+```text
+events.jsonl                              global event log
+sessions/<session-id>/last-failure.json   latest failed shell command
+sessions/<session-id>/last-patch.json     latest patch preview
+sessions/<session-id>/last-plan.jsonl     durable plan snapshots
+sessions/<session-id>/last-question.jsonl same-session question transcript
+sessions/<session-id>/last-tools.jsonl    latest Pi tool trace
+sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
+```
+
+Environment variables:
+
+```sh
+SIGIL_STATE_DIR=/custom/state/root
+SIGIL_SESSION_ID=my-shell-session
+SIGIL_SESSION_DIR=/custom/session/root
+SIGIL_ENABLE_GLYPHS=0
+SIGIL_BIN=/path/to/sigil
+SIGIL_GLOW_STYLE=notty
+SIGIL_GLOW_WIDTH=88
+QWEN_URL=http://127.0.0.1:8080/v1/chat/completions
+QWEN_MODEL=qwen3.6-27b-q8-local
+QWEN_MODEL_PATH=/path/to/model.gguf
+```

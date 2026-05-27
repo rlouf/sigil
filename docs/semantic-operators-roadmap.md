@@ -1,74 +1,83 @@
-# Semantic Operators Roadmap
+# Glyph Reference
 
-Sigil now has two operator families:
-
-```text
-,    propose one concrete command or patch action
-,,   execute/apply one typed proposal
-,,,  durable plan stepper, one confirmed boxed step at a time
-
-?    ask/inspect through the read/web route
-??   follow up through the same read/web route
-???  exhaustive read-only answer through the same route
-```
-
-The previous `^` repair surface is intentionally gone. Repair is context, not a
-separate operator family: comma proposals can read the last failure, stdin, cwd,
-and readable file targets, then choose `kind=command` or `kind=patch`.
-
-## Current Stable State
-
-Implemented:
-
-- `src/sigil/cli.py` owns the shell-agnostic CLI boundary.
-- `src/sigil/operators.py` parses `?` and `,` glyphs and runs typed comma
-  proposals.
-- `src/sigil/question.py` owns the Pi-backed read/web question path.
-- `src/sigil/plans.py` owns the durable `,,,` plan stepper.
-- `src/sigil/failure.py` still records last-failed-command context for comma
-  proposals.
-- `src/sigil/security.py` owns the trust lattice.
-- `src/sigil/state.py` and `src/sigil/session.py` provide durable event and
-  session state.
-- `shell/zsh/sigil.zsh` and `shell/bash/sigil.bash` expose only comma and
-  question glyphs.
-
-## Operator Contracts
-
-Question operators are read-only:
+Sigil's shell glyphs are optional shortcuts installed by `sigil install zsh` or
+`sigil install bash`. They are current user-facing shell APIs.
 
 ```text
-?    fresh read/web answer
-??   continuation with same-session transcript
-???  exhaustive read/web answer
+,    recommend one command or patch action
+,,   generate and run one command, or preview and confirm one patch
+,,,  create or resume a durable plan, one confirmed step at a time
+
+?    ask a fresh read/web question
+??   follow up on the previous question in the same shell session
+???  ask for a more exhaustive read-only answer
 ```
 
-Comma operators are proposal/action routes:
+## Comma Routes
 
-```text
-,    structured JSON: {kind, body, explanation}
-,,   structured JSON: {kind, body}; execute commands, preview+confirm patches
-,,,  durable plan state; execute at most one confirmed step per invocation
+Use `,` when you want a proposal:
+
+```sh
+, run the relevant tests
+, summarize what command I should run next
+git diff --name-only | , choose a focused test command
 ```
 
-Piped input is treated as intentional context only after confirmation. Non-piped
-`,,` may execute a generated command immediately. Patch proposals are always
-previewed and confirmed before file writes.
+`comma` prints one proposal. If the proposal is a command, the shell binding
+adds it to shell history so you can recall, edit, and run it yourself.
 
-## Remaining Work
+Use `,,` when you want Sigil to take one action:
 
-Near-term hardening:
+```sh
+,, run the relevant formatter
+,, check whether this branch builds
+```
 
-- Keep prompt/schema wording aligned with the typed proposal contract.
-- Improve patch previews when a model returns a patch-like plan instead of a
-  valid unified diff.
-- Make `???` visibly distinct in the question prompt and event summary.
-- Keep shell history behavior limited to command proposals from `,`.
+Command proposals run through your shell. Patch proposals are stored, shown as a
+preview, and applied only after confirmation.
 
-Future autonomy:
+Use `,,,` for bounded multi-step work:
 
-- Expand `,,,` with bounded plan options such as skip/edit/quit and
-  plan-scoped trust windows.
-- Keep all autonomy durable in state files so work can resume across terminals.
-- Preserve the rule that read/web output never becomes an executable proposal
-  without fresh comma-route intent.
+```sh
+,,, clean up this branch and verify it
+sigil plan show
+sigil plan resume
+sigil plan abort
+```
+
+The plan is durable in the current shell session. Each invocation runs at most
+one accepted step.
+
+## Question Routes
+
+Use `?` for a fresh answer:
+
+```sh
+? why does git say this branch diverged?
+git diff | ? review risky changes
+```
+
+Use `??` to continue the previous question transcript from the same terminal:
+
+```sh
+?? what is the safest next command?
+```
+
+Use `???` when you want a more exhaustive read-only answer:
+
+```sh
+??? explain the release options and their risks
+```
+
+Question routes are read-only. They do not execute commands or apply patches.
+
+## Piped Input
+
+Piped input is previewed before it can influence a comma or question route:
+
+```sh
+git diff | ? review this change
+git diff --name-only | , pick the most relevant tests
+```
+
+If you decline the preview, Sigil exits without using the input.
