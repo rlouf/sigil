@@ -10,7 +10,7 @@ Generate commands:
 
 ```sh
 sigil command "find large files"
-sigil command --select "show modified Python files"
+sigil command "show modified Python files"
 , run the relevant tests
 ```
 

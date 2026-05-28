@@ -85,7 +85,6 @@ updates the binding without duplicating the rc block.
   and Pi-backed routes (default `http://127.0.0.1:8080/v1/chat/completions`)
 - `pi` for `?`, `??`, `???`, and `,,,`
 - `glow` for Markdown rendering, optional but recommended
-- `fzf` for `,` with `--select`, optional
 
 Useful environment variables:
 
@@ -218,7 +217,7 @@ For details, see [docs/security-lattice.md](docs/security-lattice.md).
 The glyphs are thin shell functions over a regular CLI:
 
 ```text
-sigil command [--select] [--json] [PROMPT]
+sigil command [--json] [PROMPT]
 sigil events [--limit N] [--json] [--raw]
 sigil events lineage [EVENT_ID] [--json]
 sigil session [show|list|clear] [--json]
@@ -231,7 +230,7 @@ Copy-pasteable examples:
 
 ```sh
 sigil command "find files over 10 MB in this repo excluding .git"
-sigil command --select "show the largest directories"
+sigil command "show the largest directories"
 git diff --name-only | sigil command "run the relevant tests"
 sigil status
 sigil events

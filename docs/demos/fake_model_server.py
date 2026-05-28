@@ -37,13 +37,11 @@ def completion_for(body: dict[str, Any]) -> dict[str, Any]:
     ) or {}
     properties = schema.get("properties") or {}
 
-    if "commands" in properties:
+    if "command" in properties and "note" in properties:
         command = command_for(text)
         content = {
-            "commands": [
-                {"command": command, "note": "Smallest useful next command."},
-                {"command": "git status --short", "note": "Inspect the working tree."},
-            ]
+            "command": command,
+            "note": "Smallest useful next command.",
         }
         return chat_response(json.dumps(content))
 

@@ -133,7 +133,7 @@ def cmd_command(
     if prompt is None:
         raise click.UsageError("PROMPT is required unless stdin is piped.")
 
-    proposal, security = generate(prompt)
+    proposal, _security = generate(prompt)
     if json_output:
         print_json_line({"prompt": prompt, "command": proposal})
         return 0

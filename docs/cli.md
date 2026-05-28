@@ -10,7 +10,7 @@ written to stdout.
 ## Top-Level Commands
 
 ```text
-sigil command [--select] [--json] [PROMPT]
+sigil command [--json] [PROMPT]
 sigil ask [--follow-up] [--json] [QUESTION]
 sigil act [show|resume|abort] [--json] [--verbose]
 sigil events [--limit N] [--json] [--raw]
@@ -26,7 +26,7 @@ Examples:
 
 ```sh
 sigil command "find large files"
-sigil command --select "show modified Python files"
+sigil command "show modified Python files"
 sigil ask "what changed in this repo?"
 sigil ask --follow-up "what should I test?"
 git diff | sigil ask "review risky changes"
@@ -39,17 +39,15 @@ sigil status
 
 ## `sigil command`
 
-Generates command candidates from a prompt.
+Generates one command proposal from a prompt.
 
 ```sh
 sigil command "find files over 10 MB"
-sigil command --select "show the largest directories"
+sigil command "show the largest directories"
 git diff --name-only | sigil command "run the relevant tests"
 ```
 
-Without `--select`, Sigil prints candidate commands to stdout, one per line.
-With `--select`, Sigil opens `fzf` when available and falls back to a numbered
-selector.
+Sigil prints the proposed command to stdout.
 
 When stdin is piped, Sigil uses the comma proposal route and asks before using
 the piped text.
@@ -61,15 +59,14 @@ sigil command --json "find Python tests"
 ```
 
 ```json
-{"prompt":"find Python tests","commands":[{"command":"find . -name 'test_*.py' -o -name '*_test.py'","note":"Finds common Python test filenames."}]}
+{"prompt":"find Python tests","command":{"command":"find . -name 'test_*.py' -o -name '*_test.py'","note":"Finds common Python test filenames."}}
 ```
 
 Stable fields:
 
 - `prompt`: prompt text.
-- `commands`: ordered candidate list.
-- `commands[].command`: directly runnable shell command.
-- `commands[].note`: short explanation from the model.
+- `command.command`: directly runnable shell command.
+- `command.note`: short explanation from the model.
 
 With piped stdin and `--json`, the current command emits pipeline metadata
 instead of calling the model:

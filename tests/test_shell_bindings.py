@@ -31,7 +31,6 @@ def make_stub(tmp: Path) -> Path:
             fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
             case "$*" in
-              "command --select hello") printf '%s\n' "echo generated" ;;
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "ask hello") printf '%s\n' "answer" ;;
               "op , hello") printf '%s\n%s\n' "echo recommended" "because it is safe" ;;
