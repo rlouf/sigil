@@ -20,7 +20,13 @@ from sigil.handoff import (
     record_bash_handoffs,
 )
 from sigil.pi_stream import should_color, stream_events
-from sigil.question import QUESTION_SYSTEM_PROMPT, ask, renderer_command
+from sigil.question import (
+    QUESTION_SYSTEM_PROMPT,
+    ask,
+    continuation_prompt,
+    discussion_turns,
+    renderer_command,
+)
 from sigil.security import (
     SecurityViolation,
     inherit_security,
@@ -445,7 +451,7 @@ def test_writers_normalize_metadata() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
-def test_question_and_follow_up_record_web_taint() -> None:
+def test_question_routes_record_source_specific_taint() -> None:
 
     class FakeProc:
         def __init__(self, stdout: StringIO | None = None) -> None:
@@ -473,49 +479,33 @@ def test_question_and_follow_up_record_web_taint() -> None:
                     assert ask("what is sigil?", json_output=True) == 0
             fresh_turn = read_jsonl("last-question.jsonl")[0]
             assert fresh_turn["glyph"] == "?"
-            assert fresh_turn["integrity"] == "web"
+            assert fresh_turn["integrity"] == "local_model"
             assert fresh_turn["capability"] == "read"
-            assert fresh_turn["taint"] == ["web"]
+            assert fresh_turn["taint"] == ["model"]
             assert fresh_turn["provisional"]
-            write_jsonl(
-                "last-question.jsonl",
-                [
-                    {
-                        "role": "user",
-                        "content": "what is sigil?",
-                        "event_id": "question-event",
-                        "glyph": "?",
-                        "integrity": "web",
-                        "capability": "read",
-                        "taint": ["web"],
-                        "provisional": True,
-                    },
-                    {
-                        "role": "assistant",
-                        "content": "answer",
-                        "event_id": "answer-event",
-                        "glyph": "?",
-                        "integrity": "web",
-                        "capability": "read",
-                        "taint": ["web"],
-                        "provisional": True,
-                    },
-                ],
-            )
             with patch("sigil.question.ensure_model_for_pi", return_value=True):
                 with patch("sigil.question.subprocess.Popen", side_effect=fake_popen):
-                    assert ask("continue", follow_up=True, json_output=True) == 0
-            follow_up_turn = read_jsonl("last-question.jsonl")[-1]
-            assert follow_up_turn["glyph"] == "??"
-            assert follow_up_turn["inputs"] == ["question-event", "answer-event"]
-            assert follow_up_turn["integrity"] == "web"
-            assert follow_up_turn["capability"] == "read"
-            assert follow_up_turn["taint"] == ["web"]
-            assert follow_up_turn["provisional"]
+                    assert (
+                        ask(
+                            "what is sigil on the web?",
+                            glyph="??",
+                            tools="read,web_search",
+                            use_web=True,
+                            json_output=True,
+                        )
+                        == 0
+                    )
+            web_turn = read_jsonl("last-question.jsonl")[-1]
+            assert web_turn["glyph"] == "??"
+            assert web_turn["integrity"] == "web"
+            assert web_turn["capability"] == "read"
+            assert web_turn["taint"] == ["web"]
+            assert web_turn["provisional"]
             pi_calls = [cmd for cmd in popen_calls if cmd[0] == "pi"]
-            assert pi_calls
+            assert len(pi_calls) == 2
+            assert pi_calls[0][pi_calls[0].index("--tools") + 1] == "read"
+            assert pi_calls[1][pi_calls[1].index("--tools") + 1] == "read,web_search"
             for cmd in pi_calls:
-                assert cmd[cmd.index("--tools") + 1] == "read,web_search"
                 assert "--extension" not in cmd
                 system_prompt = cmd[cmd.index("--append-system-prompt") + 1]
                 assert system_prompt == QUESTION_SYSTEM_PROMPT
@@ -1034,7 +1024,7 @@ def test_fresh_ask_why_failed_includes_last_failure_context() -> None:
     assert "AssertionError: no" in prompt
 
 
-def test_follow_up_ask_does_not_include_recent_turns_context() -> None:
+def test_explicit_follow_up_ask_does_not_include_recent_turns_context() -> None:
 
     class FakeProc:
         def __init__(self, stdout: StringIO | None = None) -> None:
@@ -1068,7 +1058,17 @@ def test_follow_up_ask_does_not_include_recent_turns_context() -> None:
                 patch("sigil.question.ensure_model_for_pi", return_value=True),
                 patch("sigil.question.subprocess.Popen", side_effect=fake_popen),
             ):
-                assert ask("follow up", follow_up=True, json_output=True) == 0
+                assert (
+                    ask(
+                        continuation_prompt("follow up", discussion_turns()),
+                        glyph="??",
+                        tools="read,web_search",
+                        use_web=True,
+                        append_transcript=True,
+                        json_output=True,
+                    )
+                    == 0
+                )
 
     pi_cmd = next(cmd for cmd in popen_calls if cmd[0] == "pi")
     prompt = pi_cmd[-1]

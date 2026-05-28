@@ -14,15 +14,20 @@ from .security import create_trust_metadata
 from .state import append_event, append_jsonl, read_jsonl
 from .tty import confirm_on_tty
 
-OperatorBase = Literal["?", ","]
+OperatorBase = Literal["?", ",", "@"]
 
 OPERATOR_NAMES: dict[OperatorBase, str] = {
-    "?": "inspect",
-    ",": "recommend",
+    "?": "answer",
+    ",": "propose",
+    "@": "goal",
 }
 
 SUPPORTED_OPERATORS = frozenset(OPERATOR_NAMES)
-MAX_OPERATOR_DEPTH = 3
+OPERATOR_MAX_DEPTHS: dict[OperatorBase, int] = {
+    "?": 2,
+    ",": 3,
+    "@": 2,
+}
 MAX_STDIN_CHARS = 120_000
 MAX_EVENT_OUTPUT_CHARS = 4000
 MAX_TARGET_FILES = 16
@@ -153,8 +158,10 @@ def parse_operator_token(token: str) -> tuple[OperatorBase, int]:
     operator = cast(OperatorBase, base)
     if any(char != base for char in token):
         raise ValueError(f"operator token must repeat one glyph: {token}")
-    if len(token) > MAX_OPERATOR_DEPTH:
-        raise ValueError("operator depth must be 1, 2, or 3")
+    max_depth = OPERATOR_MAX_DEPTHS[operator]
+    if len(token) > max_depth:
+        allowed = " or ".join(str(depth) for depth in range(1, max_depth + 1))
+        raise ValueError(f"{base} operator depth must be {allowed}")
     return operator, len(token)
 
 

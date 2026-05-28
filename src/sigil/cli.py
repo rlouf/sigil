@@ -29,7 +29,7 @@ from .operators import create_invocation, run_invocation
 from .acts import abort_active_act, last_act, print_act, run_act_stepper
 from .policy import ExecutionPolicy
 from .pi_stream import stream_events
-from .question import ask
+from .question import ask, continuation_prompt, discussion_turns
 from .session import (
     clear_current_session,
     current_session_snapshot,
@@ -149,9 +149,17 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
     """Answer a shell question, optionally continuing the prior answer."""
     stdin_text = piped_stdin_text()
     if stdin_text is not None:
+        prompt = question_with_stdin(question or "", stdin_text)
         if follow_up:
-            prompt = question_with_stdin(question or "", stdin_text)
-            return ask(prompt, follow_up=True, json_output=json_output)
+            prompt = continuation_prompt(prompt, discussion_turns())
+            return ask(
+                prompt,
+                glyph="??",
+                tools="read,web_search",
+                use_web=True,
+                append_transcript=True,
+                json_output=json_output,
+            )
         return run_stream_operator(
             "?",
             prompt=question or "",
@@ -160,7 +168,23 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
         )
     if question is None:
         raise click.UsageError("QUESTION is required unless stdin is piped.")
-    return ask(question, follow_up=follow_up, json_output=json_output)
+    if follow_up:
+        prompt = continuation_prompt(question, discussion_turns())
+        return ask(
+            prompt,
+            glyph="??",
+            tools="read,web_search",
+            use_web=True,
+            append_transcript=True,
+            json_output=json_output,
+        )
+    return ask(
+        question,
+        glyph="?",
+        tools="read",
+        use_web=False,
+        json_output=json_output,
+    )
 
 
 def question_with_stdin(question: str, stdin_text: str) -> str:
@@ -231,12 +255,17 @@ def cmd_op(
 
     if invocation.base == "?":
         if dry_run:
+            tools = "read+web" if invocation.depth == 2 else "read"
             print(
-                "sigil op: ? dry-run: would call read+web question route",
+                f"sigil op: {invocation.glyph} dry-run: would call {tools} question route",
                 file=sys.stderr,
             )
             return 0
         return run_question_operator(invocation)
+
+    if invocation.base == "@":
+        print("sigil op: @ goal routes are not implemented yet", file=sys.stderr)
+        raise click.exceptions.Exit(1)
 
     try:
         result = run_invocation(
@@ -296,19 +325,21 @@ def confirm_piped_input(stdin_text: str) -> bool:
 
 
 def run_question_operator(invocation: object) -> int:
-    """Run question glyphs through the web-authorized ask route."""
+    """Run question glyphs through explicitly authorized answer routes."""
     question = str(getattr(invocation, "prompt", "") or "")
     stdin_text = str(getattr(invocation, "stdin", "") or "")
     depth = int(getattr(invocation, "depth", 0) or 0)
+    glyph = str(getattr(invocation, "glyph", "?") or "?")
     if stdin_text:
         question = question_with_stdin(question, stdin_text)
     if not question:
         question = "Answer the current shell question."
-    if depth == 3:
-        question = "Give an exhaustive read-only answer.\n\n" + question
+    use_web = depth == 2
     return ask(
         question,
-        follow_up=depth >= 2,
+        glyph=glyph,
+        tools="read,web_search" if use_web else "read",
+        use_web=use_web,
     )
 
 

@@ -1,8 +1,8 @@
-"""Question and follow-up flow for the web-authorized ask route.
+"""Question flow for read-only shell answer routes.
 
 This module owns discussion continuity. A fresh `sigil ask` resets the session
-question transcript; `??` expands the prompt from that transcript before calling
-Pi.
+question transcript. Glyph routes use explicit source authorization: `?` can
+read local context, and `??` can also search the web.
 """
 
 from __future__ import annotations
@@ -13,12 +13,7 @@ import subprocess
 import sys
 
 from .ansi import MUTED, RESET
-from .security import (
-    inherit_security,
-    inherited_label,
-    create_trust_metadata,
-    normalize_trust_record,
-)
+from .security import create_trust_metadata
 from .model import ensure_model_for_pi
 from .session import recent_turns_context
 from .state import append_event, append_jsonl, read_jsonl, write_jsonl
@@ -48,7 +43,7 @@ def renderer_command() -> list[str]:
 
 
 def discussion_turns() -> list[dict[str, object]]:
-    """Load user/assistant turns that should be visible to `??`."""
+    """Load user/assistant turns for explicit follow-up commands."""
     return [
         turn
         for turn in read_jsonl("last-question.jsonl")
@@ -128,42 +123,31 @@ def ask(
     question: str,
     stream_filter: str | None = None,
     *,
-    follow_up: bool = False,
+    glyph: str = "?",
+    tools: str = "read",
+    use_web: bool = False,
+    append_transcript: bool = False,
     json_output: bool = False,
 ) -> int:
     """Run Pi for a question while recording transcript and tool trace state."""
     if not ensure_model_for_pi():
         return 1
 
-    previous_turns = discussion_turns() if follow_up else []
-    if follow_up:
-        prompt = continuation_prompt(question, previous_turns)
-    else:
-        prompt = prepend_recent_turns(question)
-    if follow_up:
-        input_records = [normalize_trust_record(turn) for turn in previous_turns]
-        security = inherit_security(
-            glyph="??",
-            input_records=input_records,
-            capability="read",
-            extra_taint=["web"],
-            provisional=True,
-        )
-    else:
-        security = create_trust_metadata(
-            glyph="?",
-            integrity="web",
-            capability="read",
-            taint=["web"],
-            provisional=True,
-            fresh_human=True,
-        )
+    prompt = question if append_transcript else prepend_recent_turns(question)
+    security = create_trust_metadata(
+        glyph=glyph,
+        integrity="web" if use_web else "local_model",
+        capability="read",
+        taint=["web"] if use_web else ["model"],
+        provisional=True,
+        fresh_human=True,
+    )
     question_event = append_event(
         {
             "type": "question",
             "question": question,
             "prompt": prompt,
-            "follow_up": follow_up,
+            "follow_up": append_transcript,
             **security,
         }
     )
@@ -171,25 +155,20 @@ def ask(
         "role": "user",
         "content": question,
         "prompt": prompt,
-        "follow_up": follow_up,
+        "follow_up": append_transcript,
         "event_id": question_event["id"],
         **security,
     }
-    if follow_up:
+    if append_transcript:
         append_jsonl("last-question.jsonl", question_turn)
     else:
         write_jsonl("last-question.jsonl", [question_turn])
     write_jsonl("last-tools.jsonl", [])
-    if follow_up:
-        print(
-            f"{MUTED}❯ pi ??    · inherited: {inherited_label(security)} · provisional{RESET}",
-            file=sys.stderr,
-        )
-    else:
-        print(
-            f"{MUTED}❯ pi ?     · read+web · no execute path{RESET}",
-            file=sys.stderr,
-        )
+    tool_label = "read+web" if use_web else "read"
+    print(
+        f"{MUTED}❯ pi {glyph:<5} · {tool_label} · no execute path{RESET}",
+        file=sys.stderr,
+    )
 
     pi_cmd = [
         "pi",
@@ -198,7 +177,7 @@ def ask(
         "json",
         "--no-session",
         "--tools",
-        "read,web_search",
+        tools,
     ]
     pi_cmd.extend(
         [
@@ -227,7 +206,7 @@ def ask(
         "SIGIL_SECURITY_INPUTS": question_event["id"] or ",".join(security["inputs"]),
         "SIGIL_QUESTION": question,
         "SIGIL_PROMPT": prompt,
-        "SIGIL_FOLLOW_UP": "1" if follow_up else "0",
+        "SIGIL_FOLLOW_UP": "1" if append_transcript else "0",
     }
 
     pi_proc = subprocess.Popen(pi_cmd, stdout=subprocess.PIPE)

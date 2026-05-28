@@ -36,10 +36,11 @@ def read_global_events(root: Path) -> list[dict[str, object]]:
     [
         ("?", "?", 1),
         ("??", "?", 2),
-        ("???", "?", 3),
         (",", ",", 1),
         (",,", ",", 2),
         (",,,", ",", 3),
+        ("@", "@", 1),
+        ("@@", "@", 2),
     ],
 )
 def test_parse_operator_token_repetition(
@@ -52,7 +53,22 @@ def test_parse_operator_token_repetition(
 
 @pytest.mark.parametrize(
     "token",
-    ["", "?^", "?:", "abc", ":", "^", "^^", "^^^", "????", ",,,,", "^^^^"],
+    [
+        "",
+        "?^",
+        "?:",
+        "abc",
+        ":",
+        "^",
+        "^^",
+        "^^^",
+        "???",
+        "????",
+        ",,,,",
+        "@@@",
+        "@@@@",
+        "^^^^",
+    ],
 )
 def test_parse_operator_token_rejects_invalid_tokens(token: str) -> None:
     with pytest.raises(ValueError):
@@ -68,7 +84,7 @@ def test_create_invocation_names_operator() -> None:
     )
     assert invocation.base == "?"
     assert invocation.depth == 2
-    assert invocation.name == "inspect"
+    assert invocation.name == "answer"
     assert invocation.prompt == "review risky changes"
     assert invocation.stdin == "diff"
     assert invocation.mode == "pipeline"
@@ -86,7 +102,7 @@ def test_op_cli_json_reports_parsed_invocation() -> None:
         "glyph": "??",
         "base": "?",
         "depth": 2,
-        "name": "inspect",
+        "name": "answer",
         "prompt": "review risky changes",
         "stdin": "diff --git a/file b/file\n",
         "mode": "pipeline",
@@ -103,7 +119,7 @@ def test_op_cli_json_does_not_run_operator() -> None:
     assert result.exit_code == 0, result.output
 
 
-def test_op_cli_runs_piped_question_operator_through_web_route() -> None:
+def test_op_cli_runs_piped_double_question_operator_through_web_route() -> None:
     calls = []
 
     def fake_ask(*args: object, **kwargs: object) -> int:
@@ -123,12 +139,12 @@ def test_op_cli_runs_piped_question_operator_through_web_route() -> None:
     assert calls == [
         (
             ("review risky changes\n\nPiped input:\ndiff --git a/file b/file\n",),
-            {"follow_up": True},
+            {"glyph": "??", "tools": "read,web_search", "use_web": True},
         )
     ]
 
 
-def test_question_operators_share_web_route_for_fresh_and_follow_up() -> None:
+def test_question_operators_use_source_specific_routes() -> None:
     calls = []
 
     def fake_ask(*args: object, **kwargs: object) -> int:
@@ -142,28 +158,20 @@ def test_question_operators_share_web_route_for_fresh_and_follow_up() -> None:
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
     assert calls == [
-        (("first question",), {"follow_up": False}),
-        (("second question",), {"follow_up": True}),
+        (("first question",), {"glyph": "?", "tools": "read", "use_web": False}),
+        (
+            ("second question",),
+            {"glyph": "??", "tools": "read,web_search", "use_web": True},
+        ),
     ]
 
 
-def test_triple_question_uses_exhaustive_web_route() -> None:
-    calls = []
-
-    def fake_ask(*args: object, **kwargs: object) -> int:
-        calls.append((args, kwargs))
-        return 0
-
-    with patch("sigil.cli.ask", side_effect=fake_ask):
+def test_triple_question_is_rejected() -> None:
+    with patch("sigil.cli.ask", side_effect=AssertionError("no ask")):
         result = CliRunner().invoke(cli, ["op", "???", "explain", "this"])
 
-    assert result.exit_code == 0, result.output
-    assert calls == [
-        (
-            ("Give an exhaustive read-only answer.\n\nexplain this",),
-            {"follow_up": True},
-        )
-    ]
+    assert result.exit_code == 2
+    assert "? operator depth must be 1 or 2" in result.output
 
 
 def test_op_cli_runs_piped_recommend_operator() -> None:
@@ -433,7 +441,7 @@ def test_op_cli_dry_run_question_does_not_call_web_route() -> None:
         result = CliRunner().invoke(cli, ["op", "--dry-run", "?", "status"])
 
     assert result.exit_code == 0
-    assert "read+web question route" in result.output
+    assert "read question route" in result.output
 
 
 def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
@@ -741,7 +749,10 @@ def test_op_cli_sends_piped_question_without_confirmation() -> None:
 
     assert result.exit_code == 0
     assert calls == [
-        (("review\n\nPiped input:\ndiff\n",), {"follow_up": False}),
+        (
+            ("review\n\nPiped input:\ndiff\n",),
+            {"glyph": "?", "tools": "read", "use_web": False},
+        ),
     ]
 
 
@@ -764,7 +775,16 @@ def test_ask_follow_up_sends_piped_input_without_confirmation() -> None:
 
     assert result.exit_code == 0
     assert calls == [
-        (("review\n\nPiped input:\ndiff\n",), {"follow_up": True, "json_output": False})
+        (
+            ("review\n\nPiped input:\ndiff\n",),
+            {
+                "glyph": "??",
+                "tools": "read,web_search",
+                "use_web": True,
+                "append_transcript": True,
+                "json_output": False,
+            },
+        )
     ]
 
 
@@ -787,7 +807,16 @@ def test_ask_follow_up_sends_confirmed_piped_input_to_web_route() -> None:
 
     assert result.exit_code == 0
     assert calls == [
-        (("review\n\nPiped input:\ndiff\n",), {"follow_up": True, "json_output": False})
+        (
+            ("review\n\nPiped input:\ndiff\n",),
+            {
+                "glyph": "??",
+                "tools": "read,web_search",
+                "use_web": True,
+                "append_transcript": True,
+                "json_output": False,
+            },
+        )
     ]
 
 
@@ -893,8 +922,13 @@ def test_verb_commands_run_piped_stream_operators() -> None:
     assert command_result.exit_code == 0, command_result.output
     assert ask_result.output == ""
     assert command_result.output == "stream result\nlocal · read-only\nbecause stdin\n"
-    assert ask_calls == [(("review\n\nPiped input:\ndiff\n",), {"follow_up": False})]
-    assert "Operator: , (recommend)" in json_calls[0][1]
+    assert ask_calls == [
+        (
+            ("review\n\nPiped input:\ndiff\n",),
+            {"glyph": "?", "tools": "read", "use_web": False},
+        )
+    ]
+    assert "Operator: , (propose)" in json_calls[0][1]
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:
