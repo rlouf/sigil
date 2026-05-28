@@ -1438,6 +1438,39 @@ def test_pi_stream_shows_nested_tool_call_updates() -> None:
                     os.environ[key] = value
 
 
+def test_pi_stream_shows_tool_start_without_detail() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = {
+            key: os.environ.get(key)
+            for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID", "SIGIL_CAPTURE_TRACE"]
+        }
+        os.environ["SIGIL_STATE_DIR"] = tmp
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        os.environ["SIGIL_CAPTURE_TRACE"] = "1"
+        try:
+            stdin = StringIO(
+                json.dumps(
+                    {
+                        "type": "tool_execution_start",
+                        "toolName": "read",
+                        "args": {},
+                    }
+                )
+                + "\n"
+            )
+            stderr = StringIO()
+            assert stream_events(stdin=stdin, stdout=StringIO(), stderr=stderr) == 0
+
+            assert "❯ read" in stderr.getvalue()
+            assert read_jsonl("last-tools.jsonl")[0]["tool"] == "read"
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
 def test_pi_stream_compact_mode_suppresses_prose_and_summarizes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {

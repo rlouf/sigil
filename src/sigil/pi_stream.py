@@ -334,18 +334,11 @@ def stream_events(
                     print(status, file=stderr, flush=True)
                 elif not json_output:
                     status = f"❯ {tool}  {detail}" if detail else f"❯ {tool}"
-                    if detail:
-                        print(
-                            muted(status, enabled=color_enabled),
-                            file=stderr,
-                            flush=True,
-                        )
-                    elif interactive_stderr:
-                        print(
-                            muted(status, enabled=color_enabled),
-                            file=stderr,
-                            flush=True,
-                        )
+                    print(
+                        muted(status, enabled=color_enabled),
+                        file=stderr,
+                        flush=True,
+                    )
                 continue
 
             tool_end = tool_end_event(event)
