@@ -1353,6 +1353,91 @@ def test_pi_stream_non_tty_status_has_no_control_codes_or_color() -> None:
                     os.environ[key] = value
 
 
+def test_pi_stream_shows_function_call_events() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = {
+            key: os.environ.get(key)
+            for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID", "SIGIL_CAPTURE_TRACE"]
+        }
+        os.environ["SIGIL_STATE_DIR"] = tmp
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        os.environ["SIGIL_CAPTURE_TRACE"] = "1"
+        try:
+            stdin = StringIO(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "type": "function_call",
+                                "name": "web_search",
+                                "arguments": json.dumps({"query": "sigil ???"}),
+                            }
+                        ),
+                        json.dumps(
+                            {
+                                "type": "function_call_result",
+                                "name": "web_search",
+                            }
+                        ),
+                    ]
+                )
+                + "\n"
+            )
+            stderr = StringIO()
+            assert stream_events(stdin=stdin, stdout=StringIO(), stderr=stderr) == 0
+            status = stderr.getvalue()
+            tools = read_jsonl("last-tools.jsonl")
+
+            assert "web_search" in status
+            assert "sigil ???" in status
+            assert [event["type"] for event in tools] == ["tool_start", "tool_end"]
+            assert tools[0]["tool"] == "web_search"
+            assert tools[0]["args"] == {"query": "sigil ???"}
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+def test_pi_stream_shows_nested_tool_call_updates() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        saved = {
+            key: os.environ.get(key)
+            for key in ["SIGIL_STATE_DIR", "SIGIL_SESSION_ID", "SIGIL_CAPTURE_TRACE"]
+        }
+        os.environ["SIGIL_STATE_DIR"] = tmp
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        os.environ["SIGIL_CAPTURE_TRACE"] = "1"
+        try:
+            stdin = StringIO(
+                json.dumps(
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {
+                            "type": "tool_call",
+                            "toolName": "read",
+                            "input": {"path": "src/sigil/question.py"},
+                        },
+                    }
+                )
+                + "\n"
+            )
+            stderr = StringIO()
+            assert stream_events(stdin=stdin, stdout=StringIO(), stderr=stderr) == 0
+
+            assert "read" in stderr.getvalue()
+            assert "src/sigil/question.py" in stderr.getvalue()
+            assert read_jsonl("last-tools.jsonl")[0]["tool"] == "read"
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
 def test_pi_stream_compact_mode_suppresses_prose_and_summarizes() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         saved = {

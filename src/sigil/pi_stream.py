@@ -19,6 +19,18 @@ from .ansi import MUTED, RESET
 from .security import normalize_capability, normalize_integrity
 from .state import append_event, append_jsonl
 
+TOOL_START_EVENT_TYPES = {
+    "tool_execution_start",
+    "tool_call",
+    "function_call",
+}
+TOOL_END_EVENT_TYPES = {
+    "tool_execution_end",
+    "tool_result",
+    "tool_call_result",
+    "function_call_result",
+}
+
 
 def is_interactive(stream: TextIO) -> bool:
     """Return whether a stream is attached to an interactive terminal."""
@@ -69,6 +81,77 @@ def summarize(tool: str, args: object) -> str:
         for k, v in tool_args.items()
         if isinstance(v, (str, int, float, bool))
     )
+
+
+def event_payload(event: dict[str, object]) -> dict[str, object]:
+    """Return the event object that carries Pi payload fields."""
+    update = event.get("assistantMessageEvent")
+    if event.get("type") == "message_update" and isinstance(update, dict):
+        return cast(dict[str, object], update)
+    return event
+
+
+def event_kind(event: dict[str, object]) -> str:
+    """Return the concrete Pi event kind, including nested message updates."""
+    payload = event_payload(event)
+    return str(payload.get("type") or "")
+
+
+def tool_name(payload: dict[str, object]) -> str:
+    """Extract a tool/function name from known Pi event shapes."""
+    for key in ("toolName", "functionName", "name", "tool"):
+        value = payload.get(key)
+        if value:
+            return str(value)
+    function = payload.get("function")
+    if isinstance(function, dict):
+        function_payload = cast(dict[str, object], function)
+        name = function_payload.get("name")
+        if name:
+            return str(name)
+    return ""
+
+
+def tool_args(payload: dict[str, object]) -> object:
+    """Extract tool/function arguments from known Pi event shapes."""
+    for key in ("args", "input", "arguments"):
+        if key in payload:
+            return decoded_args(payload.get(key))
+    function = payload.get("function")
+    if isinstance(function, dict):
+        function_payload = cast(dict[str, object], function)
+        return decoded_args(function_payload.get("arguments"))
+    return None
+
+
+def decoded_args(value: object) -> object:
+    """Decode JSON argument strings used by function-call events."""
+    if not isinstance(value, str):
+        return value
+    try:
+        decoded = json.loads(value)
+    except Exception:
+        return value
+    return decoded
+
+
+def tool_start_event(event: dict[str, object]) -> tuple[str, object] | None:
+    """Return normalized tool start data when an event begins a call."""
+    payload = event_payload(event)
+    if event_kind(event) not in TOOL_START_EVENT_TYPES:
+        return None
+    name = tool_name(payload)
+    if not name:
+        return None
+    return name, tool_args(payload)
+
+
+def tool_end_event(event: dict[str, object]) -> str | None:
+    """Return a normalized tool name when an event ends a call."""
+    payload = event_payload(event)
+    if event_kind(event) not in TOOL_END_EVENT_TYPES:
+        return None
+    return tool_name(payload)
 
 
 def compact_tool_label(tool: object) -> str:
@@ -225,16 +308,17 @@ def stream_events(
                 malformed_events += 1
                 continue
 
-            if event.get("type") == "tool_execution_start":
+            tool_start = tool_start_event(event)
+            if tool_start is not None:
                 if spinner_running:
                     pause_spinner()
-                tool = event.get("toolName", "")
-                detail = summarize(tool, event.get("args"))
+                tool, args = tool_start
+                detail = summarize(tool, args)
                 trace_event = {
                     "type": "tool_start",
                     "tool": tool,
                     "detail": detail,
-                    "args": event.get("args"),
+                    "args": args,
                     **security,
                 }
                 tool_events.append(trace_event)
@@ -264,10 +348,11 @@ def stream_events(
                         )
                 continue
 
-            if event.get("type") == "tool_execution_end":
+            tool_end = tool_end_event(event)
+            if tool_end is not None:
                 trace_event = {
                     "type": "tool_end",
-                    "tool": event.get("toolName", ""),
+                    "tool": tool_end,
                     **security,
                 }
                 tool_events.append(trace_event)
