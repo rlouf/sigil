@@ -11,6 +11,9 @@ fi
 __sigil_muted=$'\e[38;2;110;106;134m'
 __sigil_reset=$'\e[0m'
 __sigil_last_recorded_history_id=""
+__sigil_prompt_marker=""
+__sigil_prompt_marker_active=0
+__sigil_prompt_base=""
 
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
@@ -53,6 +56,38 @@ __sigil_stdin_is_pipe() {
 
 __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
+}
+
+__sigil_prompt_marker_enabled() {
+  [[ $- == *i* ]] || return 1
+  [[ "${SIGIL_ENABLE_PROMPT_MARKER:-1}" != "0" && "${SIGIL_ENABLE_PROMPT_MARKER:-1}" != "false" ]]
+}
+
+__sigil_refresh_prompt_marker() {
+  if ! __sigil_prompt_marker_enabled; then
+    if [[ $__sigil_prompt_marker_active -eq 1 ]]; then
+      PS1="$__sigil_prompt_base"
+      __sigil_prompt_marker=""
+      __sigil_prompt_marker_active=0
+    fi
+    return 0
+  fi
+
+  local current_prompt="${PS1:-}"
+  if [[ $__sigil_prompt_marker_active -eq 1 ]]; then
+    current_prompt="$__sigil_prompt_base"
+  fi
+  __sigil_prompt_base="$current_prompt"
+
+  if "$__sigil_bin" status --json >/dev/null 2>&1; then
+    __sigil_prompt_marker=""
+    __sigil_prompt_marker_active=0
+  else
+    __sigil_prompt_marker="! "
+    __sigil_prompt_marker_active=1
+  fi
+
+  PS1="${__sigil_prompt_marker}${__sigil_prompt_base}"
 }
 
 # ── Command wrappers ─────────────────────────────────────────────────────
@@ -132,13 +167,25 @@ __sigil_precmd() {
   local command
   local record_args
 
-  entry="$(__sigil_history_entry)" || return "$exit_status"
+  if ! entry="$(__sigil_history_entry)"; then
+    __sigil_refresh_prompt_marker
+    return "$exit_status"
+  fi
   history_id="${entry%%$'\t'*}"
   command="${entry#*$'\t'}"
-  [[ -z "$command" ]] && return "$exit_status"
-  [[ -n "$history_id" && "$history_id" == "$__sigil_last_recorded_history_id" ]] && return "$exit_status"
+  if [[ -z "$command" ]]; then
+    __sigil_refresh_prompt_marker
+    return "$exit_status"
+  fi
+  if [[ -n "$history_id" && "$history_id" == "$__sigil_last_recorded_history_id" ]]; then
+    __sigil_refresh_prompt_marker
+    return "$exit_status"
+  fi
   case "$command" in
-    ,*|\?*|sigil\ *|__sigil_*) return "$exit_status" ;;
+    ,*|\?*|sigil\ *|__sigil_*)
+      __sigil_refresh_prompt_marker
+      return "$exit_status"
+      ;;
   esac
   record_args=(record-turn --status "$exit_status" --cwd "$PWD")
   [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
@@ -146,6 +193,7 @@ __sigil_precmd() {
   "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
   __sigil_last_recorded_history_id="$history_id"
   unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
+  __sigil_refresh_prompt_marker
   return "$exit_status"
 }
 

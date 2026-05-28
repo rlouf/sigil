@@ -387,6 +387,10 @@ When attention is needed, it exits with status `1` and prints the highest
 priority condition plus exact next commands. Priority is active act, pending
 bash handoff, latest failed shell turn, then latest failed Sigil execution.
 
+Installed shell bindings use this state to add a one-character prompt marker:
+`!` means `sigil status` has something worth showing. Disable the marker with
+`SIGIL_ENABLE_PROMPT_MARKER=0`.
+
 JSON output:
 
 ```json
@@ -487,6 +491,7 @@ SIGIL_STATE_DIR=/custom/state/root
 SIGIL_SESSION_ID=my-shell-session
 SIGIL_SESSION_DIR=/custom/session/root
 SIGIL_ENABLE_GLYPHS=0
+SIGIL_ENABLE_PROMPT_MARKER=0
 SIGIL_BIN=/path/to/sigil
 SIGIL_GLOW_STYLE=notty
 SIGIL_GLOW_WIDTH=88

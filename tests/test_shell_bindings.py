@@ -2,7 +2,6 @@ from __future__ import annotations
 import pytest
 import os
 import shutil
-import stat
 import subprocess
 import tempfile
 import textwrap
@@ -17,6 +16,14 @@ def make_stub(tmp: Path) -> Path:
         textwrap.dedent(
             """\
             #!/usr/bin/env bash
+            if [ "$*" = "status --json" ]; then
+              if [ "${SIGIL_STUB_STATUS:-clean}" = "attention" ]; then
+                printf '%s\n' '{"state":"attention"}'
+                exit 1
+              fi
+              printf '%s\n' '{"state":"clean"}'
+              exit 0
+            fi
             if [ "$*" = "handoff pop" ]; then
               [ -n "${SIGIL_STUB_HANDOFF:-}" ] || exit 1
               printf '%s\n' "$SIGIL_STUB_HANDOFF"
@@ -35,10 +42,10 @@ def make_stub(tmp: Path) -> Path:
               *) printf '%s\n' "unexpected:$*" >&2; exit 64 ;;
             esac
             """
-        ),
+        ).lstrip(),
         encoding="utf-8",
     )
-    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    stub.chmod(0o755)
     return stub
 
 
@@ -52,6 +59,24 @@ def run_shell(
     env["ZLE_LOG"] = str(tmp / "zle.log")
     return subprocess.run(
         [shell, "-c", script],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def run_shell_args(
+    args: list[str], script: str, tmp: Path, stub: Path
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["SIGIL_BIN"] = str(stub)
+    env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
+    env["SIGIL_SESSION_ID"] = "shell-test"
+    env["ZLE_LOG"] = str(tmp / "zle.log")
+    return subprocess.run(
+        [*args, script],
         cwd=ROOT,
         env=env,
         text=True,
@@ -184,6 +209,25 @@ def test_bash_exports_tty_for_pipeline_confirmations() -> None:
         assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
 
 
+def test_bash_prompt_marker_tracks_status_attention() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_args(
+            ["bash", "--noprofile", "--norc", "-ic"],
+            textwrap.dedent(
+                "                    source shell/bash/sigil.bash\n                    PS1='$ '\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    printf 'attention=%s\\n' \"$PS1\"\n                    export SIGIL_STUB_STATUS=clean\n                    __sigil_refresh_prompt_marker\n                    printf 'clean=%s\\n' \"$PS1\"\n                    export SIGIL_ENABLE_PROMPT_MARKER=0\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    printf 'disabled=%s\\n' \"$PS1\"\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "attention=! $ " in result.stdout
+        assert "clean=$ " in result.stdout
+        assert "disabled=$ " in result.stdout
+        assert read_log(tmp) == []
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -199,6 +243,26 @@ def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
         )
         assert_success(result)
         assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_prompt_marker_tracks_status_attention() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_args(
+            ["zsh", "-f", "-ic"],
+            textwrap.dedent(
+                '                    source shell/zsh/sigil.zsh\n                    PROMPT="$ "\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    print -- "attention=$PROMPT"\n                    export SIGIL_STUB_STATUS=clean\n                    __sigil_refresh_prompt_marker\n                    print -- "clean=$PROMPT"\n                    export SIGIL_ENABLE_PROMPT_MARKER=0\n                    export SIGIL_STUB_STATUS=attention\n                    __sigil_refresh_prompt_marker\n                    print -- "disabled=$PROMPT"\n                    '
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "attention=! $ " in result.stdout
+        assert "clean=$ " in result.stdout
+        assert "disabled=$ " in result.stdout
+        assert read_log(tmp) == []
 
 
 def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:

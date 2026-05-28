@@ -9,6 +9,9 @@ else
 fi
 typeset -g __sigil_muted=$'\e[38;2;110;106;134m'
 typeset -g __sigil_reset=$'\e[0m'
+typeset -g __sigil_prompt_marker=""
+typeset -g __sigil_prompt_marker_active=0
+typeset -g __sigil_prompt_base=""
 
 if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   if command -v uuidgen >/dev/null 2>&1; then
@@ -56,6 +59,40 @@ __sigil_insert_pending_handoff() {
 
 __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
+}
+
+__sigil_prompt_marker_enabled() {
+  [[ -o interactive ]] || return 1
+  [[ "${SIGIL_ENABLE_PROMPT_MARKER:-1}" != "0" && "${SIGIL_ENABLE_PROMPT_MARKER:-1}" != "false" ]]
+}
+
+__sigil_refresh_prompt_marker() {
+  if ! __sigil_prompt_marker_enabled; then
+    if [[ $__sigil_prompt_marker_active -eq 1 ]]; then
+      PROMPT="$__sigil_prompt_base"
+      PS1="$PROMPT"
+      __sigil_prompt_marker=""
+      __sigil_prompt_marker_active=0
+    fi
+    return 0
+  fi
+
+  local current_prompt="${PROMPT:-${PS1:-}}"
+  if [[ $__sigil_prompt_marker_active -eq 1 ]]; then
+    current_prompt="$__sigil_prompt_base"
+  fi
+  __sigil_prompt_base="$current_prompt"
+
+  if "$__sigil_bin" status --json >/dev/null 2>&1; then
+    __sigil_prompt_marker=""
+    __sigil_prompt_marker_active=0
+  else
+    __sigil_prompt_marker="! "
+    __sigil_prompt_marker_active=1
+  fi
+
+  PROMPT="${__sigil_prompt_marker}${__sigil_prompt_base}"
+  PS1="$PROMPT"
 }
 
 sigil_command() {
@@ -116,15 +153,23 @@ __sigil_precmd() {
   local exit_status=$?
   local command="$__sigil_preexec_command"
   __sigil_preexec_command=""
-  [[ -z "$command" ]] && return
+  if [[ -z "$command" ]]; then
+    __sigil_refresh_prompt_marker
+    return "$exit_status"
+  fi
   case "$command" in
-    ,*|\?*|sigil\ *|__sigil_*) return ;;
+    ,*|\?*|sigil\ *|__sigil_*)
+      __sigil_refresh_prompt_marker
+      return "$exit_status"
+      ;;
   esac
   local record_args=(record-turn --status "$exit_status" --cwd "$PWD")
   [[ -n "${SIGIL_FAILURE_STDOUT:-}" ]] && record_args+=(--stdout-snippet "$SIGIL_FAILURE_STDOUT")
   [[ -n "${SIGIL_FAILURE_STDERR:-}" ]] && record_args+=(--stderr-snippet "$SIGIL_FAILURE_STDERR")
   "$__sigil_bin" "${record_args[@]}" "$command" >/dev/null 2>&1 || true
   unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
+  __sigil_refresh_prompt_marker
+  return "$exit_status"
 }
 
 add-zsh-hook preexec __sigil_preexec
