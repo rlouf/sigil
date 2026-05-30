@@ -119,6 +119,14 @@ def should_color(stream: TextIO) -> bool:
     return is_interactive(stream) and "NO_COLOR" not in os.environ
 
 
+def open_terminal_output() -> TextIO | None:
+    """Open the controlling terminal for live-only output when available."""
+    try:
+        return open("/dev/tty", "w", encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 def muted(text: str, *, enabled: bool) -> str:
     """Apply muted terminal styling when color is enabled."""
     if not enabled:
@@ -442,6 +450,7 @@ class _StreamContext:
     json_output: bool
     color_enabled: bool
     tool_output_stdout: bool = False
+    tool_output_terminal: TextIO | None = None
     question: str = ""
     prompt: str = ""
     follow_up: bool = False
@@ -458,7 +467,9 @@ def _record_tool_trace(ctx: _StreamContext, trace_event: dict[str, object]) -> N
 
 def _render_tool_start(ctx: _StreamContext, tool: str, detail: str) -> None:
     """Print a tool-start status line to stderr."""
-    output = ctx.stdout if ctx.tool_output_stdout else ctx.stderr
+    output = ctx.stderr
+    if ctx.tool_output_stdout:
+        output = ctx.tool_output_terminal if ctx.tool_output_terminal else ctx.stdout
     if ctx.compact:
         label = compact_tool_label(tool)
         short_detail = compact_detail(detail)
@@ -640,14 +651,25 @@ def stream_events(
     tool_events: list[dict[str, object]] = []
     seen_tool_calls: dict[str, str] = {}
     malformed_events = 0
+    tool_output_terminal = (
+        open_terminal_output()
+        if tool_output_stdout and not is_interactive(stdout)
+        else None
+    )
+    tool_color_stream = (
+        (tool_output_terminal if tool_output_terminal else stdout)
+        if tool_output_stdout
+        else stderr
+    )
     ctx = _StreamContext(
         stdout=stdout,
         stderr=stderr,
         security=security if security is not None else default_security(),
         compact=compact,
         json_output=json_output,
-        color_enabled=should_color(stderr),
+        color_enabled=should_color(tool_color_stream),
         tool_output_stdout=tool_output_stdout,
+        tool_output_terminal=tool_output_terminal,
         question=question,
         prompt=prompt,
         follow_up=follow_up,
@@ -675,4 +697,6 @@ def stream_events(
     finally:
         spinner.stop()
         _finalize(ctx, answer_chunks, tool_events, malformed_events)
+        if tool_output_terminal is not None:
+            tool_output_terminal.close()
     return 0

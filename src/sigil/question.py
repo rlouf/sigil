@@ -171,6 +171,7 @@ def ask(
         prompt=prompt,
         follow_up=append_transcript,
         json_output=json_output,
+        tool_output_stdout=True,
     )
     if not json_output:
         print()

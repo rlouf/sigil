@@ -520,6 +520,119 @@ def test_question_routes_record_alpha_trust_labels() -> None:
                 os.environ["SIGIL_SESSION_ID"] = old_session_id
 
 
+def test_question_route_requests_tool_calls_on_stdout() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            captured_kwargs: dict[str, object] = {}
+
+            def fake_run_pi_stream(pi_cmd: list[str], **kwargs: object) -> int:
+                assert pi_cmd
+                captured_kwargs.update(kwargs)
+                return 0
+
+            with (
+                patch("sigil.question.ensure_model_for_pi", return_value=True),
+                patch("sigil.question.run_pi_stream", side_effect=fake_run_pi_stream),
+            ):
+                assert ask("inspect pyproject") == 0
+
+    assert captured_kwargs["tool_output_stdout"] is True
+
+
+def test_pi_stream_can_render_tool_calls_to_stdout() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            stdin = StringIO(
+                json.dumps(
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {
+                            "type": "toolcall_end",
+                            "toolCall": {
+                                "id": "call-1",
+                                "name": "read",
+                                "arguments": {"path": "pyproject.toml"},
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+            stderr = StringIO()
+            with patch("sigil.pi_stream.open_terminal_output", return_value=None):
+                assert (
+                    stream_events(
+                        stdin=stdin,
+                        stdout=stdout,
+                        stderr=stderr,
+                        capture_trace=True,
+                        tool_output_stdout=True,
+                    )
+                    == 0
+                )
+
+    assert "❯ read   pyproject.toml" in stdout.getvalue()
+    assert "❯ read" not in stderr.getvalue()
+
+
+def test_pi_stream_can_render_tool_calls_to_terminal_when_stdout_is_redirected() -> (
+    None
+):
+    class NonClosingTtyStringIO(StringIO):
+        def close(self) -> None:
+            pass
+
+        def isatty(self) -> bool:
+            return True
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            stdin = StringIO(
+                json.dumps(
+                    {
+                        "type": "message_update",
+                        "assistantMessageEvent": {
+                            "type": "toolcall_end",
+                            "toolCall": {
+                                "id": "call-1",
+                                "name": "read",
+                                "arguments": {"path": "pyproject.toml"},
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+            stdout = StringIO()
+            stderr = StringIO()
+            terminal = NonClosingTtyStringIO()
+            with patch("sigil.pi_stream.open_terminal_output", return_value=terminal):
+                assert (
+                    stream_events(
+                        stdin=stdin,
+                        stdout=stdout,
+                        stderr=stderr,
+                        capture_trace=True,
+                        tool_output_stdout=True,
+                    )
+                    == 0
+                )
+
+    assert "❯ read   pyproject.toml" in terminal.getvalue()
+    assert "❯ read" not in stdout.getvalue()
+    assert "❯ read" not in stderr.getvalue()
+
+
 def test_staged_command_records_and_consumes_blocked_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
