@@ -10,6 +10,8 @@ Natural-language shell assistant.
 Sigil turns short terminal intents into explicit, inspectable shell actions.
 Ask from local context, authorize web search, propose one command, delegate one
 agent step, or pursue a bounded goal without leaving your prompt.
+Sigil is inspired by IRC-style bot commands: lightweight punctuation prefixes
+that let you address an assistant inline without leaving the conversation.
 
 ![15-second Sigil terminal demo](docs/demo.gif)
 
