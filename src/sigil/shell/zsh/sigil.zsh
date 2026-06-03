@@ -4,6 +4,8 @@
 # functions to the CLI. The Zeta glyph route is the exception: zsh owns that
 # control loop and calls the Zeta CLI for model, tool, and transcript services.
 
+export SIGIL_BINDING_LOADED="zsh"
+
 # ── CLI Resolution ───────────────────────────────────────────────────────
 
 # Resolve the CLI once at source time. SIGIL_BIN lets tests, local checkouts, and

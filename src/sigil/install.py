@@ -219,6 +219,57 @@ def check_executable(name: str, hint: str | None = None) -> DoctorCheck:
     )
 
 
+def check_configured_executable(
+    command_name: str,
+    env_name: str,
+    *,
+    hint: str | None = None,
+) -> DoctorCheck:
+    """Check a command using an explicit env override before PATH."""
+    configured = os.environ.get(env_name)
+    if configured:
+        path = Path(configured)
+        if path.exists() and os.access(path, os.X_OK):
+            return DoctorCheck(
+                name=f"executable:{command_name}",
+                status="ok",
+                detail=f"{configured} from {env_name}",
+            )
+        return DoctorCheck(
+            name=f"executable:{command_name}",
+            status="fail",
+            detail=f"{env_name} points to a missing or non-executable path: {configured}",
+            hint=hint or f"Update {env_name} or install {command_name} on PATH.",
+        )
+    return check_executable(command_name, hint=hint)
+
+
+def check_sigil_installed() -> DoctorCheck:
+    """Check that the public Sigil command is available."""
+    check = check_configured_executable("sigil", "SIGIL_BIN")
+    return DoctorCheck(
+        name="sigil:installed",
+        status=check.status,
+        detail=check.detail,
+        hint=check.hint,
+    )
+
+
+def check_zeta_installed() -> DoctorCheck:
+    """Check that the Zeta service command is available."""
+    check = check_configured_executable(
+        "zeta",
+        "ZETA_BIN",
+        hint="Install Sigil with the zeta entrypoint or set ZETA_BIN.",
+    )
+    return DoctorCheck(
+        name="zeta:installed",
+        status=check.status,
+        detail=check.detail,
+        hint=check.hint,
+    )
+
+
 def check_state_writable() -> DoctorCheck:
     """Check that Sigil can write its state directory."""
     root = state_dir()
@@ -328,6 +379,9 @@ def check_shell_binding_installed(shell: str | None) -> DoctorCheck:
 def check_shell_binding_loaded(env: dict[str, str] | None = None) -> DoctorCheck:
     """Check whether the current process looks like it inherited a binding."""
     values = env if env is not None else os.environ
+    binding = values.get("SIGIL_BINDING_LOADED")
+    if binding:
+        return DoctorCheck("shell:binding-loaded", "ok", f"{binding} binding loaded")
     session_id = values.get("SIGIL_SESSION_ID")
     if session_id:
         return DoctorCheck("shell:binding-loaded", "ok", f"session {session_id}")
@@ -339,26 +393,39 @@ def check_shell_binding_loaded(env: dict[str, str] | None = None) -> DoctorCheck
     )
 
 
+def check_glyphs_enabled(env: dict[str, str] | None = None) -> DoctorCheck:
+    """Check whether glyph functions are enabled for the loaded binding."""
+    values = env if env is not None else os.environ
+    if not values.get("SIGIL_SESSION_ID"):
+        return DoctorCheck(
+            "shell:glyphs-enabled",
+            "warn",
+            "unknown because the shell binding is not loaded",
+            "Restart the shell or source the Sigil binding.",
+        )
+    enabled = values.get("SIGIL_ENABLE_GLYPHS", "1").lower() not in {"0", "false"}
+    if enabled:
+        return DoctorCheck("shell:glyphs-enabled", "ok", "glyphs enabled")
+    return DoctorCheck(
+        "shell:glyphs-enabled",
+        "warn",
+        "glyphs disabled",
+        "Run sigil install zsh --glyphs or sigil install bash --glyphs, then restart.",
+    )
+
+
 def doctor_checks(shell: str | None = None) -> list[DoctorCheck]:
     """Run Sigil environment checks."""
     selected_shell = detect_shell() if shell in (None, "auto") else shell
     checks = [
-        check_executable("sigil"),
-        check_executable(
-            "glow",
-            hint="Install glow for Markdown rendering (optional): "
-            "https://github.com/charmbracelet/glow",
-        ),
-        check_executable(
-            "zeta",
-            hint="Install Sigil with the zeta entrypoint or set ZETA_BIN.",
-        ),
+        check_sigil_installed(),
+        check_zeta_installed(),
         check_endpoint(),
-        check_model_config(),
-        check_state_writable(),
-        check_shell_support(selected_shell),
         check_shell_binding_installed(selected_shell),
         check_shell_binding_loaded(),
+        check_glyphs_enabled(),
+        check_shell_support(selected_shell),
+        check_state_writable(),
     ]
     return checks
 

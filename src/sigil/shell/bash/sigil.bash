@@ -1,5 +1,7 @@
 # Sigil bash bindings. Core behavior lives in the `sigil` executable.
 
+export SIGIL_BINDING_LOADED="bash"
+
 if [[ -n "${SIGIL_BIN:-}" ]]; then
   __sigil_bin="$SIGIL_BIN"
 elif command -v sigil >/dev/null 2>&1; then

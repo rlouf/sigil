@@ -10,6 +10,7 @@ from ._base import cli
 from ._shared import pretty_print_json
 from ..install import (
     SUPPORTED_SHELLS,
+    DoctorCheck,
     checks_exit_code,
     checks_summary,
     checks_to_json,
@@ -93,10 +94,27 @@ def cmd_doctor(shell_name: str, json_output: bool) -> int:
         return checks_exit_code(checks)
 
     for check in checks:
-        line = f"{check.status:4} {check.name} - {check.detail}"
+        line = f"{check.status:4} {doctor_label(check)} - {check.detail}"
         print(line)
         if check.hint and check.status != "ok":
             print(f"     hint: {check.hint}")
     summary = checks_summary(checks)
     print(f"{summary['ok']} ok, {summary['warn']} warnings, {summary['fail']} failures")
     return checks_exit_code(checks)
+
+
+DOCTOR_LABELS = {
+    "sigil:installed": "sigil installed?",
+    "zeta:installed": "zeta installed?",
+    "model:endpoint": "model endpoint reachable?",
+    "shell:binding-installed": "shell binding installed?",
+    "shell:binding-loaded": "shell binding loaded in this shell?",
+    "shell:glyphs-enabled": "glyphs enabled?",
+    "shell:supported": "shell supported?",
+    "state:writable": "state directory writable?",
+}
+
+
+def doctor_label(check: DoctorCheck) -> str:
+    """Return the user-facing label for a doctor check."""
+    return DOCTOR_LABELS.get(check.name, check.name)

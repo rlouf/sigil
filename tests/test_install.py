@@ -23,6 +23,7 @@ def test_install_shell_copies_binding_and_updates_rc_idempotently() -> None:
         binding_path = install_dir / "sigil.bash"
         assert binding_path.exists()
         assert "Sigil bash bindings" in binding_path.read_text()
+        assert 'SIGIL_BINDING_LOADED="bash"' in binding_path.read_text()
         assert first.wrote_rc
         assert not second.wrote_rc
         assert rc_path.read_text().count("source ") == 1
@@ -107,22 +108,72 @@ def test_doctor_reports_expected_checks() -> None:
                         ):
                             checks = doctor_checks()
     names = {check.name for check in checks}
-    assert "executable:sigil" in names
-    assert "executable:glow" in names
-    assert "executable:zeta" in names
+    assert "sigil:installed" in names
+    assert "zeta:installed" in names
     assert "model:endpoint" in names
-    assert "model:name" in names
     assert "state:writable" in names
     assert "shell:supported" in names
     assert "shell:binding-installed" in names
     assert "shell:binding-loaded" in names
+    assert "shell:glyphs-enabled" in names
     assert all((check.status == "ok" for check in checks))
+
+
+def test_doctor_reports_disabled_glyphs() -> None:
+    fake_env = {
+        "SHELL": "/bin/zsh",
+        "SIGIL_SESSION_ID": "test-session",
+        "SIGIL_ENABLE_GLYPHS": "0",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(os.environ, fake_env, clear=True):
+            with patch("sigil.install.state_dir", return_value=Path(tmp)):
+                with patch("sigil.install.shutil.which", return_value="/bin/tool"):
+                    with patch(
+                        "sigil.install.check_endpoint",
+                        return_value=DoctorCheck(
+                            "model:endpoint", "ok", "http://127.0.0.1:8080"
+                        ),
+                    ):
+                        with patch(
+                            "sigil.install.check_shell_binding_installed",
+                            return_value=DoctorCheck(
+                                "shell:binding-installed", "ok", "/tmp/sigil.zsh"
+                            ),
+                        ):
+                            checks = doctor_checks()
+    glyphs = next(check for check in checks if check.name == "shell:glyphs-enabled")
+    assert glyphs.status == "warn"
+    assert glyphs.detail == "glyphs disabled"
+
+
+def test_doctor_cli_answers_setup_questions() -> None:
+    checks = [
+        DoctorCheck("sigil:installed", "ok", "/bin/sigil"),
+        DoctorCheck("zeta:installed", "ok", "/bin/zeta"),
+        DoctorCheck("model:endpoint", "warn", "not reachable"),
+        DoctorCheck("shell:binding-installed", "ok", "/tmp/sigil.zsh"),
+        DoctorCheck("shell:binding-loaded", "ok", "session test"),
+        DoctorCheck("shell:glyphs-enabled", "ok", "glyphs enabled"),
+    ]
+    stdout = StringIO()
+    with patch("sigil.cli.install.doctor_checks", return_value=checks):
+        with redirect_stdout(stdout):
+            code = main(["doctor"])
+    output = stdout.getvalue()
+    assert code == 0
+    assert "sigil installed?" in output
+    assert "zeta installed?" in output
+    assert "model endpoint reachable?" in output
+    assert "shell binding installed?" in output
+    assert "shell binding loaded in this shell?" in output
+    assert "glyphs enabled?" in output
 
 
 def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
     checks = [
-        DoctorCheck("executable:sigil", "ok", "/bin/sigil"),
-        DoctorCheck("executable:zeta", "fail", "zeta is not on PATH"),
+        DoctorCheck("sigil:installed", "ok", "/bin/sigil"),
+        DoctorCheck("zeta:installed", "fail", "zeta is not on PATH"),
     ]
     stdout = StringIO()
     with patch("sigil.cli.install.doctor_checks", return_value=checks):
@@ -130,5 +181,5 @@ def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
             code = main(["doctor", "--json"])
     assert code == 1
     payload = json.loads(stdout.getvalue())
-    assert payload[1]["name"] == "executable:zeta"
+    assert payload[1]["name"] == "zeta:installed"
     assert payload[1]["status"] == "fail"
