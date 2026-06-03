@@ -41,6 +41,13 @@ def test_zeta_tools_list_exposes_v1_builtins() -> None:
     assert data["tools"][0]["origin"] == "builtin"
 
 
+def test_zeta_help_frames_cli_as_bundled_runtime_service() -> None:
+    result = CliRunner().invoke(zeta_cli, ["--help"])
+
+    assert result.exit_code == 0
+    assert "Bundled runtime service commands used by Sigil." in result.output
+
+
 def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
     target = tmp_path / "note.txt"
     target.write_text("hello zeta\n", encoding="utf-8")

@@ -163,7 +163,7 @@ def test_doctor_cli_answers_setup_questions() -> None:
     output = stdout.getvalue()
     assert code == 0
     assert "sigil installed?" in output
-    assert "zeta installed?" in output
+    assert "zeta runtime installed?" in output
     assert "model endpoint reachable?" in output
     assert "shell binding installed?" in output
     assert "shell binding loaded in this shell?" in output

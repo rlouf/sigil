@@ -7,16 +7,19 @@ import json
 import os
 import shlex
 import shutil
-import socket
 import tempfile
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from .state import state_dir
-from .zeta.model import DEFAULT_MODEL_URL, model_url
+from .zeta.model import (
+    configured_model_name_from_env,
+    endpoint_reachable,
+    model_endpoint_valid,
+    model_url,
+    model_url_from_env,
+)
 
 
 SUPPORTED_SHELLS = ("zsh", "bash")
@@ -290,33 +293,27 @@ def check_state_writable() -> DoctorCheck:
 def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
     """Check whether the configured local model endpoint accepts TCP."""
     model_endpoint = model_url() if env is None else model_url_from_env(env)
-    parsed = urlparse(model_endpoint)
-    host = parsed.hostname
-    if host is None:
+    if not model_endpoint_valid(model_endpoint):
         return DoctorCheck(
             "model:endpoint",
             "fail",
             f"invalid ZETA_MODEL_URL: {model_endpoint}",
             "Set ZETA_MODEL_URL to an OpenAI-compatible chat completions endpoint.",
         )
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    try:
-        with socket.create_connection((host, port), timeout=0.5):
-            pass
+    if endpoint_reachable(model_endpoint):
         return DoctorCheck("model:endpoint", "ok", model_endpoint)
-    except OSError:
-        return DoctorCheck(
-            "model:endpoint",
-            "warn",
-            f"not reachable at {model_endpoint}",
-            "Start the local model server or set ZETA_MODEL_URL.",
-        )
+    return DoctorCheck(
+        "model:endpoint",
+        "warn",
+        f"not reachable at {model_endpoint}",
+        "Start the local model server or set ZETA_MODEL_URL.",
+    )
 
 
 def check_model_config(env: dict[str, str] | None = None) -> DoctorCheck:
     """Check whether model identity is configured."""
     values = env if env is not None else os.environ
-    model = model_name_from_env(values)
+    model = configured_model_name_from_env(values)
     if model:
         return DoctorCheck("model:name", "ok", model)
     return DoctorCheck(
@@ -325,16 +322,6 @@ def check_model_config(env: dict[str, str] | None = None) -> DoctorCheck:
         "ZETA_MODEL_NAME is not set",
         "Set ZETA_MODEL_NAME if the endpoint requires an explicit model name.",
     )
-
-
-def model_url_from_env(env: Mapping[str, str]) -> str:
-    """Return model URL from explicit env values."""
-    return env.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
-
-
-def model_name_from_env(env: Mapping[str, str]) -> str:
-    """Return model name from explicit env values."""
-    return env.get("ZETA_MODEL_NAME") or ""
 
 
 def check_shell_support(shell: str | None) -> DoctorCheck:

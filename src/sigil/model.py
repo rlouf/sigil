@@ -6,7 +6,7 @@ import os
 import sys
 
 from .tty import LOVE, MUTED, RESET
-from .zeta.model import model_endpoint_open, model_name, model_url
+from .zeta import model as zeta_model
 
 
 def model_path() -> str:
@@ -16,8 +16,8 @@ def model_path() -> str:
 
 def ensure_server() -> bool:
     """Check that the configured OpenAI-compatible endpoint is reachable."""
-    url = model_url()
-    if model_endpoint_open():
+    url = zeta_model.model_url()
+    if zeta_model.model_endpoint_open():
         return True
     print("", file=sys.stderr)
     print(
@@ -29,7 +29,7 @@ def ensure_server() -> bool:
     print("      llama-server \\", file=sys.stderr)
     print(f"        -m {model_path()} \\", file=sys.stderr)
     print(
-        f"        --alias {model_name()} --host 127.0.0.1 --port 8080 \\",
+        f"        --alias {zeta_model.model_name()} --host 127.0.0.1 --port 8080 \\",
         file=sys.stderr,
     )
     print(f"        -ngl 99 -c 262144 -fa on --reasoning auto{RESET}", file=sys.stderr)

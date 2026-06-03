@@ -83,8 +83,8 @@ updates the binding without duplicating the rc block.
 - A local OpenAI-compatible chat completions endpoint for command generation
   and Zeta-backed answer/agent routes (default
   `http://127.0.0.1:8080/v1/chat/completions`)
-- The `zeta` entrypoint installed with Sigil. `sigil doctor` checks that both
-  `sigil` and `zeta` are visible on PATH.
+- The bundled `zeta` runtime entrypoint installed with Sigil. `sigil doctor`
+  checks that both `sigil` and its runtime service are visible on PATH.
 - `glow` for Markdown rendering, optional but recommended
 
 Useful environment variables:
@@ -235,10 +235,16 @@ sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--shell auto|zsh|bash] [--json]
+```
+
+Sigil also installs a bundled `zeta` entrypoint. It is a service API used by
+the shell bindings and Sigil routes, not the primary user interface:
+
+```text
 zeta model stream
 zeta tools list --json
 zeta tool {read|ls|grep|bash|edit|write}
-zeta transcript {append|shell-turn|shell-result|tail}
+zeta transcript {append|tail}
 ```
 
 Copy-pasteable examples:
@@ -246,7 +252,6 @@ Copy-pasteable examples:
 ```sh
 sigil ask "what changed in this repo?"
 sigil run cargo test
-zeta tools list --json
 sigil events
 ```
 

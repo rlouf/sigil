@@ -7,6 +7,7 @@ import os
 import socket
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -16,12 +17,27 @@ DEFAULT_MODEL_NAME = "local-model"
 
 def model_url() -> str:
     """Return the OpenAI-compatible chat completions endpoint."""
-    return os.environ.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
+    return model_url_from_env(os.environ)
 
 
 def model_name() -> str:
     """Return the model name sent to the configured endpoint."""
     return os.environ.get("ZETA_MODEL_NAME") or DEFAULT_MODEL_NAME
+
+
+def model_url_from_env(env: Mapping[str, str]) -> str:
+    """Return the configured model URL from explicit environment values."""
+    return env.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
+
+
+def configured_model_name_from_env(env: Mapping[str, str]) -> str:
+    """Return the explicitly configured model name, if any."""
+    return env.get("ZETA_MODEL_NAME") or ""
+
+
+def model_endpoint_valid(url: str) -> bool:
+    """Return whether a model endpoint URL includes a host."""
+    return urlparse(url).hostname is not None
 
 
 def endpoint_reachable(url: str) -> bool:

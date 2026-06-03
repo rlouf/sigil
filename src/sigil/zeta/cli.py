@@ -1,7 +1,8 @@
-"""Zeta service CLI.
+"""Bundled Zeta service CLI.
 
 This CLI provides service commands to a shell-owned control loop. It is not the
-interactive agent runtime; the shell binding owns control flow.
+primary user interface; Sigil and the shell binding own user-facing control
+flow.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from . import runtime as zeta
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """Zeta service commands."""
+    """Bundled runtime service commands used by Sigil."""
 
 
 def main(argv: list[str] | None = None) -> int:
