@@ -2,7 +2,7 @@
 
 Sigil should not become an agent dashboard. The goal is to make the shell feel
 like it has the missing agent verbs: propose, execute one bounded action, ask,
-recover, inspect state, and audit history.
+recover, inspect session state, and audit history.
 
 The product constraint is strict:
 
@@ -10,7 +10,7 @@ The product constraint is strict:
 - No inbox.
 - No dashboard.
 - No hidden agent place.
-- State appears only through the shell buffer, command output, `sigil status`,
+- State appears only through the shell buffer, command output, `sigil session`,
   `sigil events`, and future audit commands.
 
 ## Target Experience
@@ -21,20 +21,21 @@ A complete flow should feel inevitable:
 uv run pytest
 , fix
 ,, run focused test
-? explain the risk
+sigil ask "explain the risk"
 git commit -m "..."
-sigil status
+sigil events
 ```
 
 The user should not think "I need an agent TUI." They should think "my shell
 already has the agent affordances I need."
 
-## Ladder 1: Ambient State
+## Ladder 1: Explicit State
 
-Goal: the shell tells you whether Sigil has live state without opening anything.
+Goal: Sigil exposes live state without opening a dashboard or adding ambient
+shell capture.
 
-`sigil status` is the explanation path: run it to see live state on demand. It
-should stay cheap: no model call, no network, no doctor checks, no mutation.
+`sigil session` and `sigil events` are the explanation paths. They should stay
+cheap: no model call, no network, no doctor checks, no mutation.
 
 Initial attention reasons:
 
@@ -43,8 +44,8 @@ Initial attention reasons:
 - latest failed shell turn
 - latest failed Sigil action
 
-Definition of done: after any command, the prompt can tell whether `sigil
-status` is worth running.
+Definition of done: after any Sigil route, the user can inspect what happened
+with `sigil session` or `sigil events`.
 
 ## Ladder 2: Recovery Loop
 
@@ -59,11 +60,11 @@ Make these work reliably:
 
 They should consume:
 
-- latest command
+- latest explicitly recorded command
 - exit status
 - cwd
 - bounded stderr/stdout
-- recent shell turns
+- recent explicit Sigil turns
 - relevant git status
 - recent answer context
 
@@ -94,7 +95,7 @@ It should explain:
 This is not a verbose trace dump. It should be a readable explanation over
 existing events.
 
-Definition of done: after `,`, `,,`, `?`, or `,,,`, `sigil why` explains the
+Definition of done: after `,`, `,,`, `sigil ask`, or `,,,`, `sigil why` explains the
 last meaningful Sigil output.
 
 ## Ladder 4: First-Run Clarity
@@ -110,8 +111,8 @@ reading docs first.
 
 ## Execution Order
 
-1. Prompt marker over `sigil status`.
-2. Capture bounded stdout and stderr for recent turns.
+1. Session/event inspection over dashboard state.
+2. Capture bounded stdout and stderr for explicit `sigil run` turns.
 3. Improve `, fix` and failure-context prompting.
 4. Add `sigil why`.
 5. Polish first-run and doctor output with exact fix commands.
@@ -119,10 +120,9 @@ reading docs first.
 
 ## TODO
 
-### Ambient State
+### Explicit State
 
-- [x] Add a cheap machine-readable `sigil status --json` call path.
-- [x] Keep `sigil status` cheap: never call the model or network.
+- [x] Keep `sigil session` and `sigil events` cheap: never call the model or network.
 
 ### Recovery Loop
 
@@ -134,13 +134,11 @@ reading docs first.
 - [x] Update failure-context prompts to prefer recent turn output when present.
 - [x] Add fixtures for common failures: pytest, missing command, git, network,
       and permission errors.
-- [x] Attach the last failure to `,` and `?` whenever it is the latest shell
+- [x] Attach the last failure to `,` and `sigil ask` whenever it is the latest shell
       turn, regardless of how the prompt is phrased.
 - [x] Make `, why failed` explain the last failure without asking for more
       context.
-- [x] Capture bounded stdout and stderr automatically for ordinary shell turns,
-      beyond the existing `SIGIL_FAILURE_STDOUT` and `SIGIL_FAILURE_STDERR`
-      hook point.
+- [x] Capture bounded stdout and stderr for explicit `sigil run` turns.
 - [x] Add a deterministic demo for `, fix` and `, why failed`.
 
 ### `sigil why`
@@ -149,7 +147,7 @@ reading docs first.
 - [ ] Default to the latest meaningful Sigil event in the current session.
 - [ ] Explain the selected output, context inputs, route, and model source.
 - [ ] Keep human output short and non-trace-like.
-- [ ] Add tests for `,`, `,,`, `?`, and `,,,` audit context.
+- [ ] Add tests for `,`, `,,`, `sigil ask`, and `,,,` audit context.
 
 ### First-Run Clarity
 
@@ -162,8 +160,8 @@ reading docs first.
 ### Demo And Regression
 
 - [ ] Create a deterministic demo for:
-      `uv run pytest` -> `, fix` -> `,, run focused test` -> `? explain the
-      risk` -> `sigil status`.
+      `uv run pytest` -> `, fix` -> `,, run focused test` -> `sigil ask
+      "explain the risk"` -> `sigil events`.
 - [ ] Use the demo fixtures as regression tests where practical.
 - [ ] Update README examples around the final flow.
 - [ ] Re-rate the CLI against the 10/10 criteria after the demo passes.

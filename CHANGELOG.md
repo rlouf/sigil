@@ -12,10 +12,11 @@ First alpha release.
 
 ### Added
 
-- Verb-first CLI (`sigil command`, `events`, `session`, `status`, `install`,
-  `doctor`) with optional punctuation glyphs.
-- Glyph routes: `,` (propose), `,,` / `,,,` (one agent step), `?` / `??`
-  (read-only answers), `@` / `@@` (bounded goal loops).
+- Verb-first CLI (`sigil ask`, `sigil command`, `sigil run`, `sigil act`,
+  `sigil events`, `sigil session`, `sigil install`, `sigil doctor`) with
+  optional punctuation glyphs.
+- Glyph routes: `,` (read-only answer), `,,` / `,,,` (one agent step), and `+`
+  (explicit command execution with capture).
 - zsh and Bash bindings installed via `sigil install`, with `--no-glyphs` for a
   punctuation-free setup.
 - Event-sourced state under `~/.sigil/` with trust records (route, mode, risk

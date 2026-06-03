@@ -37,6 +37,6 @@ Type ", Do not use tools. In one sentence, why skip .git in a find command?"
 Enter
 Sleep 12s
 
-Type "sigil ask --follow-up \"Even shorter. Do not use tools.\""
+Type ", Even shorter. Do not use tools."
 Enter
 Sleep 18s

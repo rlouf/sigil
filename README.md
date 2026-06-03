@@ -227,7 +227,6 @@ sigil run COMMAND [ARGS...]
 sigil act [show|resume|abort] [--json]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]
-sigil status [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--shell auto|zsh|bash] [--json]
 ```
@@ -241,7 +240,6 @@ git diff --name-only | sigil command "run the relevant tests"
 sigil ask "what changed in this repo?"
 sigil run cargo test
 sigil act show
-sigil status
 sigil events
 ```
 

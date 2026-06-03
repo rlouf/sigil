@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+import click
 from click.testing import CliRunner
 
 from _patch import patch, patch_dict
 from sigil.cli import cli
+from sigil.cli.operators import run_operator
 from sigil.operators import (
     create_invocation,
     parse_operator_token,
@@ -27,6 +29,21 @@ def read_global_events(root: Path) -> list[dict[str, object]]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+def invoke_op(args: list[str], input: str | None = None):
+    @click.command("glyph-test")
+    @click.argument("glyph")
+    @click.argument("prompt_parts", nargs=-1)
+    @click.option("--json", "json_output", is_flag=True)
+    def command(
+        glyph: str,
+        prompt_parts: tuple[str, ...],
+        json_output: bool,
+    ) -> int:
+        return run_operator(glyph, prompt_parts, json_output)
+
+    return CliRunner().invoke(command, args, input=input)
 
 
 @pytest.mark.parametrize(
@@ -89,9 +106,8 @@ def test_create_invocation_names_operator() -> None:
 
 
 def test_op_cli_json_reports_parsed_invocation() -> None:
-    result = CliRunner().invoke(
-        cli,
-        ["op", "--json", ",", "review", "risky", "changes"],
+    result = invoke_op(
+        ["--json", ",", "review", "risky", "changes"],
         input="diff --git a/file b/file\n",
     )
     assert result.exit_code == 0, result.output
@@ -109,9 +125,8 @@ def test_op_cli_json_reports_parsed_invocation() -> None:
 
 def test_op_cli_json_does_not_run_operator() -> None:
     with patch("sigil.operators.chat_text", side_effect=AssertionError("no model")):
-        result = CliRunner().invoke(
-            cli,
-            ["op", "--json", ",", "review"],
+        result = invoke_op(
+            ["--json", ",", "review"],
             input="diff\n",
         )
     assert result.exit_code == 0, result.output
@@ -131,9 +146,8 @@ def test_op_cli_runs_piped_comma_through_readonly_route() -> None:
         ),
         patch("sigil.cli.operators.ask", side_effect=fake_ask),
     ):
-        result = CliRunner().invoke(
-            cli,
-            ["op", ",", "review", "risky", "changes"],
+        result = invoke_op(
+            [",", "review", "risky", "changes"],
             input="diff --git a/file b/file\n",
         )
     assert result.exit_code == 0, result.output
@@ -158,7 +172,7 @@ def test_comma_operator_uses_readonly_route() -> None:
         return 0
 
     with patch("sigil.cli.operators.ask", side_effect=fake_ask):
-        result = CliRunner().invoke(cli, ["op", ",", "first", "question"])
+        result = invoke_op([",", "first", "question"])
 
     assert result.exit_code == 0, result.output
     assert calls == [
@@ -176,14 +190,14 @@ def test_comma_operator_uses_readonly_route() -> None:
 
 def test_question_operator_is_rejected() -> None:
     with patch("sigil.cli.operators.ask", side_effect=AssertionError("no ask")):
-        result = CliRunner().invoke(cli, ["op", "?", "explain", "this"])
+        result = invoke_op(["?", "explain", "this"])
 
     assert result.exit_code == 2
     assert "unsupported operator: ?" in result.output
 
 
 def test_at_operator_is_rejected() -> None:
-    result = CliRunner().invoke(cli, ["op", "@", "fix"])
+    result = invoke_op(["@", "fix"])
 
     assert result.exit_code == 2
     assert "unsupported operator: @" in result.output
@@ -245,7 +259,7 @@ def test_double_comma_runs_confirmed_agent_step() -> None:
         return 0
 
     with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
-        result = CliRunner().invoke(cli, ["op", ",,", "update", "it"])
+        result = invoke_op([",,", "update", "it"])
 
     assert result.exit_code == 0, result.output
     assert calls == [
@@ -269,7 +283,7 @@ def test_op_cli_routes_double_comma_to_agent_stepper() -> None:
         return 0
 
     with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
-        result = CliRunner().invoke(cli, ["op", ",,", "say", "done"])
+        result = invoke_op([",,", "say", "done"])
 
     assert result.exit_code == 0
     assert result.stdout == ""
@@ -286,7 +300,7 @@ def test_triple_comma_routes_to_auto_approved_agent_stepper() -> None:
         return 0
 
     with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
-        result = CliRunner().invoke(cli, ["op", ",,,", "publish"])
+        result = invoke_op([",,,", "publish"])
 
     assert result.exit_code == 0
     assert result.stdout == ""
@@ -297,7 +311,7 @@ def test_triple_comma_routes_to_auto_approved_agent_stepper() -> None:
 
 def test_op_cli_returns_agent_stepper_status() -> None:
     with patch("sigil.cli.operators.run_act_stepper", return_value=7):
-        result = CliRunner().invoke(cli, ["op", ",,", "fail"])
+        result = invoke_op([",,", "fail"])
 
     assert result.exit_code == 7
     assert result.stdout == ""
@@ -312,7 +326,7 @@ def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
         ),
         patch("sigil.operators.chat_json", side_effect=AssertionError("no model")),
     ):
-        result = CliRunner().invoke(cli, ["op", "^", "status"], input="notes\n")
+        result = invoke_op(["^", "status"], input="notes\n")
 
     assert result.exit_code == 2
     assert "unsupported operator: ^" in result.output
@@ -345,7 +359,7 @@ def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
                 patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
                 patch("sigil.acts.append_event", side_effect=fake_append_event),
             ):
-                result = CliRunner().invoke(cli, ["op", ",,,", "ship", "it"])
+                result = invoke_op([",,,", "ship", "it"])
             act_events = read_jsonl("last-act.jsonl")
         finally:
             if old_state_dir is None:
@@ -404,7 +418,7 @@ def test_confirmed_act_can_edit_tools_before_execution() -> None:
                 patch("sigil.acts.edit_tools", return_value=["read", "grep", "edit"]),
                 patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
-                result = CliRunner().invoke(cli, ["op", ",,", "ship", "it"])
+                result = invoke_op([",,", "ship", "it"])
             act_events = read_jsonl("last-act.jsonl")
 
     assert result.exit_code == 0, result.output
@@ -436,7 +450,7 @@ def test_confirmed_act_leaves_editor_errors_visible() -> None:
                     side_effect=AssertionError("no zeta"),
                 ),
             ):
-                result = CliRunner().invoke(cli, ["op", ",,", "ship", "it"])
+                result = invoke_op([",,", "ship", "it"])
 
     assert result.exit_code == 0, result.output
     assert clear_calls == []
@@ -447,7 +461,7 @@ def test_piped_triple_comma_denies_input_before_act_generation() -> None:
         patch("sigil.cli.operators.confirm_piped_input", return_value=False),
         patch("sigil.acts.run_zeta_agent_step", side_effect=AssertionError("no zeta")),
     ):
-        result = CliRunner().invoke(cli, ["op", ",,,", "ship"], input="notes\n")
+        result = invoke_op([",,,", "ship"], input="notes\n")
 
     assert result.exit_code == 2
     assert "piped input declined" in result.stderr
@@ -575,7 +589,7 @@ def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
                 ),
                 patch("sigil.acts.run_zeta_agent_step", side_effect=fake_run_pi),
             ):
-                result = CliRunner().invoke(cli, ["op", ",,,", "ship", "it"])
+                result = invoke_op([",,,", "ship", "it"])
             act_events = read_jsonl("last-act.jsonl")
         finally:
             if old_state_dir is None:
@@ -656,7 +670,7 @@ def test_op_cli_does_not_confirm_piped_comma_before_readonly_route() -> None:
         ),
         patch("sigil.cli.operators.ask", side_effect=fake_ask),
     ):
-        result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
+        result = invoke_op([",", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
     assert calls == [
@@ -686,7 +700,7 @@ def test_op_cli_rejects_piped_question_operator() -> None:
         ),
         patch("sigil.cli.operators.ask", side_effect=fake_ask),
     ):
-        result = CliRunner().invoke(cli, ["op", "?", "review"], input="diff\n")
+        result = invoke_op(["?", "review"], input="diff\n")
 
     assert result.exit_code == 2
     assert calls == []
@@ -742,7 +756,7 @@ def test_op_cli_routes_piped_comma_to_readonly_answer() -> None:
         ),
         patch("sigil.cli.operators.ask", side_effect=fake_ask),
     ):
-        result = CliRunner().invoke(cli, ["op", ",", "summarize"], input="notes\n")
+        result = invoke_op([",", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
     assert calls == [
@@ -769,7 +783,7 @@ def test_op_cli_confirms_piped_double_comma_before_agent_step() -> None:
         patch("sigil.cli.operators.confirm_piped_input", return_value=True),
         patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper),
     ):
-        result = CliRunner().invoke(cli, ["op", ",,", "summarize"], input="notes\n")
+        result = invoke_op([",,", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
     assert result.stdout == ""
@@ -790,7 +804,7 @@ def test_op_cli_routes_piped_triple_comma_to_auto_agent_step() -> None:
         patch("sigil.cli.operators.confirm_piped_input", return_value=True),
         patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper),
     ):
-        result = CliRunner().invoke(cli, ["op", ",,,", "summarize"], input="notes\n")
+        result = invoke_op([",,,", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
     assert result.stdout == ""
@@ -896,13 +910,13 @@ def test_command_verb_json_emits_proposal_envelope() -> None:
 
 
 def test_op_cli_rejects_mixed_glyphs() -> None:
-    result = CliRunner().invoke(cli, ["op", "?^"])
+    result = invoke_op(["?^"])
     assert result.exit_code == 2
     assert "unsupported operator: ?" in result.output
 
 
 def test_op_cli_rejects_transform_until_colon_operator_exists() -> None:
-    result = CliRunner().invoke(cli, ["op", ":json"])
+    result = invoke_op([":json"])
     assert result.exit_code == 2
     assert "unsupported operator: :" in result.output
 

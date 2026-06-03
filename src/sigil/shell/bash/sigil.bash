@@ -77,6 +77,74 @@ __sigil_glyphs_enabled() {
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
 }
 
+# ── Zeta continuation capture ────────────────────────────────────────────
+
+__sigil_zeta_capture_active="${__sigil_zeta_capture_active:-0}"
+__sigil_zeta_last_history_id="${__sigil_zeta_last_history_id:-}"
+
+__sigil_zeta_enable_capture() {
+  __sigil_zeta_capture_active=1
+}
+
+__sigil_zeta_consume_capture() {
+  __sigil_zeta_capture_active=0
+}
+
+__sigil_zeta_recordable_command() {
+  local command="${1:-}"
+  [[ -n "$command" ]] || return 1
+  [[ "$command" =~ [^[:space:]] ]] || return 1
+  case "$command" in
+    [[:space:]]*|,*|+*|sigil\ *|zeta\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*|noglob\ +*)
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+__sigil_zeta_record_shell_turn() {
+  local command="$1"
+  local status="$2"
+  local payload stdout_snippet stderr_snippet
+  stdout_snippet="${SIGIL_FAILURE_STDOUT:-}"
+  stderr_snippet="${SIGIL_FAILURE_STDERR:-}"
+  payload="$(printf '{"command":%s,"status":%s,"cwd":%s,"stdout_snippet":%s,"stderr_snippet":%s}' \
+    "$(__sigil_json_string "$command")" \
+    "$status" \
+    "$(__sigil_json_string "$PWD")" \
+    "$(__sigil_json_string "$stdout_snippet")" \
+    "$(__sigil_json_string "$stderr_snippet")")"
+  printf '%s\n' "$payload" | "$__zeta_bin" transcript shell-turn >/dev/null 2>&1 || true
+  unset SIGIL_FAILURE_STDOUT SIGIL_FAILURE_STDERR
+}
+
+__sigil_zeta_prompt_capture() {
+  local status=$?
+  local entry history_id command
+  [[ "$__sigil_zeta_capture_active" == "1" ]] || return "$status"
+  entry="$(__sigil_history_entry)" || return "$status"
+  history_id="${entry%%$'\t'*}"
+  command="${entry#*$'\t'}"
+  [[ -n "$history_id" && "$history_id" != "$__sigil_zeta_last_history_id" ]] || return "$status"
+  __sigil_zeta_last_history_id="$history_id"
+  if __sigil_zeta_recordable_command "$command"; then
+    __sigil_zeta_record_shell_turn "$command" "$status"
+  fi
+  return "$status"
+}
+
+__sigil_install_zeta_prompt_capture() {
+  case "${PROMPT_COMMAND:-}" in
+    *__sigil_zeta_prompt_capture*) return 0 ;;
+    "")
+      PROMPT_COMMAND="__sigil_zeta_prompt_capture"
+      ;;
+    *)
+      PROMPT_COMMAND="__sigil_zeta_prompt_capture; $PROMPT_COMMAND"
+      ;;
+  esac
+}
+
 # ── Command wrappers ─────────────────────────────────────────────────────
 
 sigil_command() {
@@ -173,6 +241,7 @@ __sigil_zeta_turn() {
     objective="Continue the active Zeta step. Read the latest zeta.shell_handoff_result.v1 transcript event as the source of truth for what the user ran after the last shell handoff. If the outcome is cancelled, do not assume the proposed command ran; continue from the recorded shell_turns and explain the cancellation plainly if it matters. If no relevant shell turn appears, ask for the command result instead of inventing it."
   fi
   if [[ "$continue_step" == "1" ]]; then
+    __sigil_zeta_consume_capture
     "$__zeta_bin" transcript shell-result >/dev/null 2>&1 || true
   fi
   __sigil_zeta_append "$(printf '{"type":"user_message","content":%s}' "$(__sigil_json_string "$objective")")" >/dev/null
@@ -206,6 +275,7 @@ __sigil_zeta_turn() {
             artifact="$(printf '%s\n' "$result" | __sigil_json_get handoff.artifact)"
             [[ -n "$reason" ]] && printf '%s\n' "$reason"
             [[ -n "$artifact" ]] && printf '%s\n' "artifact: $artifact"
+            __sigil_zeta_enable_capture
             __sigil_history_insert "$command"
             return 0
           fi
@@ -233,6 +303,10 @@ sigil_agent_step_auto() {
 sigil_run() {
   "$__sigil_bin" run "$@"
 }
+
+if [[ $- == *i* ]]; then
+  __sigil_install_zeta_prompt_capture
+fi
 
 # ── Optional glyph functions ─────────────────────────────────────────────
 

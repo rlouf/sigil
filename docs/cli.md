@@ -17,7 +17,6 @@ sigil act [show|resume|abort] [--json] [--verbose]
 sigil events [--limit N] [--json] [--raw]
 sigil events list [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]
-sigil status [--json]
 sigil install {zsh|bash} [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs] [--json]
 sigil doctor [--shell auto|zsh|bash] [--json]
 ```
@@ -35,7 +34,6 @@ git diff --name-only | sigil command "run the relevant tests"
 sigil act show --json
 sigil events --limit 50
 sigil session show --json
-sigil status
 ```
 
 ## `sigil command`
@@ -258,7 +256,7 @@ Without `--json`, each event is printed as a table:
 
 ```text
 time      id        action      session   summary
-12:34:56  7c0d5a11  ? answer request  2e9a0b3c  what changed?
+12:34:56  7c0d5a11  ask answer request  2e9a0b3c  what changed?
 ```
 
 The summary JSON form returns:
@@ -271,8 +269,8 @@ The summary JSON form returns:
     "time": 1760000000.0,
     "time_label": "12:34:56",
     "type": "answer_requested",
-    "glyph": "?",
-    "action": "? answer request",
+    "glyph": "ask",
+    "action": "ask answer request",
     "session": "2e9a0b3c-...",
     "short_session": "2e9a0b3c",
     "cwd": "/path/to/repo",
@@ -326,44 +324,6 @@ continuity files:
 `list --json` returns known session directories, file names present in each
 session, and latest event metadata when available. `clear --json` returns the
 session files removed.
-
-## `sigil status`
-
-Shows the shortest useful current-session state without calling the model or
-mutating session files.
-
-```sh
-sigil status
-sigil status --json
-```
-
-When there is no live state that needs attention, it prints:
-
-```text
-clean
-```
-
-When attention is needed, it exits with status `1` and prints the highest
-priority condition plus exact next commands. Priority is active act, pending
-staged command, latest failed shell turn, then latest failed Sigil execution.
-Ordinary shell turns record command metadata only; `sigil run` is the explicit
-path for stdout/stderr snippets.
-
-JSON output:
-
-```json
-{
-  "state": "attention",
-  "reason": "last command failed",
-  "session_id": "2e9a0b3c-...",
-  "cwd": "/path/to/repo",
-  "actions": [", suggest a fix"],
-  "details": {
-    "command": "uv run pytest",
-    "status": 1
-  }
-}
-```
 
 ## `sigil install`
 
@@ -437,9 +397,8 @@ events.jsonl                              global event log
 sessions/<session-id>/last-failure.json   latest failed shell command
 sessions/<session-id>/last-act.jsonl      one-step Zeta agent action snapshots
 sessions/<session-id>/last-answer.jsonl  same-session answer transcript
-sessions/<session-id>/last-staged-command.jsonl latest blocked command staged for review
 sessions/<session-id>/last-tools.jsonl    latest Zeta tool trace
-sessions/<session-id>/recent-turns.jsonl  recent shell turns recorded by bindings
+sessions/<session-id>/recent-turns.jsonl  recent commands recorded by explicit Sigil routes
 ```
 
 Environment variables:

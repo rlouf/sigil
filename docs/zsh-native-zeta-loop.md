@@ -661,7 +661,7 @@ Doing nothing, or typing a fresh objective, abandons the suspended step.
 Whether to continue depends on what was emitted: a passing command may complete
 the objective and warrant stopping, while a failure may be exactly what the agent
 should see and act on. That decision is the user's by default; a profile may later
-automate it (e.g. auto-continue on non-zero exit for a goal route), but the
+automate it (e.g. auto-continue on non-zero exit for a configured route), but the
 mechanism is the same explicit, recorded continuation.
 
 In interactive zsh, prompt insertion can use:
@@ -786,8 +786,8 @@ Current Sigil can migrate in stages:
 4. Replace the current TypeScript `sigil_shell` bridge with `zeta tool bash`
    handoff for the zsh route.
 5. Move one-step comma routes to the zsh-native loop.
-6. Move goal routes only after transcript, budget, and interruption behavior is
-   stable.
+6. Keep route extensions outside v1; revisit them only after transcript,
+   budget, and interruption behavior is stable.
 
 During the transition, Python can still own storage helpers, model helpers, and
 tool implementations. The architectural change is that zsh owns the agent loop

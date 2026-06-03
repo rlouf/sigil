@@ -37,9 +37,9 @@ Sleep 2200ms
 Type ",, run focused test"
 Enter
 Sleep 2400ms
-Type "? explain the risk"
+Type ", explain the risk"
 Enter
 Sleep 1800ms
-Type "sigil status"
+Type "sigil events"
 Enter
 Sleep 1200ms

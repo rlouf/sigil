@@ -1,4 +1,4 @@
-"""The hidden `op` command and glyph dispatch."""
+"""Internal glyph dispatch shared by shell-facing routes and tests."""
 
 from __future__ import annotations
 
@@ -13,11 +13,7 @@ from ..operators import OperatorInvocation, create_invocation
 from ..answers import ZETA_ANSWER_TOOLS_WITH_WEB, ask
 
 
-@click.command("op")
-@click.argument("glyph")
-@click.argument("prompt_parts", nargs=-1)
-@click.option("--json", "json_output", is_flag=True)
-def cmd_op(
+def run_operator(
     glyph: str,
     prompt_parts: tuple[str, ...],
     json_output: bool,
@@ -46,7 +42,7 @@ def cmd_op(
 
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
-            print("sigil op: piped input declined", file=sys.stderr)
+            print("sigil glyph: piped input declined", file=sys.stderr)
             raise click.exceptions.Exit(2)
 
     return dispatch_readonly_operator(invocation, json_output=json_output)
@@ -60,7 +56,7 @@ def dispatch_act_operator(
     """Run a `,,`/`,,,` invocation through the Zeta act stepper."""
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
-            print("sigil op: piped input declined", file=sys.stderr)
+            print("sigil glyph: piped input declined", file=sys.stderr)
             raise click.exceptions.Exit(2)
     try:
         status = run_act_stepper(
@@ -70,7 +66,7 @@ def dispatch_act_operator(
             glyph=invocation.glyph,
         )
     except RuntimeError as exc:
-        print(f"sigil op: {exc}", file=sys.stderr)
+        print(f"sigil glyph: {exc}", file=sys.stderr)
         return 1
     if status:
         raise click.exceptions.Exit(status)

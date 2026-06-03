@@ -49,6 +49,6 @@ Sleep 1400ms
 Type "git show --stat --oneline HEAD"
 Enter
 Sleep 1200ms
-Type "? review the committed changes for risk"
+Type ", review the committed changes for risk"
 Enter
 Sleep 2600ms

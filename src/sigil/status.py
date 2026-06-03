@@ -8,7 +8,6 @@ from typing import Any, Literal, cast
 
 from .acts import active_act
 from .failure import latest_active_failure
-from .staged_command import latest_staged_command
 from .session import read_event_log
 from .state import session_id
 
@@ -48,20 +47,6 @@ def current_status() -> Status:
                 "objective": act.get("objective"),
                 "status": act.get("status"),
                 "next_step": next_step_summary(act),
-            },
-        )
-
-    staged = latest_staged_command()
-    if staged is not None:
-        command = str(staged.get("command") or "")
-        return attention(
-            "pending staged command",
-            session=current_session,
-            cwd=cwd,
-            actions=("sigil staged pop",),
-            details={
-                "event_id": staged.get("event_id"),
-                "command": command,
             },
         )
 

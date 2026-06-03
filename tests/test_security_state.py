@@ -12,13 +12,6 @@ from click.testing import CliRunner
 from _patch import patch, patch_dict
 from sigil.cli import cli, main
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
-from sigil.staged_command import (
-    LAST_STAGED_COMMAND_FILE,
-    PENDING_STAGED_COMMANDS_FILE,
-    consume_latest_staged_command,
-    prepare_staged_commands,
-    record_staged_commands,
-)
 from sigil.zeta.stream import renderer_command, should_color, stream_events
 from sigil.answers import (
     ANSWER_SYSTEM_PROMPT,
@@ -63,9 +56,10 @@ def test_top_level_help_lists_commands() -> None:
         "install",
         "run",
         "session",
-        "status",
     ]:
         assert command in result.output
+    for command in ["op", "record-turn", "record-failure", "staged", "status"]:
+        assert f"\n  {command} " not in result.output
     assert "\n  question" not in result.output
 
 
@@ -481,38 +475,6 @@ def test_zeta_stream_can_render_tool_calls_to_terminal_when_stdout_is_redirected
     assert "❯ read" not in stderr.getvalue()
 
 
-def test_staged_command_records_and_consumes_blocked_command() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            pending = prepare_staged_commands()
-            pending.write_text(
-                json.dumps(
-                    {
-                        "toolCallId": "call-1",
-                        "toolName": "bash",
-                        "command": "git diff --stat",
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            records = record_staged_commands(glyph=",,")
-
-            assert records[0]["command"] == "git diff --stat"
-            assert records[0]["glyph"] == ",,"
-            assert not (
-                Path(tmp) / "sessions/test" / PENDING_STAGED_COMMANDS_FILE
-            ).exists()
-
-            consumed = consume_latest_staged_command()
-            assert consumed is not None
-            assert consumed["command"] == "git diff --stat"
-            assert read_jsonl(LAST_STAGED_COMMAND_FILE) == []
-
-
 def test_failure_context_prompt_uses_recorded_failure_without_inventing_output() -> (
     None
 ):
@@ -843,22 +805,14 @@ def test_record_turn_does_not_record_failure_on_zero_status() -> None:
         assert not failure_path.exists()
 
 
-def test_record_turn_cli_command_persists_entry() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
-        ):
-            result = CliRunner().invoke(
-                cli,
-                ["record-turn", "--status", "0", "--cwd", "/repo", "ls -la"],
-            )
+def test_record_turn_cli_command_is_not_public_surface() -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["record-turn", "--status", "0", "--cwd", "/repo", "ls -la"],
+    )
 
-        assert result.exit_code == 0, result.output
-        rows = read_recent_turns(tmp)
-        assert len(rows) == 1
-        assert rows[0]["command"] == "ls -la"
-        assert rows[0]["status"] == 0
+    assert result.exit_code == 2
+    assert "No such command 'record-turn'" in result.output
 
 
 def test_run_cli_streams_output_and_records_snippets() -> None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -8,11 +7,9 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from sigil.cli import cli
-from sigil.failure import record_failure
-from sigil.staged_command import LAST_STAGED_COMMAND_FILE
 from sigil.session import record_turn
 from sigil.status import current_status, format_status
-from sigil.state import append_event, append_jsonl, write_jsonl
+from sigil.state import append_event, write_jsonl
 
 
 def test_status_clean_when_no_live_state() -> None:
@@ -54,19 +51,6 @@ def test_status_reports_active_act_before_other_state() -> None:
     assert "objective\n  fix parser" in format_status(status)
 
 
-def test_status_reports_pending_staged_command() -> None:
-    with isolated_sigil_state():
-        append_jsonl(
-            LAST_STAGED_COMMAND_FILE,
-            {"event_id": "staged-1", "command": "uv run pytest"},
-        )
-        status = current_status()
-
-    assert status.reason == "pending staged command"
-    assert status.actions == ("sigil staged pop",)
-    assert "uv run pytest" in format_status(status)
-
-
 def test_status_reports_last_failure() -> None:
     with isolated_sigil_state():
         record_turn("uv run pytest", 1, os.getcwd(), stderr_snippet="failed")
@@ -102,21 +86,12 @@ def test_status_reports_failed_sigil_execution() -> None:
     assert status.actions == ("sigil events",)
 
 
-def test_status_cli_human_and_json() -> None:
+def test_status_cli_is_not_public_surface() -> None:
     with isolated_sigil_state():
-        clean = CliRunner().invoke(cli, ["status"])
-        record_failure("uv run pytest", 1, os.getcwd())
-        attention = CliRunner().invoke(cli, ["status"])
-        as_json = CliRunner().invoke(cli, ["status", "--json"])
+        result = CliRunner().invoke(cli, ["status"])
 
-    assert clean.exit_code == 0
-    assert clean.output == "clean\n"
-    assert attention.exit_code == 1
-    assert "attention: last command failed" in attention.output
-    assert as_json.exit_code == 1
-    payload = json.loads(as_json.output)
-    assert payload["state"] == "attention"
-    assert payload["reason"] == "last command failed"
+    assert result.exit_code == 2
+    assert "No such command 'status'" in result.output
 
 
 class isolated_sigil_state:

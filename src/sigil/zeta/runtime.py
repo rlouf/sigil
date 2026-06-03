@@ -7,7 +7,7 @@ import os
 from typing import Any, Iterable, TextIO, cast
 
 from ..model import chat_json, ensure_server
-from ..session import recent_turns, recent_turns_context
+from ..session import recent_turns, recent_turns_context, record_turn
 from ..state import append_jsonl, read_jsonl
 from . import tools as tool_registry
 from .prompt import system_prompt
@@ -87,6 +87,23 @@ def model_action_schema(allowed_tools: Iterable[str] | None = None) -> dict[str,
 
 def append_transcript(event: dict[str, Any]) -> dict[str, Any]:
     return append_jsonl(TRANSCRIPT, event)
+
+
+def append_shell_turn(turn: dict[str, Any]) -> dict[str, Any]:
+    """Record one user shell command for the current Zeta continuation."""
+    command = str(turn.get("command") or "")
+    status = int(turn.get("status") or 0)
+    cwd = str(turn.get("cwd") or os.getcwd())
+    stdout = optional_text(turn.get("stdout_snippet"))
+    stderr = optional_text(turn.get("stderr_snippet"))
+    record_turn(command, status, cwd, stdout_snippet=stdout, stderr_snippet=stderr)
+    return {
+        "ok": True,
+        "type": "shell_turn_recorded",
+        "command": command,
+        "status": status,
+        "cwd": cwd,
+    }
 
 
 def append_shell_result() -> dict[str, Any]:
@@ -314,6 +331,10 @@ def normalize_shell_turn(turn: dict[str, Any]) -> dict[str, Any]:
 def event_time(event: dict[str, Any]) -> float:
     value = event.get("time")
     return value if isinstance(value, int | float) else 0.0
+
+
+def optional_text(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def transcript_tail(limit: int = DEFAULT_TAIL_LIMIT) -> list[dict[str, Any]]:

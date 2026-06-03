@@ -16,19 +16,6 @@ def make_stub(tmp: Path) -> Path:
         textwrap.dedent(
             """\
             #!/usr/bin/env bash
-            if [ "$*" = "status --json" ]; then
-              if [ "${SIGIL_STUB_STATUS:-clean}" = "attention" ]; then
-                printf '%s\n' '{"state":"attention"}'
-                exit 1
-              fi
-              printf '%s\n' '{"state":"clean"}'
-              exit 0
-            fi
-            if [ "$*" = "staged pop" ]; then
-              [ -n "${SIGIL_STUB_STAGED:-}" ] || exit 1
-              printf '%s\n' "$SIGIL_STUB_STAGED"
-              exit 0
-            fi
             if [ "$*" = "transcript append" ]; then
               cat >/dev/null
               printf '%s\n' '{"id":"evt"}'
@@ -67,12 +54,8 @@ def make_stub(tmp: Path) -> Path:
                 ;;
               "command draft executive summary") printf '%s\n' "stream command" ;;
               "ask hello") printf '%s\n' "answer" ;;
-              "op , hello") printf '%s\n' "readonly answer" ;;
-              "op , draft executive summary") printf '%s\n' "readonly stream answer" ;;
-              op*) printf '%s\n' "op:$*" ;;
+              "ask draft executive summary") printf '%s\n' "readonly stream answer" ;;
               run*) printf '%s\n' "ran:${*:2}" ;;
-              record-failure*) printf '%s\n' "recorded" ;;
-              record-turn*) printf '%s\n' "turn-recorded" ;;
               *) printf '%s\n' "unexpected:$*" >&2; exit 64 ;;
             esac
             """
@@ -154,10 +137,10 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op , hello",
+            "ask hello",
             *zeta_bash_turn_calls(),
         ]
-        assert "readonly answer" in result.stdout
+        assert "answer" in result.stdout
         assert "❯ bash   echo zeta" in result.stdout
         assert "Run zeta handoff." in result.stdout
         assert "history=echo zeta" in result.stdout
@@ -195,17 +178,17 @@ def test_bash_comma_prints_readonly_answer_without_history_insert() -> None:
             stub,
         )
         assert_success(result)
-        assert result.stdout == "readonly answer\nhistory=\n"
+        assert result.stdout == "answer\nhistory=\n"
 
 
-def test_bash_agent_step_does_not_consume_staged_command() -> None:
+def test_bash_agent_step_uses_zeta_handoff_directly() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_STUB_STAGED='uv run pytest'\n                    sigil_agent_step_auto repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_agent_step_auto repair\n                    printf 'history=%s\\n' \"$(__sigil_history_line)\"\n                    "
             ),
             tmp,
             stub,
@@ -280,66 +263,60 @@ def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op , draft executive summary",
+            "ask draft executive summary",
             *zeta_bash_turn_calls(),
         ]
         assert "readonly stream answer" in result.stdout
 
 
-def test_bash_records_every_non_sigil_turn_via_record_turn() -> None:
+def test_bash_does_not_record_ordinary_turns_ambiently() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls -la\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '2\\t%s\\n' \"bad command\"; }\n                    false\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '3\\t%s\\n' \", should not record\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    true\n                    false\n                    wait\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert sorted(read_log(tmp)) == sorted(
-            [
-                f"record-turn --status 0 --cwd {ROOT} ls -la",
-                f"record-turn --status 1 --cwd {ROOT} bad command",
-            ]
-        )
+        assert read_log(tmp) == []
 
 
-def test_bash_records_repeated_command_when_history_id_changes() -> None:
+def test_bash_does_not_install_prompt_recording_hook() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    __sigil_history_entry() { printf '2\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    declare -p PROMPT_COMMAND 2>/dev/null || true\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == [
-            f"record-turn --status 0 --cwd {ROOT} ls",
-            f"record-turn --status 0 --cwd {ROOT} ls",
-        ]
+        assert "__sigil_precmd" not in result.stdout
+        assert read_log(tmp) == []
 
 
-def test_bash_dedupes_same_history_entry() -> None:
+def test_bash_missing_ambient_hook_cannot_record_history() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"ls\"; }\n                    true\n                    __sigil_precmd\n                    true\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    type __sigil_precmd >/dev/null 2>&1; printf 'has_precmd=%s\\n' \"$?\"\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == [f"record-turn --status 0 --cwd {ROOT} ls"]
+        assert result.stdout == "has_precmd=1\n"
+        assert read_log(tmp) == []
 
 
 def test_bash_does_not_record_sigil_commands() -> None:
@@ -349,7 +326,7 @@ def test_bash_does_not_record_sigil_commands() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil bad\"; }\n                    false\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    false\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -365,14 +342,14 @@ def test_bash_does_not_record_sigil_wrapper_commands() -> None:
         result = run_shell(
             "bash",
             textwrap.dedent(
-                "                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf '1\\t%s\\n' \"sigil_command hello\"; }\n                    sigil_command hello\n                    __sigil_precmd\n                    wait\n                    "
+                "                    source src/sigil/shell/bash/sigil.bash\n                    sigil_command hello\n                    wait\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert result.stdout == "readonly answer\n"
-        assert read_log(tmp) == ["op , hello"]
+        assert result.stdout == "answer\n"
+        assert read_log(tmp) == ["ask hello"]
 
 
 def test_bash_run_glyph_dispatches_to_sigil_run() -> None:
@@ -392,22 +369,20 @@ def test_bash_run_glyph_dispatches_to_sigil_run() -> None:
         assert read_log(tmp) == ["run echo captured"]
 
 
-def test_bash_passes_failure_snippet_env_to_record_turn() -> None:
+def test_bash_failure_snippet_env_is_not_ambiently_recorded() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "bash",
             textwrap.dedent(
-                '                    source src/sigil/shell/bash/sigil.bash\n                    __sigil_history_entry() { printf \'1\\t%s\\n\' "bad command"; }\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    __sigil_precmd\n                    wait\n                    '
+                '                    source src/sigil/shell/bash/sigil.bash\n                    export SIGIL_FAILURE_STDOUT="stdout line"\n                    export SIGIL_FAILURE_STDERR="stderr line"\n                    false\n                    wait\n                    '
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == [
-            f"record-turn --status 1 --cwd {ROOT} --stdout-snippet stdout line --stderr-snippet stderr line bad command"
-        ]
+        assert read_log(tmp) == []
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -425,24 +400,24 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op , hello",
+            "ask hello",
             *zeta_bash_turn_calls(),
         ]
-        assert "readonly answer" in result.stdout
+        assert "answer" in result.stdout
         assert "❯ bash   echo zeta" in result.stdout
         assert "Run zeta handoff." in result.stdout
         assert "history=echo zeta" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_agent_step_does_not_consume_staged_command() -> None:
+def test_zsh_agent_step_uses_zeta_handoff_directly() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    export SIGIL_STUB_STAGED="uv run pytest"\n                    sigil_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -506,7 +481,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op , draft executive summary",
+            "ask draft executive summary",
             *zeta_bash_turn_calls(),
         ]
         assert "readonly stream answer" in result.stdout
@@ -528,7 +503,7 @@ def test_zsh_glyph_aliases_dispatch_piped_stdin_before_globbing() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == [
-            "op , draft executive summary",
+            "ask draft executive summary",
             *zeta_bash_turn_calls(),
         ]
 
@@ -541,7 +516,7 @@ def test_zsh_does_not_record_sigil_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_before_command "sigil bad"\n                    false\n                    __sigil_after_command_before_prompt\n                    wait\n                    '
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    false\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -558,14 +533,14 @@ def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_before_command "noglob sigil_command hello"\n                    sigil_command hello\n                    __sigil_after_command_before_prompt\n                    wait\n                    '
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    sigil_command hello\n                    wait\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert result.stdout == "readonly answer\n"
-        assert read_log(tmp) == ["op , hello"]
+        assert result.stdout == "answer\n"
+        assert read_log(tmp) == ["ask hello"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -587,25 +562,20 @@ def test_zsh_run_glyph_dispatches_to_sigil_run() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_records_every_non_sigil_turn_via_record_turn() -> None:
+def test_zsh_does_not_record_ordinary_turns_ambiently() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/sigil/shell/zsh/sigil.zsh\n                    __sigil_before_command "ls -la"\n                    true\n                    __sigil_after_command_before_prompt\n                    __sigil_before_command "bad command"\n                    false\n                    __sigil_after_command_before_prompt\n                    __sigil_before_command ", should not record"\n                    false\n                    __sigil_after_command_before_prompt\n                    wait\n                    '
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    true\n                    false\n                    wait\n                    "
             ),
             tmp,
             stub,
         )
         assert_success(result)
-        assert sorted(read_log(tmp)) == sorted(
-            [
-                f"record-turn --status 0 --cwd {ROOT} ls -la",
-                f"record-turn --status 1 --cwd {ROOT} bad command",
-            ]
-        )
+        assert read_log(tmp) == []
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

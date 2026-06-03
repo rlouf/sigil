@@ -18,8 +18,6 @@ from .state import ANSWER_TRANSCRIPT, session_dir, session_id, state_dir
 SESSION_FILES = (
     ANSWER_TRANSCRIPT,
     "last-tools.jsonl",
-    "last-staged-command.jsonl",
-    "pending-staged-commands.jsonl",
     "last-failure.json",
     "last-act.jsonl",
     "last-plan.jsonl",
