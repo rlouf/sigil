@@ -424,22 +424,6 @@ def effective_zeta_tools(
     return enabled
 
 
-def zeta_agent_prompt(act: dict[str, Any]) -> str:
-    """Build the prompt for one Zeta edit step."""
-    sections = [
-        "Run one bounded Zeta edit step.",
-        f"Working directory: {os.getcwd()}",
-        f"Objective: {act.get('objective')}",
-    ]
-    stdin_text = str(act.get("stdin") or "")
-    if stdin_text:
-        sections.append(f"Confirmed piped input:\n{stdin_text}")
-    sections.append(
-        "After the step, stop. Do not commit. Leave review to the user in Git/lazygit."
-    )
-    return "\n\n".join(sections)
-
-
 def record_act_update(event_type: str, act: dict[str, Any]) -> dict[str, Any]:
     """Record an act snapshot in session and global state."""
     payload = {

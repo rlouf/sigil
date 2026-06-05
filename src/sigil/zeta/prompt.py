@@ -27,8 +27,9 @@ as user-chosen context and explain the cancellation plainly if it matters.
 
 TOOL_PROTOCOL_PROMPT = """Tool protocol:
 
-- Tools are ordinary commands exposed to you by the shell loop.
-- Return at most one tool call per step.
+- Tools are native Chat Completions function tools exposed by the shell loop.
+- You may request multiple read-only tool calls in one turn when useful.
+- Use handoff tools one at a time; after bash, edit, or write, stop.
 - Use a tool only when its schema matches the needed action.
 - Do not mention unavailable tools.
 - If no tool is needed, return a final answer.

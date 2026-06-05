@@ -21,6 +21,7 @@ from sigil.protocol import (
     SHELL_PROMPT_HANDOFF_TYPE,
 )
 from sigil.session import recent_turns, record_turn
+from sigil.zeta import agent as zeta_agent
 from sigil.zeta import runtime as zeta
 from sigil.zeta import model as zeta_model
 from sigil.zeta.cli import cli as zeta_cli
@@ -40,6 +41,279 @@ def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
 
     assert zeta_model.model_url() == "http://zeta.invalid/v1/chat/completions"
     assert zeta_model.model_name() == "zeta-model"
+
+
+def test_zeta_chat_completion_messages_sends_native_tools(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_request(body: dict[str, Any]) -> dict[str, Any]:
+        captured["body"] = body
+        return {"choices": [{"message": {"content": "done"}}]}
+
+    monkeypatch.setattr(zeta_model, "request_chat_completion", fake_request)
+
+    message = zeta_model.chat_completion_messages(
+        [{"role": "user", "content": "hi"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "read", "description": "", "parameters": {}},
+            }
+        ],
+    )
+
+    assert message == {"content": "done"}
+    body = cast(dict[str, Any], captured["body"])
+    assert body["tools"][0]["function"]["name"] == "read"
+    assert body["tool_choice"] == "auto"
+    assert "response_format" not in body
+
+
+def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        captured["messages"] = messages
+        captured["kwargs"] = kwargs
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert result.final_text == "done"
+    assert result.events == [{"type": "assistant_message", "content": "done"}]
+    kwargs = cast(dict[str, Any], captured["kwargs"])
+    assert kwargs["tools"][0]["function"]["name"] == "read"
+
+
+def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> None:
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"README.md"}',
+                        },
+                    },
+                    {
+                        "id": "call-2",
+                        "type": "function",
+                        "function": {
+                            "name": "ls",
+                            "arguments": '{"path":"src"}',
+                        },
+                    },
+                ]
+            },
+            {"content": "done"},
+        ]
+    )
+    ran: list[tuple[str, dict[str, Any]]] = []
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+
+    def fake_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        ran.append((name, params))
+        return {"ok": True, "content": [{"type": "text", "text": name}]}
+
+    monkeypatch.setattr(zeta_agent, "run_tool", fake_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read", "ls"), max_turns=2),
+    )
+
+    assert ran == [
+        ("read", {"path": "README.md"}),
+        ("ls", {"path": "src"}),
+    ]
+    assert result.final_text == "done"
+    assert [
+        event["name"] for event in result.events if event.get("type") == "tool_call"
+    ] == ["read", "ls"]
+
+
+def test_zeta_agent_turn_stops_after_handoff_tool(monkeypatch) -> None:
+    requests = 0
+
+    def fake_chat_completion_messages(
+        *args: object, **kwargs: object
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"uv run pytest"}',
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "run_tool",
+        lambda name, params: {
+            "ok": True,
+            "handoff": {
+                "type": SHELL_PROMPT_HANDOFF_TYPE,
+                "command": "uv run pytest",
+                "reason": "Run tests.",
+            },
+        },
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "test",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("bash",), max_turns=3),
+    )
+
+    assert requests == 1
+    assert result.handoff == {
+        "type": SHELL_PROMPT_HANDOFF_TYPE,
+        "command": "uv run pytest",
+        "reason": "Run tests.",
+    }
+
+
+def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> None:
+    ran = False
+
+    def fail_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        nonlocal ran
+        ran = True
+        return {"ok": True}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"path":"README.md","unexpected":true}',
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(zeta_agent, "run_tool", fail_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert ran is False
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "schema-mismatch"
+
+
+def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> None:
+    ran = False
+
+    def fail_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        nonlocal ran
+        ran = True
+        return {"ok": True}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"uv run pytest"}',
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(zeta_agent, "run_tool", fail_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert ran is False
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "disallowed-tool"
+
+
+def test_zeta_project_context_loads_global_to_local(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "repo"
+    child = root / "pkg"
+    child.mkdir(parents=True)
+    (root / "AGENTS.md").write_text("root instructions\n", encoding="utf-8")
+    (child / "CLAUDE.md").write_text("child instructions\n", encoding="utf-8")
+    monkeypatch.chdir(child)
+
+    context = zeta.load_project_context()
+
+    assert context.index("root instructions") < context.index("child instructions")
+    assert "AGENTS.md" in context
+    assert "CLAUDE.md" in context
 
 
 def test_zeta_tools_list_exposes_v1_builtins() -> None:
@@ -236,30 +510,37 @@ def test_sigil_zeta_step_writes_handoff_file(
 
     monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
     monkeypatch.setattr(
-        zeta_runner.runtime,
-        "next_model_action",
-        lambda *args, **kwargs: {
-            "type": "tool_call",
-            "name": "bash",
-            "input": {"command": "uv run pytest", "reason": "Run tests."},
-        },
-    )
-    monkeypatch.setattr(
-        zeta_runner.runtime,
-        "analyze_tool",
-        lambda name, params: {"valid": True, "resolved": True},
-    )
-    monkeypatch.setattr(
-        zeta_runner.runtime,
-        "run_tool",
-        lambda name, params: {
-            "ok": True,
-            "handoff": {
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            events=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "tool_call_id": "call-1",
+                    "name": "bash",
+                    "input": {"command": "uv run pytest", "reason": "Run tests."},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "bash",
+                    "result": {
+                        "ok": True,
+                        "handoff": {
+                            "type": SHELL_PROMPT_HANDOFF_TYPE,
+                            "command": "uv run pytest",
+                            "reason": "Run tests.",
+                        },
+                    },
+                },
+            ],
+            handoff={
                 "type": SHELL_PROMPT_HANDOFF_TYPE,
                 "command": "uv run pytest",
                 "reason": "Run tests.",
             },
-        },
+        ),
     )
 
     result = CliRunner().invoke(
@@ -280,9 +561,12 @@ def test_sigil_zeta_step_writes_handoff_file(
 def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
     monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
     monkeypatch.setattr(
-        zeta_runner.runtime,
-        "next_model_action",
-        lambda *args, **kwargs: {"type": "final", "content": "summary"},
+        zeta_runner,
+        "run_agent_turn",
+        lambda *args, **kwargs: zeta_agent.AgentTurnResult(
+            final_text="summary",
+            events=[{"type": "assistant_message", "content": "summary"}],
+        ),
     )
 
     result = CliRunner().invoke(sigil_cli, ["zeta-step", "summarize"])
@@ -297,25 +581,32 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     monkeypatch,
     capsys,
 ) -> None:
-    def fake_next_model_action(
+    captured: dict[str, object] = {}
+
+    def fake_run_agent_turn(
         objective: str,
         transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> dict[str, object]:
-        del objective, transcript, kwargs
-        return {"type": "final", "content": "The answer."}
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        captured["context"] = kwargs.get("context")
+        return zeta_agent.AgentTurnResult(
+            final_text="The answer.",
+            events=[{"type": "assistant_message", "content": "The answer."}],
+        )
 
     monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
-    monkeypatch.setattr(
-        zeta_runner.runtime, "next_model_action", fake_next_model_action
-    )
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_runner.runtime, "load_project_context", lambda: "ctx")
 
     code = zeta_runner.run_agent_step("answer me", glyph=",,")
 
     assert code == 0
-    captured = capsys.readouterr()
-    assert captured.out == "\nThe answer.\n"
-    assert "❯ zeta ,, " in captured.err
+    output = capsys.readouterr()
+    assert output.out == "\nThe answer.\n"
+    assert "❯ zeta ,, " in output.err
+    assert captured["context"] == "ctx"
 
 
 def test_sigil_transcript_shell_turn_records_recent_turn(
@@ -361,32 +652,6 @@ def test_zeta_patch_analysis_extracts_paths() -> None:
     ]
 
 
-def test_zeta_next_model_action_accepts_route_specific_system_prompt(
-    monkeypatch,
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_chat_json_messages(
-        messages: list[dict[str, object]],
-        schema: dict[str, object],
-    ) -> dict[str, object]:
-        captured["messages"] = messages
-        captured["schema"] = schema
-        return {"type": "final", "content": "done"}
-
-    monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(zeta, "chat_json_messages", fake_chat_json_messages)
-
-    action = zeta.next_model_action("repair", [], system="custom system")
-
-    assert action == {"type": "final", "content": "done"}
-    messages = cast(list[dict[str, object]], captured["messages"])
-    system_prompt = str(messages[0]["content"])
-    assert system_prompt.startswith("custom system")
-    assert "Available tools with input JSON Schemas:" in system_prompt
-    assert '"name":"read"' in system_prompt
-
-
 def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
     prompt = zeta.zeta_system_prompt(allowed_tools=("read", "ls"))
 
@@ -395,148 +660,6 @@ def test_zeta_system_prompt_is_product_neutral_and_dynamic() -> None:
     assert '"name":"read"' in prompt
     assert '"name":"ls"' in prompt
     assert '"name":"bash"' not in prompt
-
-
-def test_zeta_next_model_action_filters_available_tools(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_chat_json_messages(
-        messages: list[dict[str, object]],
-        schema: dict[str, object],
-    ) -> dict[str, object]:
-        captured["messages"] = messages
-        captured["schema"] = schema
-        return {
-            "type": "tool_call",
-            "name": "read",
-            "input": {"path": "pyproject.toml"},
-        }
-
-    monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(zeta, "chat_json_messages", fake_chat_json_messages)
-
-    action = zeta.next_model_action(
-        "What does this pyproject.toml file contain?",
-        [],
-        allowed_tools=("read", "grep"),
-    )
-
-    assert action == {
-        "type": "tool_call",
-        "name": "read",
-        "input": {"path": "pyproject.toml"},
-    }
-    schema = cast(dict[str, Any], captured["schema"])
-    properties = cast(dict[str, Any], schema["properties"])
-    name_schema = cast(dict[str, Any], properties["name"])
-    assert name_schema["enum"] == ["grep", "read"]
-    messages = cast(list[dict[str, object]], captured["messages"])
-    system_prompt = str(messages[0]["content"])
-    assert '"type":"function"' in system_prompt
-    assert '"name":"read"' in system_prompt
-    assert '"name":"grep"' in system_prompt
-    assert '"parameters":{"type":"object"' in system_prompt
-    assert '"schema"' not in system_prompt
-    assert '"name":"bash"' not in system_prompt
-    user_prompt = str(messages[1]["content"])
-    assert "Available tools" not in user_prompt
-    assert '"name":"read"' not in user_prompt
-
-
-def test_zeta_next_model_action_rejects_disallowed_tool(monkeypatch) -> None:
-    def fake_chat_json_messages(
-        messages: list[dict[str, object]],
-        schema: dict[str, object],
-    ) -> dict[str, object]:
-        del messages, schema
-        return {
-            "type": "tool_call",
-            "name": "bash",
-            "input": {"command": "cat pyproject.toml"},
-        }
-
-    monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(zeta, "chat_json_messages", fake_chat_json_messages)
-
-    action = zeta.next_model_action("inspect file", [], allowed_tools=("read", "grep"))
-
-    assert action == {
-        "type": "final",
-        "content": "I could not choose a valid Zeta tool for the next step.",
-    }
-
-
-def test_zeta_next_model_action_sends_transcript_as_chat_messages(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_chat_json_messages(
-        messages: list[dict[str, object]],
-        schema: dict[str, object],
-    ) -> dict[str, object]:
-        del schema
-        captured["messages"] = messages
-        return {"type": "final", "content": "done"}
-
-    monkeypatch.setattr(zeta, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(zeta, "chat_json_messages", fake_chat_json_messages)
-
-    action = zeta.next_model_action(
-        "summarize README",
-        [
-            {"type": "user_message", "content": "can you summarize the README"},
-            {
-                "type": "tool_call",
-                "id": "call-1",
-                "name": "read",
-                "input": {"path": "README.md"},
-            },
-            {
-                "type": "tool_result",
-                "tool_call_id": "call-1",
-                "name": "read",
-                "result": {"ok": True, "content": [{"type": "text", "text": "docs"}]},
-            },
-            {"type": "assistant_message", "content": "summary"},
-        ],
-    )
-
-    assert action == {"type": "final", "content": "done"}
-    messages = cast(list[dict[str, Any]], captured["messages"])
-    assert messages[2] == {
-        "role": "user",
-        "content": "can you summarize the README",
-    }
-    tool_call = messages[3]
-    assert tool_call["role"] == "assistant"
-    assert tool_call["content"] is None
-    tool_calls = cast(list[dict[str, Any]], tool_call["tool_calls"])
-    assert tool_calls[0]["id"] == "call-1"
-    assert tool_calls[0]["function"]["name"] == "read"
-    assert tool_calls[0]["function"]["arguments"] == '{"path":"README.md"}'
-    assert messages[4]["role"] == "tool"
-    assert messages[4]["tool_call_id"] == "call-1"
-    assert '"docs"' in str(messages[4]["content"])
-    assert messages[5] == {"role": "assistant", "content": "summary"}
-
-
-def test_zeta_user_prompt_includes_explicit_context() -> None:
-    context = "\n".join(
-        [
-            "Recent shell activity:",
-            "- uv run pytest (exit 1)",
-            "  stderr: test failed",
-        ]
-    )
-
-    prompt = zeta.zeta_user_prompt(
-        "Continue the active Zeta step.",
-        [],
-        context=context,
-    )
-
-    assert "Recent shell activity:" in prompt
-    assert "uv run pytest (exit 1)" in prompt
-    assert "stderr: test failed" in prompt
 
 
 def test_sigil_transcript_shell_result_appends_tool_result(
@@ -695,34 +818,57 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
 ) -> None:
     transcripts: list[list[dict[str, Any]]] = []
 
-    def fake_next_model_action(
+    def fake_run_agent_turn(
         objective: str,
         transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> dict[str, object]:
-        del objective, kwargs
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, config, kwargs
         transcripts.append(transcript)
-        if len(transcripts) == 1:
-            return {
-                "type": "tool_call",
-                "name": "read",
-                "input": {"path": "pyproject.toml"},
-            }
-        assert any(event.get("type") == "tool_result" for event in transcript)
-        return {"type": "final", "content": "It contains project metadata."}
+        return zeta_agent.AgentTurnResult(
+            final_text="It contains project metadata.",
+            events=[
+                {
+                    "type": "assistant_message",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "read",
+                                "arguments": '{"path":"pyproject.toml"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "tool_call_id": "call-1",
+                    "name": "read",
+                    "input": {"path": "pyproject.toml"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "read",
+                    "result": {
+                        "ok": True,
+                        "content": [
+                            {"type": "text", "text": "[project]\nname = 'sigil'\n"}
+                        ],
+                    },
+                },
+                {
+                    "type": "assistant_message",
+                    "content": "It contains project metadata.",
+                },
+            ],
+        )
 
     monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
-    monkeypatch.setattr(
-        answers_runner.runtime, "next_model_action", fake_next_model_action
-    )
-    monkeypatch.setattr(
-        answers_runner.runtime,
-        "run_tool",
-        lambda name, params: {
-            "ok": True,
-            "content": [{"type": "text", "text": "[project]\nname = 'sigil'\n"}],
-        },
-    )
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
 
     code = answers_runner.run_tool_answer(
         "question system",
@@ -734,27 +880,32 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
     assert "❯ read   pyproject.toml" in output
     assert "\n\nIt contains project metadata.\n" in output
     assert "project metadata" in output
-    assert len(transcripts) == 2
+    assert len(transcripts) == 1
 
 
 def test_zeta_question_loop_passes_follow_up_history_as_turns(
     monkeypatch,
 ) -> None:
     transcripts: list[list[dict[str, Any]]] = []
+    captured: dict[str, object] = {}
 
-    def fake_next_model_action(
+    def fake_run_agent_turn(
         objective: str,
         transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> dict[str, object]:
-        del objective, kwargs
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, config
         transcripts.append(transcript)
-        return {"type": "final", "content": "follow-up answer"}
+        captured["context"] = kwargs.get("context")
+        return zeta_agent.AgentTurnResult(
+            final_text="follow-up answer",
+            events=[{"type": "assistant_message", "content": "follow-up answer"}],
+        )
 
     monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
-    monkeypatch.setattr(
-        answers_runner.runtime, "next_model_action", fake_next_model_action
-    )
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+    monkeypatch.setattr(answers_runner.runtime, "load_project_context", lambda: "ctx")
 
     code = answers_runner.run_tool_answer(
         "question system",
@@ -778,32 +929,43 @@ def test_zeta_question_loop_passes_follow_up_history_as_turns(
             "available_tools": ["read", "grep", "ls"],
         },
     ]
+    assert captured["context"] == "ctx"
 
 
 def test_zeta_question_loop_falls_back_instead_of_budget_message(
     monkeypatch,
     capsys,
 ) -> None:
-    def fake_next_model_action(
+    def fake_run_agent_turn(
         objective: str,
         transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
         **kwargs: object,
-    ) -> dict[str, object]:
-        del objective, transcript, kwargs
-        return {"type": "tool_call", "name": "read", "input": {"path": "README.md"}}
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config, kwargs
+        return zeta_agent.AgentTurnResult(
+            events=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "tool_call_id": "call-1",
+                    "name": "read",
+                    "input": {"path": "README.md"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "read",
+                    "result": {
+                        "ok": True,
+                        "content": [{"type": "text", "text": "Sigil docs"}],
+                    },
+                },
+            ]
+        )
 
     monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
-    monkeypatch.setattr(
-        answers_runner.runtime, "next_model_action", fake_next_model_action
-    )
-    monkeypatch.setattr(
-        answers_runner.runtime,
-        "run_tool",
-        lambda name, params: {
-            "ok": True,
-            "content": [{"type": "text", "text": "Sigil docs"}],
-        },
-    )
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
     monkeypatch.setattr(
         answers_runner,
         "chat_text",

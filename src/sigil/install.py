@@ -14,7 +14,6 @@ from typing import Any
 
 from .state import state_dir
 from .zeta.model import (
-    configured_model_name_from_env,
     endpoint_reachable,
     model_endpoint_valid,
     model_url,
@@ -311,20 +310,6 @@ def check_endpoint(env: dict[str, str] | None = None) -> DoctorCheck:
         "warn",
         f"not reachable at {model_endpoint}",
         "Start the local model server or set ZETA_MODEL_URL.",
-    )
-
-
-def check_model_config(env: dict[str, str] | None = None) -> DoctorCheck:
-    """Check whether model identity is configured."""
-    values = env if env is not None else os.environ
-    model = configured_model_name_from_env(values)
-    if model:
-        return DoctorCheck("model:name", "ok", model)
-    return DoctorCheck(
-        "model:name",
-        "warn",
-        "ZETA_MODEL_NAME is not set",
-        "Set ZETA_MODEL_NAME if the endpoint requires an explicit model name.",
     )
 
 

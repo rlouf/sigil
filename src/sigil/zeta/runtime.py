@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Iterable, TextIO, cast
 
 from ..state import append_jsonl, read_jsonl
-from .model import chat_json_messages, model_endpoint_open
 from . import tools as tool_registry
 from .prompt import system_prompt
 
 TRANSCRIPT = "zeta-transcript.jsonl"
 DEFAULT_TAIL_LIMIT = 50
 TOOL_SPECS = tool_registry.TOOL_SPECS
+PROJECT_CONTEXT_FILES = ("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
 
 
 def tool_metadata(name: str) -> dict[str, Any]:
@@ -42,47 +43,6 @@ def run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
     return tool_registry.run_tool(name, params)
 
 
-def model_action_schema(allowed_tools: Iterable[str] | None = None) -> dict[str, Any]:
-    names = allowed_tool_names(allowed_tools)
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["type"],
-        "oneOf": [
-            {
-                "required": ["type", "content"],
-                "properties": {
-                    "type": {"type": "string", "enum": ["final"]},
-                    "content": {"type": "string", "minLength": 1},
-                },
-            },
-            {
-                "required": ["type", "name", "input"],
-                "properties": {
-                    "type": {"type": "string", "enum": ["tool_call"]},
-                    "name": {"type": "string", "enum": names},
-                    "input": {"type": "object", "additionalProperties": True},
-                },
-            },
-        ],
-        "properties": {
-            "type": {
-                "type": "string",
-                "enum": ["tool_call", "final"],
-            },
-            "name": {
-                "type": "string",
-                "enum": names,
-            },
-            "input": {
-                "type": "object",
-                "additionalProperties": True,
-            },
-            "content": {"type": "string"},
-        },
-    }
-
-
 def append_transcript(event: dict[str, Any]) -> dict[str, Any]:
     return append_jsonl(TRANSCRIPT, event)
 
@@ -93,30 +53,37 @@ def transcript_tail(limit: int = DEFAULT_TAIL_LIMIT) -> list[dict[str, Any]]:
     return read_jsonl(TRANSCRIPT)[-limit:]
 
 
+def load_project_context(cwd: str | Path | None = None) -> str:
+    """Load project instruction files from parent directories, global to local."""
+    current = Path(cwd or os.getcwd()).resolve()
+    directories = [*reversed(current.parents), current]
+    sections: list[str] = []
+    seen: set[Path] = set()
+    for directory in directories:
+        for filename in PROJECT_CONTEXT_FILES:
+            path = directory / filename
+            try:
+                resolved = path.resolve()
+            except OSError:
+                continue
+            if resolved in seen or not path.is_file():
+                continue
+            seen.add(resolved)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if text.strip():
+                sections.append(f"Project context from {path}:\n{text.strip()}")
+    return "\n\n".join(sections)
+
+
 def zeta_system_prompt(
     route_prompt: str | None = None,
     *,
     allowed_tools: Iterable[str] | None = None,
 ) -> str:
     return system_prompt(route_prompt, allowed_tools=allowed_tools)
-
-
-def zeta_user_prompt(
-    objective: str,
-    transcript: list[dict[str, Any]],
-    *,
-    context: str = "",
-) -> str:
-    sections = [
-        f"Objective:\n{objective}",
-        f"cwd:\n{os.getcwd()}",
-    ]
-    if context.strip():
-        sections.append(context.strip())
-    sections.append(
-        f"Recent transcript JSON:\n{json.dumps(transcript[-20:], ensure_ascii=False)}"
-    )
-    return "\n\n".join(sections)
 
 
 def zeta_context_message(
@@ -166,8 +133,12 @@ def transcript_chat_messages(
         message = event_chat_message(event_type, event)
         if message is not None:
             messages.append(message)
+            record_tool_call_ids(message, tool_call_ids)
             continue
         if event_type == "tool_call":
+            tool_call_id = str(event.get("id") or event.get("tool_call_id") or "")
+            if tool_call_id and tool_call_id in tool_call_ids:
+                continue
             message = tool_call_message(event, fallback_id=f"call-{index}")
             messages.append(message)
             record_tool_call_ids(message, tool_call_ids)
@@ -199,6 +170,13 @@ def event_chat_message(
     if role is None:
         return None
     content = str(event.get("content") or "")
+    tool_calls = event.get("tool_calls")
+    if isinstance(tool_calls, list) and role == "assistant":
+        return {
+            "role": "assistant",
+            "content": content or None,
+            "tool_calls": tool_calls,
+        }
     if not content:
         return None
     return {"role": role, "content": content}
@@ -268,66 +246,64 @@ def tool_result_message(
     }
 
 
-def next_model_action(
-    objective: str,
-    transcript: list[dict[str, Any]],
-    *,
-    system: str | None = None,
-    allowed_tools: Iterable[str] | None = None,
-    context: str = "",
-) -> dict[str, Any]:
-    if not model_endpoint_open():
-        raise RuntimeError("model endpoint is not reachable")
-    allowed = set(allowed_tools) if allowed_tools is not None else None
-    data = chat_json_messages(
-        zeta_chat_messages(
-            objective,
-            transcript,
-            system=system,
-            allowed_tools=allowed,
-            context=context,
-        ),
-        model_action_schema(allowed),
-    )
-    action_type = str(data.get("type") or "")
-    if action_type == "final":
-        return {"type": "final", "content": str(data.get("content") or "")}
-    name = str(data.get("name") or "")
-    raw_input = data.get("input")
-    if (
-        name not in TOOL_SPECS
-        or (allowed is not None and name not in allowed)
-        or not isinstance(raw_input, dict)
-    ):
-        return {
-            "type": "final",
-            "content": "I could not choose a valid Zeta tool for the next step.",
-        }
-    return {"type": "tool_call", "name": name, "input": cast(dict[str, Any], raw_input)}
-
-
 def stream_model_events(request: dict[str, Any]) -> Iterable[dict[str, Any]]:
     objective = str(request.get("objective") or request.get("prompt") or "")
     context = str(request.get("context") or "")
     transcript = request.get("transcript")
     if not isinstance(transcript, list):
         transcript = transcript_tail()
-    action = next_model_action(
+    from .agent import AgentConfig, run_agent_turn
+
+    result = run_agent_turn(
         objective,
         cast(list[dict[str, Any]], transcript),
-        context=context,
+        AgentConfig(max_turns=1),
+        context="\n\n".join(part for part in [load_project_context(), context] if part),
     )
-    if action["type"] == "final":
-        content = str(action.get("content") or "")
-        if content:
+    yield from stream_agent_result(result)
+
+
+def stream_agent_result(result: Any) -> Iterable[dict[str, Any]]:
+    emitted_text = False
+    for event in result.events:
+        for stream_event in stream_event_from_agent_event(event):
+            if stream_event.get("type") == "assistant_delta":
+                emitted_text = True
+            yield stream_event
+    if result.final_text:
+        if not emitted_text:
+            content = result.final_text
             yield {"type": "assistant_delta", "text": content}
         yield {"type": "final"}
         return
-    yield {
-        "type": "tool_call",
-        "name": action["name"],
-        "input": action["input"],
-    }
+    if result.handoff is None:
+        yield {"type": "final"}
+
+
+def stream_event_from_agent_event(event: dict[str, Any]) -> list[dict[str, Any]]:
+    event_type = event.get("type")
+    if event_type == "assistant_message":
+        content = str(event.get("content") or "")
+        return [{"type": "assistant_delta", "text": content}] if content else []
+    if event_type == "tool_call":
+        return [
+            {
+                "type": "tool_call",
+                "id": event.get("tool_call_id") or event.get("id"),
+                "name": event.get("name"),
+                "input": event.get("input") or {},
+            }
+        ]
+    if event_type == "tool_result":
+        return [
+            {
+                "type": "tool_result",
+                "tool_call_id": event.get("tool_call_id"),
+                "name": event.get("name"),
+                "result": event.get("result") or {},
+            }
+        ]
+    return []
 
 
 def read_json_stdin(stdin: TextIO) -> dict[str, Any]:

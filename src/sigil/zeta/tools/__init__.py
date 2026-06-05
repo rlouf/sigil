@@ -6,6 +6,7 @@ from typing import Any, Iterable
 
 from . import bash, edit, grep, ls, read, write
 from .base import ToolImpl, ToolSpec, diagnostic, error_result
+from .schema import validate_tool_args as validate_args_against_schema
 
 TOOL_IMPLS: dict[str, ToolImpl] = {
     bash.SPEC.name: ToolImpl(bash.SPEC, bash.analyze, bash.run),
@@ -59,6 +60,11 @@ def model_tool_descriptors(
             }
         )
     return descriptors
+
+
+def validate_tool_args(name: str, params: dict[str, Any]) -> list[str]:
+    """Validate params against the built-in subset of JSON Schema."""
+    return validate_args_against_schema(TOOL_SPECS, name, params)
 
 
 def analyze_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:

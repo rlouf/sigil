@@ -124,7 +124,7 @@ def test_op_cli_json_reports_parsed_invocation() -> None:
 
 
 def test_op_cli_json_does_not_run_operator() -> None:
-    with patch("sigil.operators.chat_text", side_effect=AssertionError("no model")):
+    with patch("sigil.cli.operators.ask", side_effect=AssertionError("no model")):
         result = invoke_op(
             ["--json", ",", "review"],
             input="diff\n",

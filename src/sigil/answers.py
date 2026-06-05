@@ -22,6 +22,7 @@ from .state import (
 )
 from .zeta.model import chat_text
 from .zeta import runtime
+from .zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 from .display import render_tool_start, render_zeta_status
 
 
@@ -56,20 +57,6 @@ def discussion_turns() -> list[dict[str, object]]:
         for turn in read_jsonl(ANSWER_TRANSCRIPT)
         if turn.get("role") in {"user", "assistant"} and turn.get("content")
     ]
-
-
-def continuation_prompt(user_input: str, turns: list[dict[str, object]]) -> str:
-    """Build the follow-up prompt from the prior shell discussion."""
-    if not turns:
-        return user_input
-    transcript = "\n\n".join(f"{turn['role']}:\n{turn['content']}" for turn in turns)
-    return "\n\n".join(
-        [
-            "Continue the previous shell discussion.",
-            f"Transcript so far:\n{transcript}",
-            f"Follow-up question:\n{user_input}",
-        ]
-    )
 
 
 def prepend_recent_turns(user_input: str) -> str:
@@ -167,60 +154,6 @@ def ask(
     )
 
 
-def run_text_answer(
-    system: str,
-    prompt: str,
-    *,
-    input_text: str = "",
-    follow_up: bool = False,
-    json_output: bool = False,
-    max_tokens: int = 1200,
-) -> int:
-    """Run a plain Zeta model answer and persist answer state."""
-    if not ensure_server():
-        return 1
-    answer = chat_text(system, prompt, max_tokens=max_tokens)
-    append_event(
-        {
-            "type": "answer",
-            "input": input_text,
-            "prompt": prompt,
-            "answer": answer,
-            "runtime": "zeta",
-        }
-    )
-    append_jsonl(
-        ANSWER_TRANSCRIPT,
-        {
-            "role": "assistant",
-            "content": answer,
-            "input": input_text,
-            "prompt": prompt,
-            "follow_up": follow_up,
-            "runtime": "zeta",
-        },
-    )
-    if json_output:
-        print(
-            json.dumps(
-                {
-                    "question": input_text,
-                    "prompt": prompt,
-                    "answer": answer,
-                    "runtime": "zeta",
-                    "tools": [],
-                    "malformed_events": 0,
-                },
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-        )
-    else:
-        print()
-        print(answer)
-    return 0
-
-
 def run_tool_answer(
     system: str,
     prompt: str,
@@ -249,68 +182,20 @@ def run_tool_answer(
         dict(turn) for turn in history if turn.get("role") in {"user", "assistant"}
     ]
     turn_events.append(user_event)
-    tool_events: list[dict[str, Any]] = []
-    answer = ""
-    for _ in range(max_steps):
-        action = runtime.next_model_action(
-            prompt,
-            turn_events,
-            system=system,
+    result = run_agent_turn(
+        prompt,
+        turn_events,
+        AgentConfig(
+            system_prompt=system,
             allowed_tools=enabled_tools,
-        )
-        if action["type"] == "final":
-            answer = str(action.get("content") or "")
-            if not answer:
-                turn_events.append({"type": "empty_final"})
-                continue
-            break
-        name = str(action["name"])
-        params = action.get("input")
-        if not isinstance(params, dict):
-            print("zeta: invalid tool input", file=sys.stderr)
-            return 1
-        tool_call = {
-            "type": "tool_call",
-            "name": name,
-            "input": params,
-            "route": ANSWER_ROUTE,
-        }
-        trace = append_zeta_event(
-            "tool_call", name=name, input=params, route=ANSWER_ROUTE
-        )
-        turn_events.append({**tool_call, "id": trace["id"]})
-        append_jsonl(
-            "last-tools.jsonl", {"type": "tool_start", "tool": name, "args": params}
-        )
-        if not json_output:
-            render_tool_start(name, params, output=sys.stdout)
-        analysis = runtime.analyze_tool(name, params)
-        append_zeta_event(
-            "tool_analysis",
-            tool_call_id=trace["id"],
-            name=name,
-            analysis=analysis,
-            route=ANSWER_ROUTE,
-        )
-        result = runtime.run_tool(name, params)
-        result_event = {
-            "type": "tool_result",
-            "tool_call_id": trace["id"],
-            "name": name,
-            "result": result,
-            "route": ANSWER_ROUTE,
-        }
-        append_zeta_event(
-            "tool_result",
-            tool_call_id=trace["id"],
-            name=name,
-            result=result,
-            route=ANSWER_ROUTE,
-        )
-        turn_events.append(result_event)
-        event = {"type": "tool_end", "tool": name, "result": result}
-        append_jsonl("last-tools.jsonl", event)
-        tool_events.append(event)
+            max_turns=max_steps,
+            stop_on_handoff=True,
+        ),
+        context=runtime.load_project_context(),
+    )
+    turn_events.extend(result.events)
+    tool_events = replay_answer_events(result, json_output=json_output)
+    answer = result.final_text
     if not answer:
         answer = fallback_answer(system, prompt, turn_events)
     record_answer(
@@ -322,6 +207,40 @@ def run_tool_answer(
         json_output=json_output,
     )
     return 0
+
+
+def replay_answer_events(
+    result: AgentTurnResult,
+    *,
+    json_output: bool,
+) -> list[dict[str, Any]]:
+    tool_events: list[dict[str, Any]] = []
+    for event in result.events:
+        event_type = str(event.get("type") or "")
+        fields = {
+            key: value for key, value in event.items() if key not in {"type", "route"}
+        }
+        trace = append_zeta_event(event_type, **fields, route=ANSWER_ROUTE)
+        if event_type == "tool_call":
+            name = str(trace.get("name") or "")
+            params = trace.get("input")
+            args = params if isinstance(params, dict) else {}
+            append_jsonl(
+                "last-tools.jsonl", {"type": "tool_start", "tool": name, "args": args}
+            )
+            if not json_output:
+                render_tool_start(name, args, output=sys.stdout)
+            continue
+        if event_type != "tool_result":
+            continue
+        name = str(trace.get("name") or "")
+        result_payload = trace.get("result")
+        if not isinstance(result_payload, dict):
+            result_payload = {}
+        tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
+        append_jsonl("last-tools.jsonl", tool_event)
+        tool_events.append(tool_event)
+    return tool_events
 
 
 def fallback_answer(

@@ -30,11 +30,6 @@ def model_url_from_env(env: Mapping[str, str]) -> str:
     return env.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
 
 
-def configured_model_name_from_env(env: Mapping[str, str]) -> str:
-    """Return the explicitly configured model name, if any."""
-    return env.get("ZETA_MODEL_NAME") or ""
-
-
 def model_endpoint_valid(url: str) -> bool:
     """Return whether a model endpoint URL includes a host."""
     return urlparse(url).hostname is not None
@@ -97,6 +92,31 @@ def chat_json_messages(
     payload = request_chat_completion(body)
     content = payload["choices"][0]["message"]["content"]
     return json.loads(content)
+
+
+def chat_completion_messages(
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] = "auto",
+    max_tokens: int = 1200,
+) -> dict[str, Any]:
+    """Request one native OpenAI-compatible chat completion message."""
+    body: dict[str, Any] = {
+        "model": model_name(),
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    if tools:
+        body["tools"] = tools
+        body["tool_choice"] = tool_choice
+    payload = request_chat_completion(body)
+    message = payload["choices"][0]["message"]
+    if not isinstance(message, dict):
+        raise RuntimeError("model request failed: assistant message was invalid")
+    return message
 
 
 def chat_json(system: str, user: str, schema: dict[str, Any]) -> dict[str, Any]:

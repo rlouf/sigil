@@ -6,8 +6,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, cast
 from .model import ensure_server
-from .zeta.model import chat_json, chat_text
-from .state import ANSWER_TRANSCRIPT, append_event, append_jsonl, read_jsonl
+from .zeta.model import chat_json
+from .state import append_event
 from .failure import active_failure_context
 from .answers import recent_answer_context
 from .session import recent_turns_context
@@ -26,12 +26,6 @@ MAX_STDIN_CHARS = 120_000
 MAX_EVENT_OUTPUT_CHARS = 4000
 MAX_TARGET_FILES = 16
 MAX_TARGET_FILE_CHARS = 20_000
-INSPECT_SYSTEM = (
-    "You are a semantic shell operator. Inspect the input stream and answer the "
-    "user's prompt directly. Be concise, concrete, and grounded in stdin. "
-    "Do not claim to have read files or run commands beyond the provided input."
-)
-
 RECOMMEND_SYSTEM = (
     "You are a semantic shell operator. Produce one typed proposal from the "
     "input stream, prompt, current project context, and any last-failure "
@@ -150,38 +144,6 @@ def create_invocation(
     )
 
 
-def run_invocation(invocation: OperatorInvocation) -> OperatorResult:
-    """Run a semantic operator invocation and return stdout text."""
-    if invocation.base == "," and invocation.depth > 1:
-        raise RuntimeError(
-            f"{invocation.glyph} agent step is handled by the Zeta act runner"
-        )
-    if not ensure_server():
-        raise SystemExit(1)
-    system = operator_system_prompt(invocation)
-    user = operator_user_prompt(invocation)
-    output = run_model(invocation, system, user)
-    event = append_event(
-        {
-            "type": "operator_completed",
-            "operator": invocation.to_dict(),
-            "output_snippet": output[:MAX_EVENT_OUTPUT_CHARS],
-            "glyph": invocation.glyph,
-        }
-    )
-    append_inspect_turns(invocation, output, event)
-    return OperatorResult(
-        output=output,
-    )
-
-
-def operator_system_prompt(invocation: OperatorInvocation) -> str:
-    """Return the system prompt for an operator invocation."""
-    return (
-        f"{INSPECT_SYSTEM}\n\nDepth: {invocation.depth}. {depth_guidance(invocation)}"
-    )
-
-
 def run_command_proposal(
     *,
     prompt: str,
@@ -257,28 +219,6 @@ def proposal_from_json(
     )
 
 
-def run_model(invocation: OperatorInvocation, system: str, user: str) -> str:
-    """Run the model for read-only inspect operators."""
-    return chat_text(
-        system,
-        user,
-        max_tokens=max_tokens_for_depth(invocation.depth),
-    ).rstrip()
-
-
-def depth_guidance(invocation: OperatorInvocation) -> str:
-    """Return operator-specific guidance for repeated glyph depth."""
-    return (
-        "Use read-only local context and answer directly. "
-        "Do not stage or propose commands as an action."
-    )
-
-
-def operator_user_prompt(invocation: OperatorInvocation) -> str:
-    """Return the user prompt sent to the model."""
-    return inspect_user_prompt(invocation)
-
-
 def proposal_user_prompt(invocation: OperatorInvocation) -> str:
     """Return a proposal prompt with stdin, file, and failure context."""
     prompt = invocation.prompt or default_prompt(invocation)
@@ -323,61 +263,6 @@ def proposal_instruction() -> str:
     return "Return exactly one command proposal. Use kind=command."
 
 
-def inspect_user_prompt(invocation: OperatorInvocation) -> str:
-    """Return an inspect prompt with same-terminal transcript context."""
-    sections = [
-        f"Operator: {invocation.glyph} ({invocation.name})",
-        f"Prompt: {invocation.prompt or default_prompt(invocation)}",
-    ]
-    turns = inspect_turns()
-    if turns:
-        transcript = "\n\n".join(
-            f"{turn['role']}:\n{turn['content']}" for turn in turns
-        )
-        sections.append(f"Previous answer transcript:\n{transcript}")
-    stdin_text, stdin_label = bounded_stdin(invocation.stdin)
-    sections.append(f"{stdin_label}:\n{stdin_text}")
-    return "\n\n".join(sections)
-
-
-def inspect_turns() -> list[dict[str, object]]:
-    """Load same-session answer turns visible to inspect prompts."""
-    return [
-        turn
-        for turn in read_jsonl(ANSWER_TRANSCRIPT)
-        if turn.get("role") in {"user", "assistant"} and turn.get("content")
-    ]
-
-
-def append_inspect_turns(
-    invocation: OperatorInvocation,
-    output: str,
-    event: dict[str, object],
-) -> None:
-    """Record inspect turns for same-terminal continuity."""
-    event_id = str(event.get("id") or "")
-    prompt = invocation.prompt or default_prompt(invocation)
-    if invocation.stdin:
-        prompt = f"{prompt}\n\nstdin:\n{invocation.stdin}"
-    append_jsonl(
-        ANSWER_TRANSCRIPT,
-        {
-            "role": "user",
-            "content": prompt,
-            "event_id": event_id,
-        },
-    )
-    if output:
-        append_jsonl(
-            ANSWER_TRANSCRIPT,
-            {
-                "role": "assistant",
-                "content": output,
-                "event_id": event_id,
-            },
-        )
-
-
 def default_prompt(invocation: OperatorInvocation) -> str:
     """Return a fallback prompt for bare operator invocations."""
     return "Inspect and summarize the current context."
@@ -396,10 +281,3 @@ def readable_target_files(lines: list[str]) -> list[tuple[Path, str]]:
             continue
         files.append((path, content))
     return files
-
-
-def max_tokens_for_depth(depth: int) -> int:
-    """Scale output budget conservatively with operator repetition."""
-    if depth <= 1:
-        return 700
-    return 1200

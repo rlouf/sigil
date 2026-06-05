@@ -20,6 +20,7 @@ from .display import (
 from .model import ensure_server
 from .state import append_jsonl
 from .zeta import runtime
+from .zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 
 HandoffOutput = Literal["detail", "summary", "none"]
 
@@ -60,26 +61,30 @@ def run_agent_step(
             "available_tools": list(enabled_tools),
         },
     )
-    for _ in range(max_steps):
-        action = runtime.next_model_action(
-            prompt,
-            runtime.transcript_tail(),
-            system=system,
+    context = runtime.load_project_context()
+    result = run_agent_turn(
+        prompt,
+        runtime.transcript_tail(),
+        AgentConfig(
+            system_prompt=system,
             allowed_tools=enabled_tools,
-        )
-        if action["type"] == "final":
-            content = str(action.get("content") or "")
-            record_agent_final(content, glyph=glyph)
-            return 0
-        status = run_agent_tool_action(
-            action,
-            glyph=glyph,
-            handoff_path=handoff_path,
-            handoff_output=handoff_output,
-            output=output,
-        )
-        if status is not None:
-            return status
+            max_turns=max_steps,
+            stop_on_handoff=True,
+        ),
+        context=context,
+    )
+    status = replay_agent_events(
+        result,
+        glyph=glyph,
+        handoff_path=handoff_path,
+        handoff_output=handoff_output,
+        output=output,
+    )
+    if status is not None:
+        return status
+    if result.final_text:
+        record_agent_final(result.final_text, glyph=glyph)
+        return 0
     print("Zeta stopped after reaching the step budget.", file=sys.stderr)
     return 1
 
@@ -91,51 +96,48 @@ def enabled_tool_tuple(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
 
 
 def record_agent_final(content: str, *, glyph: str) -> None:
+    del glyph
     if not content:
         return
     print()
     print(content)
-    append_zeta_event("assistant_message", content=content, glyph=glyph)
 
 
-def run_agent_tool_action(
-    action: dict[str, Any],
+def replay_agent_events(
+    result: AgentTurnResult,
     *,
     glyph: str,
     handoff_path: str | Path | None = None,
     handoff_output: HandoffOutput = "detail",
     output: TextIO = sys.stderr,
 ) -> int | None:
-    name = str(action["name"])
-    params = action.get("input")
-    if not isinstance(params, dict):
-        print("zeta: invalid tool input", file=sys.stderr)
-        return 1
-    call = append_zeta_event("tool_call", name=name, input=params, glyph=glyph)
-    render_tool_start(name, params, output=output)
-    analysis = runtime.analyze_tool(name, params)
-    append_zeta_event(
-        "tool_analysis",
-        tool_call_id=call["id"],
-        name=name,
-        analysis=analysis,
-        glyph=glyph,
-    )
-    result = runtime.run_tool(name, params)
-    append_zeta_event(
-        "tool_result",
-        tool_call_id=call["id"],
-        name=name,
-        result=result,
-        glyph=glyph,
-    )
-    render_result_summary(name, result, output=output)
-    handoff = result.get("handoff")
-    if not isinstance(handoff, dict):
-        return None
-    write_handoff(handoff_path, handoff)
-    print_handoff(handoff, mode=handoff_output)
-    return 0
+    status: int | None = None
+    for event in result.events:
+        event_type = str(event.get("type") or "")
+        fields = {key: value for key, value in event.items() if key != "type"}
+        persisted = append_zeta_event(event_type, **fields, glyph=glyph)
+        if event_type == "tool_call":
+            params = persisted.get("input")
+            render_tool_start(
+                str(persisted.get("name") or ""),
+                params if isinstance(params, dict) else {},
+                output=output,
+            )
+            continue
+        if event_type != "tool_result":
+            continue
+        name = str(persisted.get("name") or "")
+        result_payload = persisted.get("result")
+        if not isinstance(result_payload, dict):
+            continue
+        render_result_summary(name, result_payload, output=output)
+        handoff = result_payload.get("handoff")
+        if not isinstance(handoff, dict):
+            continue
+        write_handoff(handoff_path, handoff)
+        print_handoff(handoff, mode=handoff_output)
+        status = 0
+    return status
 
 
 def render_result_summary(
