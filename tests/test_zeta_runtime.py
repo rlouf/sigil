@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, cast
 
@@ -524,6 +525,213 @@ def test_zeta_tools_list_exposes_v1_builtins() -> None:
     names = {tool["name"] for tool in data["tools"]}
     assert {"read", "grep", "ls", "bash", "edit", "write"} <= names
     assert data["tools"][0]["origin"] == "builtin"
+
+
+def write_cli_plugin(
+    path: Path,
+    *,
+    name: str = "docs_search",
+    invalid_metadata: bool = False,
+    sleep_metadata: bool = False,
+    fail_run: bool = False,
+) -> None:
+    metadata = {
+        "name": name,
+        "description": "Search project docs.",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["query"],
+            "properties": {"query": {"type": "string"}},
+        },
+        "interactive": False,
+    }
+    script = f"""
+from __future__ import annotations
+
+import json
+import sys
+import time
+
+if "--metadata" in sys.argv:
+    if {sleep_metadata!r}:
+        time.sleep(1)
+    if {invalid_metadata!r}:
+        print("not json")
+    else:
+        print(json.dumps({metadata!r}))
+    raise SystemExit(0)
+
+params = json.loads(sys.stdin.read() or "{{}}")
+if "--analyze" in sys.argv:
+    print(json.dumps({{
+        "valid": True,
+        "resolved": True,
+        "effects": [{{
+            "kind": "search",
+            "resource": "path",
+            "target": params["query"],
+            "certainty": "certain",
+        }}],
+        "diagnostics": [],
+    }}))
+else:
+    if {fail_run!r}:
+        print("execution failed", file=sys.stderr)
+        raise SystemExit(7)
+    print(json.dumps({{
+        "ok": True,
+        "content": [{{"type": "text", "text": "docs:" + params["query"]}}],
+        "metadata": {{"query": params["query"]}},
+    }}))
+"""
+    path.write_text(script, encoding="utf-8")
+
+
+def write_tools_config(
+    home: Path,
+    command: list[str],
+    *,
+    timeout_ms: int = 30_000,
+) -> None:
+    config_dir = home / ".zeta"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    config_dir.joinpath("tools.toml").write_text(
+        "\n".join(
+            [
+                "[[tools]]",
+                f"command = {json.dumps(command)}",
+                f"timeout_ms = {timeout_ms}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_zeta_cli_plugin_tool_flows_through_registry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    script = tmp_path / "plugin.py"
+    write_cli_plugin(script)
+    write_tools_config(home, [sys.executable, str(script)])
+    monkeypatch.setenv("HOME", str(home))
+
+    listed = CliRunner().invoke(zeta_cli, ["tools", "list", "--json"])
+    assert listed.exit_code == 0
+    tools = json.loads(listed.output)["tools"]
+    plugin = next(tool for tool in tools if tool["name"] == "docs_search")
+    assert plugin["origin"] == "plugin"
+    assert plugin["plugin"] == sys.executable
+    assert plugin["command"] == ["zeta", "tool", "docs_search"]
+
+    descriptors = zeta.model_tool_descriptors(("docs_search",))
+    assert descriptors == [
+        {
+            "type": "function",
+            "function": {
+                "name": "docs_search",
+                "description": "Search project docs.",
+                "parameters": plugin["schema"],
+            },
+        }
+    ]
+    assert validate_tool_args("docs_search", {}) == [
+        "$: 'query' is a required property"
+    ]
+    assert validate_tool_args("docs_search", {"query": "install"}) == []
+
+    analysis = zeta.analyze_tool("docs_search", {"query": "install"})
+    assert analysis["valid"] is True
+    assert analysis["effects"][0]["target"] == "install"
+
+    data = zeta.run_tool("docs_search", {"query": "install"})
+    assert data["ok"] is True
+    assert data["content"][0]["text"] == "docs:install"
+
+    cli_run = CliRunner().invoke(
+        zeta_cli,
+        ["tool", "docs_search"],
+        input=json.dumps({"query": "cli"}),
+    )
+    assert cli_run.exit_code == 0
+    assert json.loads(cli_run.output)["content"][0]["text"] == "docs:cli"
+
+
+def test_zeta_cli_plugin_name_collision_is_ignored(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    script = tmp_path / "plugin.py"
+    write_cli_plugin(script, name="read")
+    write_tools_config(home, [sys.executable, str(script)])
+    monkeypatch.setenv("HOME", str(home))
+
+    data = zeta.tools_list()
+    read_tools = [tool for tool in data["tools"] if tool["name"] == "read"]
+    assert len(read_tools) == 1
+    assert read_tools[0]["origin"] == "builtin"
+    assert data["diagnostics"][0]["code"] == "plugin-name-collision"
+
+
+def test_zeta_cli_plugin_invalid_metadata_reports_diagnostic(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    script = tmp_path / "plugin.py"
+    write_cli_plugin(script, invalid_metadata=True)
+    write_tools_config(home, [sys.executable, str(script)])
+    monkeypatch.setenv("HOME", str(home))
+
+    data = zeta.tools_list()
+    assert "docs_search" not in {tool["name"] for tool in data["tools"]}
+    assert data["diagnostics"][0]["code"] == "plugin-metadata-invalid-json"
+
+
+def test_zeta_cli_plugin_missing_command_reports_diagnostic(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_tools_config(home, [str(tmp_path / "missing-tool")])
+    monkeypatch.setenv("HOME", str(home))
+
+    data = zeta.tools_list()
+    assert data["diagnostics"][0]["code"] == "plugin-metadata-failed"
+
+
+def test_zeta_cli_plugin_metadata_timeout_reports_diagnostic(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    script = tmp_path / "plugin.py"
+    write_cli_plugin(script, sleep_metadata=True)
+    write_tools_config(home, [sys.executable, str(script)], timeout_ms=10)
+    monkeypatch.setenv("HOME", str(home))
+
+    data = zeta.tools_list()
+    assert data["diagnostics"][0]["code"] == "plugin-metadata-timeout"
+
+
+def test_zeta_cli_plugin_nonzero_execution_returns_tool_error(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    script = tmp_path / "plugin.py"
+    write_cli_plugin(script, fail_run=True)
+    write_tools_config(home, [sys.executable, str(script)])
+    monkeypatch.setenv("HOME", str(home))
+
+    data = zeta.run_tool("docs_search", {"query": "install"})
+    assert data["ok"] is False
+    assert data["error"]["code"] == "plugin-run-failed"
+    assert "status 7" in data["error"]["message"]
 
 
 def test_zeta_help_frames_cli_as_bundled_runtime_service() -> None:

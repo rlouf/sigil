@@ -100,7 +100,7 @@ def run_agent_step(
 
 def enabled_tool_tuple(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
     if allowed_tools is None:
-        return tuple(runtime.TOOL_SPECS)
+        return tuple(runtime.allowed_tool_names())
     return tuple(allowed_tools)
 
 

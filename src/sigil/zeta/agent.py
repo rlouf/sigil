@@ -10,7 +10,7 @@ from ..protocols import is_shell_prompt_handoff
 from . import runtime
 from .model import chat_completion_messages, model_endpoint_open
 from .tools import (
-    TOOL_SPECS,
+    allowed_tool_names,
     analyze_tool,
     model_tool_descriptors,
     run_tool,
@@ -53,7 +53,7 @@ def run_agent_turn(
     if not model_endpoint_open():
         raise RuntimeError("model endpoint is not reachable")
     if config.allowed_tools is None:
-        allowed_tools = tuple(sorted(TOOL_SPECS))
+        allowed_tools = tuple(allowed_tool_names())
     else:
         allowed_tools = tuple(config.allowed_tools)
     events: list[dict[str, Any]] = []
@@ -161,7 +161,7 @@ def handle_tool_call(
             parse_error,
             call_event=call_event,
         )
-    if name not in TOOL_SPECS:
+    if name not in allowed_tool_names():
         return invalid_tool_result(
             call_id,
             name,

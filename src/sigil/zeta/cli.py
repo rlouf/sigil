@@ -51,29 +51,17 @@ def tools_list(json_output: bool) -> int:
     return 0
 
 
-@cli.group("tool")
-def tool_group() -> None:
-    """Built-in tool services."""
-
-
-def tool_command(name: str) -> click.Command:
-    @click.command(
-        name,
-        context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
-    )
-    @click.option("--json", "json_meta", is_flag=True)
-    @click.option("--schema", is_flag=True)
-    @click.option("--analyze", is_flag=True)
-    def command(json_meta: bool, schema: bool, analyze: bool) -> int:
-        return run_tool_command(
-            name, json_meta=json_meta, schema=schema, analyze=analyze
-        )
-
-    return command
-
-
-for _name in sorted(zeta.TOOL_SPECS):
-    tool_group.add_command(tool_command(_name))
+@cli.command(
+    "tool",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+@click.argument("name")
+@click.option("--json", "json_meta", is_flag=True)
+@click.option("--schema", is_flag=True)
+@click.option("--analyze", is_flag=True)
+def tool_command(name: str, json_meta: bool, schema: bool, analyze: bool) -> int:
+    """Run or inspect a registered tool."""
+    return run_tool_command(name, json_meta=json_meta, schema=schema, analyze=analyze)
 
 
 def run_tool_command(
@@ -84,10 +72,10 @@ def run_tool_command(
     analyze: bool,
 ) -> int:
     if json_meta:
-        print_json(zeta.tool_metadata(name))
+        print_json(tool_metadata_or_error(name))
         return 0
     if schema:
-        print_json(zeta.tool_metadata(name)["schema"])
+        print_json(tool_metadata_or_error(name)["schema"])
         return 0
     try:
         params = zeta.read_json_stdin(sys.stdin)
@@ -98,6 +86,16 @@ def run_tool_command(
         return 0
     print_json(zeta.run_tool(name, params))
     return 0
+
+
+def tool_metadata_or_error(name: str) -> dict[str, Any]:
+    try:
+        return zeta.tool_metadata(name)
+    except KeyError as exc:
+        raise click.BadParameter(
+            f"unknown tool: {name}",
+            param_hint="name",
+        ) from exc
 
 
 @cli.group("transcript")
