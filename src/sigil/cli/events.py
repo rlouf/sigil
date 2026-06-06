@@ -155,11 +155,6 @@ def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
         "tool_start": "tool start",
         "tool_end": "tool end",
         "operator_command_executed": "executed",
-        "act_created": "act created",
-        "act_step_decision": "act decision",
-        "act_step_executed": "act executed",
-        "act_completed": "act complete",
-        "act_aborted": "act aborted",
         "plan_created": "plan created",
         "plan_step_decision": "plan decision",
         "plan_step_executed": "plan executed",
@@ -186,7 +181,7 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
         return clean_summary_text(event.get("tool")) or "tool finished"
     if event_type == "operator_command_executed":
         return command_status_summary(event)
-    if event_type.startswith(("act_", "plan_")):
+    if event_type.startswith("plan_"):
         return staged_step_detail(event, event_type)
     if event_type == "answer_done":
         return f"{event.get('bytes') or 0} bytes"
@@ -209,8 +204,8 @@ def operator_completed_detail(event: dict[str, object], event_type: str) -> str 
 
 
 def staged_step_detail(event: dict[str, object], event_type: str) -> str:
-    """Return the summary for an act_/plan_ staged step event."""
-    if event_type in {"act_step_executed", "plan_step_executed"}:
+    """Return the summary for a plan staged step event."""
+    if event_type == "plan_step_executed":
         return command_status_summary(event)
     return clean_summary_text(event.get("objective")) or clean_summary_text(
         event.get("command")

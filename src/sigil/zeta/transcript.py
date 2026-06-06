@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..protocols import is_shell_handoff_result, is_shell_prompt_handoff
 from ..state import append_jsonl, read_jsonl
 
 TRANSCRIPT = "zeta-transcript.jsonl"
@@ -26,6 +27,7 @@ def transcript_chat_messages(
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
     tool_call_ids: set[str] = set()
+    resolved_shell_handoffs = resolved_shell_handoff_call_ids(transcript)
     for index, event in enumerate(transcript):
         message = role_chat_message(event)
         if message is not None:
@@ -46,8 +48,39 @@ def transcript_chat_messages(
             record_tool_call_ids(message, tool_call_ids)
             continue
         if event_type == "tool_result":
+            if is_resolved_shell_prompt_handoff(event, resolved_shell_handoffs):
+                continue
             messages.append(tool_result_message(event, tool_call_ids))
     return messages
+
+
+def resolved_shell_handoff_call_ids(transcript: list[dict[str, Any]]) -> set[str]:
+    """Return tool call ids that have a real shell handoff outcome."""
+    resolved: set[str] = set()
+    for event in transcript:
+        if str(event.get("type") or "") != "tool_result":
+            continue
+        result = event.get("result")
+        if not is_shell_handoff_result(result):
+            continue
+        tool_call_id = str(event.get("tool_call_id") or "")
+        if tool_call_id:
+            resolved.add(tool_call_id)
+    return resolved
+
+
+def is_resolved_shell_prompt_handoff(
+    event: dict[str, Any],
+    resolved_shell_handoffs: set[str],
+) -> bool:
+    """Return whether this staging handoff was superseded by shell output."""
+    tool_call_id = str(event.get("tool_call_id") or "")
+    if not tool_call_id or tool_call_id not in resolved_shell_handoffs:
+        return False
+    result = event.get("result")
+    if not isinstance(result, dict):
+        return False
+    return is_shell_prompt_handoff(result.get("handoff"))
 
 
 def role_chat_message(event: dict[str, Any]) -> dict[str, Any] | None:

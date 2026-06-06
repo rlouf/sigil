@@ -54,16 +54,6 @@ def render_tool_label(tools: Iterable[object]) -> str:
     return label or "no tools"
 
 
-def render_act_objective_line(act: dict[str, Any]) -> str:
-    """Return a compact act overview line."""
-    return f"objective: {act.get('objective')}"
-
-
-def render_act_tools_line(tools: str) -> str:
-    """Return the tools line shown before a pending Zeta act step."""
-    return f"❯ {'tools':<{TRACE_LABEL_WIDTH}}  {tools}"
-
-
 def render_handoff_lines(handoff: dict[str, Any]) -> list[str]:
     """Return user-facing lines for a staged tool handoff."""
     reason = str(handoff.get("reason") or "")

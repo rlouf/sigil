@@ -187,6 +187,7 @@ def run_tool_answer(
     if not server_ready:
         return 1
     enabled_tools = tuple(allowed_tools)
+    recorder = AnswerEventRecorder(json_output=json_output)
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
@@ -217,9 +218,17 @@ def run_tool_answer(
             model_url=selected_model.url if selected_model is not None else None,
         ),
         context=runtime.load_project_context(),
+        event_sink=recorder.record,
     )
     turn_events.extend(result.events)
-    tool_events = replay_answer_events(result, json_output=json_output)
+    tool_events = list(recorder.tool_events)
+    tool_events.extend(
+        replay_answer_events(
+            result,
+            json_output=json_output,
+            skip_event_ids=recorder.recorded_event_ids,
+        )
+    )
     answer = result.final_text
     if not answer:
         answer = fallback_answer(system, prompt, turn_events, selected_model)
@@ -235,38 +244,66 @@ def run_tool_answer(
     return 0
 
 
+class AnswerEventRecorder:
+    """Persist and render answer-route events as the agent loop produces them."""
+
+    def __init__(self, *, json_output: bool) -> None:
+        self.json_output = json_output
+        self.recorded_event_ids: set[int] = set()
+        self.tool_events: list[dict[str, Any]] = []
+
+    def record(self, event: dict[str, Any]) -> None:
+        self.recorded_event_ids.add(id(event))
+        tool_event = record_answer_event(event, json_output=self.json_output)
+        if tool_event is not None:
+            self.tool_events.append(tool_event)
+
+
 def replay_answer_events(
     result: AgentTurnResult,
     *,
     json_output: bool,
+    skip_event_ids: set[int] | frozenset[int] = frozenset(),
 ) -> list[dict[str, Any]]:
     tool_events: list[dict[str, Any]] = []
     for event in result.events:
-        event_type = str(event.get("type") or "")
-        fields = {
-            key: value for key, value in event.items() if key not in {"type", "route"}
-        }
-        trace = append_zeta_event(event_type, **fields, route=ANSWER_ROUTE)
-        if event_type == "tool_call":
-            name = str(trace.get("name") or "")
-            params = trace.get("input")
-            args = params if isinstance(params, dict) else {}
-            append_jsonl(
-                "last-tools.jsonl", {"type": "tool_start", "tool": name, "args": args}
-            )
-            if not json_output:
-                render_tool_start(name, args, output=sys.stdout)
+        if id(event) in skip_event_ids:
             continue
-        if event_type != "tool_result":
-            continue
-        name = str(trace.get("name") or "")
-        result_payload = trace.get("result")
-        if not isinstance(result_payload, dict):
-            result_payload = {}
-        tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
-        append_jsonl("last-tools.jsonl", tool_event)
-        tool_events.append(tool_event)
+        tool_event = record_answer_event(event, json_output=json_output)
+        if tool_event is not None:
+            tool_events.append(tool_event)
     return tool_events
+
+
+def record_answer_event(
+    event: dict[str, Any],
+    *,
+    json_output: bool,
+) -> dict[str, Any] | None:
+    event_type = str(event.get("type") or "")
+    fields = {
+        key: value for key, value in event.items() if key not in {"type", "route"}
+    }
+    trace = append_zeta_event(event_type, **fields, route=ANSWER_ROUTE)
+    if event_type == "tool_call":
+        name = str(trace.get("name") or "")
+        params = trace.get("input")
+        args = params if isinstance(params, dict) else {}
+        append_jsonl(
+            "last-tools.jsonl", {"type": "tool_start", "tool": name, "args": args}
+        )
+        if not json_output:
+            render_tool_start(name, args, output=sys.stdout)
+        return None
+    if event_type != "tool_result":
+        return None
+    name = str(trace.get("name") or "")
+    result_payload = trace.get("result")
+    if not isinstance(result_payload, dict):
+        result_payload = {}
+    tool_event = {"type": "tool_end", "tool": name, "result": result_payload}
+    append_jsonl("last-tools.jsonl", tool_event)
+    return tool_event
 
 
 def fallback_answer(

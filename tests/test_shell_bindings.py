@@ -1,7 +1,9 @@
 from __future__ import annotations
+import errno
 import json
 import pytest
 import os
+import pty
 import shutil
 import subprocess
 import tempfile
@@ -154,6 +156,45 @@ def run_shell_args(
     )
 
 
+def run_shell_pty(
+    shell: str, script: str, tmp: Path, stub: Path
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["SIGIL_BIN"] = str(stub)
+    env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
+    env["SIGIL_SESSION_ID"] = "shell-test"
+    env["ZLE_LOG"] = str(tmp / "zle.log")
+    for leaked in ("SIGIL_TTY", "SIGIL_TTY_FD", "TTY"):
+        env.pop(leaked, None)
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(ROOT)
+        os.environ.clear()
+        os.environ.update(env)
+        os.execlp(shell, shell, "-c", script)
+
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = os.read(fd, 4096)
+        except OSError as exc:
+            if exc.errno == errno.EIO:
+                break
+            raise
+        if not chunk:
+            break
+        chunks.append(chunk)
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+    return subprocess.CompletedProcess(
+        [shell, "-c", script],
+        os.waitstatus_to_exitcode(status),
+        b"".join(chunks).decode(errors="replace"),
+        "",
+    )
+
+
 def assert_success(result: subprocess.CompletedProcess[str]) -> None:
     assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
@@ -290,6 +331,22 @@ def test_bash_exports_tty_for_pipeline_confirmations() -> None:
         assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
 
 
+def test_bash_binding_preserves_stderr_when_opening_tty_fd() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_pty(
+            "bash",
+            textwrap.dedent(
+                "                    source src/sigil/shell/bash/sigil.bash\n                    printf 'stderr-ok\\n' >&2\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "stderr-ok" in result.stdout
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -305,6 +362,23 @@ def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
         )
         assert_success(result)
         assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_binding_preserves_stderr_when_opening_tty_fd() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_pty(
+            "zsh",
+            textwrap.dedent(
+                "                    source src/sigil/shell/zsh/sigil.zsh\n                    print -u2 -- stderr-ok\n                    "
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "stderr-ok" in result.stdout
 
 
 def test_bash_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:

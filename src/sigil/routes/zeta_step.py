@@ -1,7 +1,7 @@
-"""Python fallback runner for Zeta-backed agent steps.
+"""Python runner for Zeta-backed agent steps.
 
 The sourced shell bindings own the primary interactive loop. This module keeps
-CLI-routed act steps on the same Zeta service layer without an external agent.
+CLI-routed glyph steps on the same Zeta service layer without an external agent.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def run_agent_step(
     render_zeta_status(
         glyph,
         enabled_tools,
-        "auto loop" if glyph in {",,", ",,,"} else "one step",
+        route_status_label(glyph),
         output=output,
         color_enabled=True,
     )
@@ -79,6 +79,12 @@ def run_agent_step(
         user_event["model"] = model_selection_event(selected_model)
     append_jsonl(runtime.TRANSCRIPT, user_event)
     context = runtime.load_project_context()
+    recorder = AgentStepEventRecorder(
+        glyph=glyph,
+        handoff_path=handoff_path,
+        handoff_output=handoff_output,
+        output=output,
+    )
     result = run_agent_turn(
         prompt,
         runtime.transcript_tail(),
@@ -96,6 +102,7 @@ def run_agent_step(
             model_url=selected_model.url if selected_model is not None else None,
         ),
         context=context,
+        event_sink=recorder.record,
     )
     status = replay_agent_events(
         result,
@@ -103,7 +110,10 @@ def run_agent_step(
         handoff_path=handoff_path,
         handoff_output=handoff_output,
         output=output,
+        skip_event_ids=recorder.recorded_event_ids,
     )
+    if status is None:
+        status = recorder.status
     if status is not None:
         return status
     if result.final_text:
@@ -127,6 +137,37 @@ def record_agent_final(content: str, *, glyph: str) -> None:
     print(content)
 
 
+class AgentStepEventRecorder:
+    """Persist and render agent-step events as the agent loop produces them."""
+
+    def __init__(
+        self,
+        *,
+        glyph: str,
+        handoff_path: str | Path | None,
+        handoff_output: HandoffOutput,
+        output: TextIO,
+    ) -> None:
+        self.glyph = glyph
+        self.handoff_path = handoff_path
+        self.handoff_output = handoff_output
+        self.output = output
+        self.recorded_event_ids: set[int] = set()
+        self.status: int | None = None
+
+    def record(self, event: dict[str, Any]) -> None:
+        self.recorded_event_ids.add(id(event))
+        status = record_agent_event(
+            event,
+            glyph=self.glyph,
+            handoff_path=self.handoff_path,
+            handoff_output=self.handoff_output,
+            output=self.output,
+        )
+        if status is not None:
+            self.status = status
+
+
 def replay_agent_events(
     result: AgentTurnResult,
     *,
@@ -134,34 +175,56 @@ def replay_agent_events(
     handoff_path: str | Path | None = None,
     handoff_output: HandoffOutput = "detail",
     output: TextIO = sys.stderr,
+    skip_event_ids: set[int] | frozenset[int] = frozenset(),
 ) -> int | None:
     status: int | None = None
     for event in result.events:
-        event_type = str(event.get("type") or "")
-        fields = {key: value for key, value in event.items() if key != "type"}
-        persisted = append_zeta_event(event_type, **fields, glyph=glyph)
-        if event_type == "tool_call":
-            params = persisted.get("input")
-            render_tool_start(
-                str(persisted.get("name") or ""),
-                params if isinstance(params, dict) else {},
-                output=output,
-            )
+        if id(event) in skip_event_ids:
             continue
-        if event_type != "tool_result":
-            continue
-        name = str(persisted.get("name") or "")
-        result_payload = persisted.get("result")
-        if not isinstance(result_payload, dict):
-            continue
-        render_result_summary(name, result_payload, output=output)
-        handoff = result_payload.get("handoff")
-        if not isinstance(handoff, dict):
-            continue
-        write_handoff(handoff_path, handoff)
-        print_handoff(handoff, mode=handoff_output)
-        status = 0
+        event_status = record_agent_event(
+            event,
+            glyph=glyph,
+            handoff_path=handoff_path,
+            handoff_output=handoff_output,
+            output=output,
+        )
+        if event_status is not None:
+            status = event_status
     return status
+
+
+def record_agent_event(
+    event: dict[str, Any],
+    *,
+    glyph: str,
+    handoff_path: str | Path | None = None,
+    handoff_output: HandoffOutput = "detail",
+    output: TextIO = sys.stderr,
+) -> int | None:
+    event_type = str(event.get("type") or "")
+    fields = {key: value for key, value in event.items() if key != "type"}
+    persisted = append_zeta_event(event_type, **fields, glyph=glyph)
+    if event_type == "tool_call":
+        params = persisted.get("input")
+        render_tool_start(
+            str(persisted.get("name") or ""),
+            params if isinstance(params, dict) else {},
+            output=output,
+        )
+        return None
+    if event_type != "tool_result":
+        return None
+    name = str(persisted.get("name") or "")
+    result_payload = persisted.get("result")
+    if not isinstance(result_payload, dict):
+        return None
+    render_result_summary(name, result_payload, output=output)
+    handoff = result_payload.get("handoff")
+    if not isinstance(handoff, dict):
+        return None
+    write_handoff(handoff_path, handoff)
+    print_handoff(handoff, mode=handoff_output)
+    return 0
 
 
 def render_result_summary(
@@ -199,15 +262,23 @@ def append_zeta_event(event_type: str, **fields: Any) -> dict[str, Any]:
 
 
 def edit_mode_for_glyph(glyph: str) -> EditMode:
-    if glyph in {",,", ",,,"}:
+    if glyph == ",,,":
         return "direct_replace"
     return "review_patch"
 
 
 def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
-    if glyph in {",,", ",,,"}:
+    if glyph == ",,,":
         return "direct"
     return "handoff"
+
+
+def route_status_label(glyph: str) -> str:
+    if glyph == ",,,":
+        return "auto loop"
+    if glyph == ",,":
+        return "confirmed loop"
+    return "one step"
 
 
 def agent_prompt(objective: str, *, glyph: str, stdin_text: str) -> str:

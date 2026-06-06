@@ -3,21 +3,21 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import click
 from click.testing import CliRunner
 
-from _patch import patch, patch_dict
+from _patch import patch
 from sigil.cli import cli
 from sigil.cli.operators import run_operator
 from sigil.routes.operators import (
     create_invocation,
     parse_operator_token,
 )
-from sigil.state import append_jsonl, read_jsonl
 
 
 def read_global_events(root: Path) -> list[dict[str, object]]:
@@ -263,21 +263,19 @@ def test_command_verb_is_not_registered() -> None:
 def test_double_comma_runs_confirmed_agent_step() -> None:
     calls = []
 
-    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+    def fake_run_agent_step(*args: object, **kwargs: object) -> int:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
+    with patch("sigil.cli.operators.run_agent_step", side_effect=fake_run_agent_step):
         result = invoke_op([",,", "update", "it"])
 
     assert result.exit_code == 0, result.output
     assert calls == [
         (
-            (),
+            ("update it",),
             {
-                "objective": "update it",
                 "stdin_text": "",
-                "confirm_step": True,
                 "glyph": ",,",
             },
         )
@@ -287,39 +285,109 @@ def test_double_comma_runs_confirmed_agent_step() -> None:
 def test_op_cli_routes_double_comma_to_agent_stepper() -> None:
     calls = []
 
-    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+    def fake_run_agent_step(*args: object, **kwargs: object) -> int:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
+    with patch("sigil.cli.operators.run_agent_step", side_effect=fake_run_agent_step):
         result = invoke_op([",,", "say", "done"])
 
     assert result.exit_code == 0
     assert result.stdout == ""
-    assert calls[0][1]["objective"] == "say done"
-    assert calls[0][1]["confirm_step"] is True
+    assert calls[0][0] == ("say done",)
     assert calls[0][1]["glyph"] == ",,"
 
 
 def test_triple_comma_routes_to_auto_approved_agent_stepper() -> None:
     calls = []
 
-    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+    def fake_run_agent_step(*args: object, **kwargs: object) -> int:
         calls.append((args, kwargs))
         return 0
 
-    with patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper):
+    with patch("sigil.cli.operators.run_agent_step", side_effect=fake_run_agent_step):
         result = invoke_op([",,,", "publish"])
 
     assert result.exit_code == 0
     assert result.stdout == ""
-    assert calls[0][1]["objective"] == "publish"
-    assert calls[0][1]["confirm_step"] is False
+    assert calls[0][0] == ("publish",)
     assert calls[0][1]["glyph"] == ",,,"
 
 
+def test_comma_agent_glyphs_print_tool_start_while_agent_runs() -> None:
+    rendered: list[tuple[str, dict[str, object]]] = []
+
+    def fake_render_tool_start(
+        name: str,
+        params: dict[str, object],
+        *,
+        output: object,
+    ) -> None:
+        del output
+        rendered.append((name, params))
+
+    def fake_run_agent_turn(*args: object, **kwargs: object):
+        del args
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        assert callable(event_sink)
+        tool_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+        }
+        event_sink(tool_call)
+        assert rendered[-1] == ("read", {"path": "README.md"})
+        tool_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "README"}],
+            },
+        }
+        event_sink(tool_result)
+        from sigil.zeta.agent import AgentTurnResult
+
+        return AgentTurnResult(final_text="done", events=[tool_call, tool_result])
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp_dir
+        os.environ["SIGIL_SESSION_ID"] = "streaming-agent-glyphs"
+        try:
+            with (
+                patch("sigil.routes.zeta_step.ensure_server", return_value=True),
+                patch(
+                    "sigil.routes.zeta_step.run_agent_turn",
+                    side_effect=fake_run_agent_turn,
+                ),
+                patch(
+                    "sigil.routes.zeta_step.render_tool_start",
+                    side_effect=fake_render_tool_start,
+                ),
+            ):
+                for glyph in (",,", ",,,"):
+                    result = invoke_op([glyph, "inspect", glyph])
+
+                    assert result.exit_code == 0, result.output
+                    assert "done" in result.stdout
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+
 def test_op_cli_returns_agent_stepper_status() -> None:
-    with patch("sigil.cli.operators.run_act_stepper", return_value=7):
+    with patch("sigil.cli.operators.run_agent_step", return_value=7):
         result = invoke_op([",,", "fail"])
 
     assert result.exit_code == 7
@@ -338,339 +406,15 @@ def test_op_cli_rejects_caret_before_model_or_confirmation() -> None:
     assert "unsupported operator: ^" in result.output
 
 
-def test_triple_comma_creates_act_and_executes_one_auto_approved_step() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp_dir
-        os.environ["SIGIL_SESSION_ID"] = "act-session"
-        events = []
-        zeta_calls = []
-
-        def fake_append_event(event: dict[str, object]) -> dict[str, object]:
-            stored = {"id": f"event-{len(events)}", **event}
-            events.append(stored)
-            return stored
-
-        def fake_run_pi(*args: object, **kwargs: object) -> int:
-            zeta_calls.append((args, kwargs))
-            return 0
-
-        try:
-            with (
-                patch(
-                    "sigil.routes.act.prompt_on_tty",
-                    side_effect=AssertionError("no prompt"),
-                ),
-                patch("sigil.routes.act.run_zeta_agent_step", side_effect=fake_run_pi),
-                patch("sigil.routes.act.append_event", side_effect=fake_append_event),
-            ):
-                result = invoke_op([",,,", "ship", "it"])
-            act_events = read_jsonl("last-act.jsonl")
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
-
-    assert result.exit_code == 0, result.output
-    assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,bash,edit,write" in result.output
-    assert len(zeta_calls) == 1
-    assert zeta_calls[0][1]["glyph"] == ",,,"
-    assert [event["type"] for event in events] == [
-        "act_created",
-        "act_step_decision",
-        "act_step_executed",
-        "act_completed",
-    ]
-    assert [event["type"] for event in act_events] == [
-        "act_created",
-        "act_step_decision",
-        "act_step_executed",
-        "act_completed",
-    ]
-    latest_act = act_events[-1]["act"]
-    assert latest_act["status"] == "completed"
-    assert latest_act["approval"] == "auto"
-    assert latest_act["steps"][0]["decision"] == "auto_accepted"
-    assert latest_act["steps"][0]["status"] == "done"
-
-
-def test_confirmed_act_can_edit_tools_before_execution() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
-        ):
-            zeta_calls = []
-
-            def fake_run_pi(*args: object, **kwargs: object) -> int:
-                zeta_calls.append((args, kwargs))
-                return 0
-
-            prompts = iter(["e\n", "y\n"])
-
-            def fake_prompt(*args: object, **kwargs: object) -> str:
-                del args, kwargs
-                return next(prompts)
-
-            with (
-                patch("sigil.routes.act.prompt_on_tty", side_effect=fake_prompt),
-                patch(
-                    "sigil.routes.act.edit_tools", return_value=["read", "grep", "edit"]
-                ),
-                patch("sigil.routes.act.run_zeta_agent_step", side_effect=fake_run_pi),
-            ):
-                result = invoke_op([",,", "ship", "it"])
-            act_events = read_jsonl("last-act.jsonl")
-
-    assert result.exit_code == 0, result.output
-    assert len(zeta_calls) == 1
-    assert zeta_calls[0][1]["tools"] == "read,grep,edit"
-    step = act_events[-1]["act"]["steps"][0]
-    assert step["edited_tools"] is True
-    assert step["tools"] == ["read", "grep", "edit"]
-    assert step["command"] == "zeta --tools read,grep,edit"
-
-
-def test_confirmed_act_leaves_editor_errors_visible() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch_dict(
-            os.environ,
-            {"SIGIL_STATE_DIR": tmp_dir, "SIGIL_SESSION_ID": "act-session"},
-        ):
-            clear_calls = []
-
-            def fake_clear_lines(*args: object, **kwargs: object) -> None:
-                clear_calls.append((args, kwargs))
-
-            with (
-                patch("sigil.routes.act.prompt_on_tty", return_value="e\n"),
-                patch("sigil.routes.act.edit_tools", return_value=None),
-                patch(
-                    "sigil.routes.act.clear_lines_on_tty", side_effect=fake_clear_lines
-                ),
-                patch(
-                    "sigil.routes.act.run_zeta_agent_step",
-                    side_effect=AssertionError("no zeta"),
-                ),
-            ):
-                result = invoke_op([",,", "ship", "it"])
-
-    assert result.exit_code == 0, result.output
-    assert clear_calls == []
-
-
-def test_piped_triple_comma_denies_input_before_act_generation() -> None:
+def test_piped_triple_comma_denies_input_before_agent_step() -> None:
     with (
         patch("sigil.cli.operators.confirm_piped_input", return_value=False),
-        patch(
-            "sigil.routes.act.run_zeta_agent_step",
-            side_effect=AssertionError("no zeta"),
-        ),
+        patch("sigil.cli.operators.run_agent_step", side_effect=AssertionError),
     ):
         result = invoke_op([",,,", "ship"], input="notes\n")
 
     assert result.exit_code == 2
     assert "piped input declined" in result.stderr
-
-
-def test_act_zeta_step_invokes_zeta_runner() -> None:
-    captured: dict[str, object] = {}
-
-    def fake_run_agent_step(*args: object, **kwargs: object) -> int:
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return 0
-
-    with patch("sigil.routes.act.run_agent_step", side_effect=fake_run_agent_step):
-        from sigil.routes.act import run_zeta_agent_step
-
-        result = run_zeta_agent_step(
-            {"objective": "repair", "stdin": "notes", "glyph": ",,"},
-            tools="read,grep,edit",
-        )
-
-    assert result == 0
-    assert captured["args"] == ("repair",)
-    kwargs = cast("dict[str, object]", captured["kwargs"])
-    assert kwargs["glyph"] == ",,"
-    assert isinstance(kwargs["system"], str)
-    assert "bounded confirmed edit route" in kwargs["system"]
-    assert kwargs["stdin_text"] == "notes"
-    assert kwargs["allowed_tools"] == ["read", "grep", "edit"]
-
-
-def test_act_resume_executes_pending_step_without_regenerating() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp_dir
-        os.environ["SIGIL_SESSION_ID"] = "act-session"
-        zeta_calls = []
-
-        def fake_run_pi(*args: object, **kwargs: object) -> int:
-            zeta_calls.append((args, kwargs))
-            return 0
-
-        try:
-            append_jsonl(
-                "last-act.jsonl",
-                {
-                    "type": "act_created",
-                    "act": {
-                        "act_id": "act",
-                        "objective": "ship it",
-                        "status": "active",
-                        "steps": [
-                            {
-                                "id": "1",
-                                "title": "Run one Zeta edit step",
-                                "command": "zeta --tools read,grep,bash,edit,write",
-                                "explanation": "Run the pending edit.",
-                                "status": "pending",
-                            },
-                        ],
-                    },
-                },
-            )
-            with (
-                patch(
-                    "sigil.routes.act.create_act",
-                    side_effect=AssertionError("no create"),
-                ),
-                patch("sigil.routes.act.prompt_on_tty", return_value="y\n"),
-                patch("sigil.routes.act.run_zeta_agent_step", side_effect=fake_run_pi),
-            ):
-                result = CliRunner().invoke(cli, ["act", "resume"])
-            act_events = read_jsonl("last-act.jsonl")
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
-
-    assert result.exit_code == 0, result.output
-    assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,bash,edit,write" in result.output
-    assert len(zeta_calls) == 1
-    assert act_events[-1]["act"]["status"] == "completed"
-
-
-def test_act_replaces_stale_same_objective_act_without_pending_step() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp_dir
-        os.environ["SIGIL_SESSION_ID"] = "act-session"
-        zeta_calls = []
-
-        def fake_run_pi(*args: object, **kwargs: object) -> int:
-            zeta_calls.append((args, kwargs))
-            return 0
-
-        try:
-            append_jsonl(
-                "last-act.jsonl",
-                {
-                    "type": "act_created",
-                    "act": {
-                        "act_id": "stale-act",
-                        "objective": "ship it",
-                        "status": "active",
-                        "steps": [
-                            {
-                                "id": "1",
-                                "title": "Run one Zeta edit step",
-                                "command": "zeta --tools read,grep,bash,edit,write",
-                                "explanation": "Already handled.",
-                                "status": "done",
-                            },
-                        ],
-                    },
-                },
-            )
-            with (
-                patch(
-                    "sigil.routes.act.prompt_on_tty",
-                    side_effect=AssertionError("no prompt"),
-                ),
-                patch("sigil.routes.act.run_zeta_agent_step", side_effect=fake_run_pi),
-            ):
-                result = invoke_op([",,,", "ship", "it"])
-            act_events = read_jsonl("last-act.jsonl")
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
-
-    assert result.exit_code == 0, result.output
-    assert "objective: ship it" not in result.output
-    assert "❯ tools  read,grep,bash,edit,write" in result.output
-    assert len(zeta_calls) == 1
-    created = [event for event in act_events if event["type"] == "act_created"]
-    assert created[-1]["act"]["act_id"] != "stale-act"
-
-
-def test_act_show_and_abort_use_last_act_state() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
-        old_session_id = os.environ.get("SIGIL_SESSION_ID")
-        os.environ["SIGIL_STATE_DIR"] = tmp_dir
-        os.environ["SIGIL_SESSION_ID"] = "act-session"
-        try:
-            append_jsonl(
-                "last-act.jsonl",
-                {
-                    "type": "act_created",
-                    "act": {
-                        "act_id": "act",
-                        "objective": "ship it",
-                        "status": "active",
-                        "steps": [
-                            {
-                                "id": "1",
-                                "title": "Inspect",
-                                "command": "git status --short",
-                                "explanation": "",
-                                "status": "pending",
-                            }
-                        ],
-                    },
-                },
-            )
-            shown = CliRunner().invoke(cli, ["act", "show"])
-            aborted = CliRunner().invoke(cli, ["act", "abort", "--json"])
-            act_events = read_jsonl("last-act.jsonl")
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("SIGIL_STATE_DIR", None)
-            else:
-                os.environ["SIGIL_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("SIGIL_SESSION_ID", None)
-            else:
-                os.environ["SIGIL_SESSION_ID"] = old_session_id
-
-    assert shown.exit_code == 0, shown.output
-    assert "objective: ship it" in shown.output
-    assert aborted.exit_code == 0, aborted.output
-    assert json.loads(aborted.output)["aborted"]
-    assert act_events[-1]["act"]["status"] == "aborted"
 
 
 def test_op_cli_does_not_confirm_piped_comma_before_readonly_route() -> None:
@@ -792,42 +536,40 @@ def test_op_cli_routes_piped_comma_to_readonly_answer() -> None:
 def test_op_cli_confirms_piped_double_comma_before_agent_step() -> None:
     calls = []
 
-    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+    def fake_run_agent_step(*args: object, **kwargs: object) -> int:
         calls.append((args, kwargs))
         return 0
 
     with (
         patch("sigil.cli.operators.confirm_piped_input", return_value=True),
-        patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper),
+        patch("sigil.cli.operators.run_agent_step", side_effect=fake_run_agent_step),
     ):
         result = invoke_op([",,", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
     assert result.stdout == ""
-    assert calls[0][1]["objective"] == "summarize"
+    assert calls[0][0] == ("summarize",)
     assert calls[0][1]["stdin_text"] == "notes\n"
-    assert calls[0][1]["confirm_step"] is True
     assert calls[0][1]["glyph"] == ",,"
 
 
 def test_op_cli_routes_piped_triple_comma_to_auto_agent_step() -> None:
     calls = []
 
-    def fake_run_act_stepper(*args: object, **kwargs: object) -> int:
+    def fake_run_agent_step(*args: object, **kwargs: object) -> int:
         calls.append((args, kwargs))
         return 0
 
     with (
         patch("sigil.cli.operators.confirm_piped_input", return_value=True),
-        patch("sigil.cli.operators.run_act_stepper", side_effect=fake_run_act_stepper),
+        patch("sigil.cli.operators.run_agent_step", side_effect=fake_run_agent_step),
     ):
         result = invoke_op([",,,", "summarize"], input="notes\n")
 
     assert result.exit_code == 0
     assert result.stdout == ""
-    assert calls[0][1]["objective"] == "summarize"
+    assert calls[0][0] == ("summarize",)
     assert calls[0][1]["stdin_text"] == "notes\n"
-    assert calls[0][1]["confirm_step"] is False
     assert calls[0][1]["glyph"] == ",,,"
 
 

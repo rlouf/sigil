@@ -241,7 +241,7 @@ Each route has a fixed effect on your system:
 | Route | Effect | Rule |
 | --- | --- | --- |
 | `,` | read-only | Local answer route with no Bash tool. |
-| `,,` | read/write/execute | Confirmed Zeta loop; read-only tools, Bash, edit, and write run directly. |
+| `,,` | read/write/execute | Confirmed Zeta loop; read-only tools run directly, Bash/edit/write are staged for review. |
 | `,,,` | read/write/execute | Auto-approved Zeta step; read-only tools, Bash, edit, and write run directly. |
 | `+` | execute | Explicit local command execution with stdout/stderr capture. |
 
@@ -259,7 +259,6 @@ The glyphs are thin shell functions over a regular CLI:
 ```text
 sigil ask [--follow-up] [--json] [QUESTION]
 sigil run COMMAND [ARGS...]
-sigil act [show|resume|abort] [--json]
 sigil status [--json]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear] [--json]

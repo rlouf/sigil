@@ -19,7 +19,6 @@ SESSION_FILES = (
     ANSWER_TRANSCRIPT,
     "last-tools.jsonl",
     "last-failure.json",
-    "last-act.jsonl",
     "last-plan.jsonl",
     "recent-turns.jsonl",
 )

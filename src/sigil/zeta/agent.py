@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Literal, cast
+from typing import Any, Callable, Iterable, Literal, cast
 
 from ..protocols import is_shell_prompt_handoff
 from . import runtime
@@ -19,6 +19,7 @@ from .tools import (
 
 EditMode = Literal["review_patch", "direct_replace"]
 ExecutionMode = Literal["handoff", "direct"]
+AgentEventSink = Callable[[dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ def run_agent_turn(
     config: AgentConfig,
     *,
     context: str = "",
+    event_sink: AgentEventSink | None = None,
 ) -> AgentTurnResult:
     """Run a bounded assistant/tool loop without mutating session state."""
     if config.model_url is None:
@@ -80,7 +82,7 @@ def run_agent_turn(
         )
         message_event = assistant_message_event(assistant)
         if message_event:
-            events.append(message_event)
+            emit_event(events, message_event, event_sink)
         tool_calls = assistant_tool_calls(assistant)
         if not tool_calls:
             return AgentTurnResult(
@@ -94,6 +96,7 @@ def run_agent_turn(
                 index=index,
                 edit_mode=config.edit_mode,
                 execution_mode=config.execution_mode,
+                event_sink=event_sink,
             )
             events.extend(result_event.events)
             if result_event.handoff is not None and config.stop_on_handoff:
@@ -105,6 +108,16 @@ def run_agent_turn(
             if result_event.stop:
                 return AgentTurnResult(events=events)
     return AgentTurnResult(events=events)
+
+
+def emit_event(
+    events: list[dict[str, Any]],
+    event: dict[str, Any],
+    event_sink: AgentEventSink | None = None,
+) -> None:
+    events.append(event)
+    if event_sink is not None:
+        event_sink(event)
 
 
 @dataclass(frozen=True)
@@ -139,6 +152,7 @@ def handle_tool_call(
     index: int,
     edit_mode: EditMode = "review_patch",
     execution_mode: ExecutionMode = "handoff",
+    event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     call_id = str(tool_call.get("id") or f"call-{index}")
     function = tool_call.get("function")
@@ -149,6 +163,7 @@ def handle_tool_call(
             {},
             "invalid-tool-call",
             "tool call did not include a function payload",
+            event_sink=event_sink,
         )
     name = str(function.get("name") or "")
     arguments = function.get("arguments")
@@ -169,6 +184,7 @@ def handle_tool_call(
             "invalid-json-args",
             parse_error,
             call_event=call_event,
+            event_sink=event_sink,
         )
     if name not in allowed_tool_names():
         return invalid_tool_result(
@@ -178,6 +194,7 @@ def handle_tool_call(
             "unknown-tool",
             f"unknown tool: {name}",
             call_event=call_event,
+            event_sink=event_sink,
         )
     if name not in allowed_tools:
         return invalid_tool_result(
@@ -187,6 +204,7 @@ def handle_tool_call(
             "disallowed-tool",
             f"tool is not allowed in this route: {name}",
             call_event=call_event,
+            event_sink=event_sink,
         )
     schema_errors = validate_tool_args(name, params)
     if schema_errors:
@@ -197,6 +215,7 @@ def handle_tool_call(
             "schema-mismatch",
             "; ".join(schema_errors),
             call_event=call_event,
+            event_sink=event_sink,
         )
     analysis = analyze_tool(name, params)
     analysis_event = {
@@ -207,13 +226,14 @@ def handle_tool_call(
     }
     if analysis.get("valid") is not True:
         result = tool_error("invalid-analysis", "tool analysis rejected the input")
-        return ToolCallResult(
-            events=[
-                call_event,
-                analysis_event,
-                tool_result_event(call_id, name, result),
-            ]
-        )
+        events: list[dict[str, Any]] = []
+        emit_event(events, call_event, event_sink)
+        emit_event(events, analysis_event, event_sink)
+        emit_event(events, tool_result_event(call_id, name, result), event_sink)
+        return ToolCallResult(events=events)
+    events = []
+    emit_event(events, call_event, event_sink)
+    emit_event(events, analysis_event, event_sink)
     result = run_tool_for_mode(
         name,
         params,
@@ -224,8 +244,9 @@ def handle_tool_call(
     stop = bool(
         execution_mode == "handoff" and name == "edit" and result.get("ok") is True
     )
+    emit_event(events, tool_result_event(call_id, name, result), event_sink)
     return ToolCallResult(
-        events=[call_event, analysis_event, tool_result_event(call_id, name, result)],
+        events=events,
         handoff=handoff,
         stop=stop,
     )
@@ -272,6 +293,7 @@ def invalid_tool_result(
     message: str,
     *,
     call_event: dict[str, Any] | None = None,
+    event_sink: AgentEventSink | None = None,
 ) -> ToolCallResult:
     event = call_event or {
         "type": "tool_call",
@@ -280,9 +302,14 @@ def invalid_tool_result(
         "name": name,
         "input": params,
     }
-    return ToolCallResult(
-        events=[event, tool_result_event(call_id, name, tool_error(code, message))]
+    events: list[dict[str, Any]] = []
+    emit_event(events, event, event_sink)
+    emit_event(
+        events,
+        tool_result_event(call_id, name, tool_error(code, message)),
+        event_sink,
     )
+    return ToolCallResult(events=events)
 
 
 def tool_result_event(

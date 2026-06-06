@@ -47,7 +47,7 @@ if [[ -z "${SIGIL_TTY:-}" ]]; then
 fi
 
 if [[ -z "${SIGIL_TTY_FD:-}" && ( -t 0 || -t 1 || -t 2 ) ]]; then
-  if exec {__sigil_confirmation_tty_fd}<>/dev/tty 2>/dev/null; then
+  if { exec {__sigil_confirmation_tty_fd}<>/dev/tty; } 2>/dev/null; then
     export SIGIL_TTY_FD="$__sigil_confirmation_tty_fd"
   fi
 fi

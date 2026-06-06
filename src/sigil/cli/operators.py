@@ -7,14 +7,14 @@ import sys
 import click
 
 from ._shared import confirm_piped_input, print_json_line, question_with_stdin
-from ._shared import should_confirm_piped_input, should_run_act_operator
-from ..routes.act import run_act_stepper
+from ._shared import should_confirm_piped_input, should_run_agent_operator
 from ..routes.ask import (
     ZETA_ANSWER_TOOLS,
     ask,
     discussion_turns,
 )
 from ..routes.operators import OperatorInvocation, create_invocation
+from ..routes.zeta_step import run_agent_step
 from ..status import current_status, format_status
 
 
@@ -42,8 +42,8 @@ def run_operator(
         print_json_line(invocation.to_dict())
         return 0
 
-    if should_run_act_operator(invocation):
-        return dispatch_act_operator(invocation, prompt, stdin_text)
+    if should_run_agent_operator(invocation):
+        return dispatch_agent_operator(invocation, prompt, stdin_text)
 
     if invocation.name == "status":
         return dispatch_status_operator()
@@ -65,21 +65,20 @@ def dispatch_status_operator() -> int:
     return 0
 
 
-def dispatch_act_operator(
+def dispatch_agent_operator(
     invocation: OperatorInvocation,
     prompt: str,
     stdin_text: str,
 ) -> int:
-    """Run a `,,`/`,,,` invocation through the Zeta act stepper."""
+    """Run a `,,`/`,,,` invocation through the Zeta agent step route."""
     if should_confirm_piped_input(invocation):
         if not confirm_piped_input(stdin_text):
             print("sigil glyph: piped input declined", file=sys.stderr)
             raise click.exceptions.Exit(2)
     try:
-        status = run_act_stepper(
-            objective=prompt,
+        status = run_agent_step(
+            prompt,
             stdin_text=stdin_text,
-            confirm_step=invocation.depth == 2,
             glyph=invocation.glyph,
         )
     except RuntimeError as exc:

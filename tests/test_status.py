@@ -9,7 +9,7 @@ from click.testing import CliRunner
 from sigil.cli import cli
 from sigil.session import record_turn
 from sigil.status import current_status, format_status
-from sigil.state import append_event, write_jsonl
+from sigil.state import append_event
 
 
 def test_status_clean_when_no_live_state() -> None:
@@ -18,37 +18,6 @@ def test_status_clean_when_no_live_state() -> None:
 
     assert status.state == "clean"
     assert format_status(status) == "clean"
-
-
-def test_status_reports_active_act_before_other_state() -> None:
-    with isolated_sigil_state():
-        write_jsonl(
-            "last-act.jsonl",
-            [
-                {
-                    "type": "act_created",
-                    "act": {
-                        "act_id": "act-1",
-                        "objective": "fix parser",
-                        "status": "active",
-                        "steps": [
-                            {
-                                "id": "1",
-                                "title": "Run one Zeta edit step",
-                                "command": "zeta --tools read,edit,write",
-                                "status": "pending",
-                            }
-                        ],
-                    },
-                }
-            ],
-        )
-        status = current_status()
-
-    assert status.state == "attention"
-    assert status.reason == "active act"
-    assert status.actions == ("sigil act resume", "sigil act abort")
-    assert "objective\n  fix parser" in format_status(status)
 
 
 def test_status_reports_last_failure() -> None:

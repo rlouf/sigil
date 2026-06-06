@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-from .routes.act import active_act
 from .failure import latest_active_failure
 from .session import read_event_log
 from .state import session_id
@@ -34,21 +33,6 @@ def current_status() -> Status:
     """Reduce current session state into the most important live condition."""
     current_session = session_id()
     cwd = os.getcwd()
-
-    act = active_act()
-    if act is not None:
-        return attention(
-            "active act",
-            session=current_session,
-            cwd=cwd,
-            actions=("sigil act resume", "sigil act abort"),
-            details={
-                "act_id": act.get("act_id"),
-                "objective": act.get("objective"),
-                "status": act.get("status"),
-                "next_step": next_step_summary(act),
-            },
-        )
 
     failure = latest_active_failure()
     if failure is not None:
@@ -115,7 +99,6 @@ def latest_failed_sigil_execution() -> dict[str, Any] | None:
     current_session = session_id()
     failure_types = {
         "operator_command_executed",
-        "act_step_executed",
         "plan_step_executed",
     }
     for event in reversed(read_event_log()):
@@ -126,24 +109,6 @@ def latest_failed_sigil_execution() -> dict[str, Any] | None:
         status = event.get("status")
         if isinstance(status, int) and status != 0:
             return event
-    return None
-
-
-def next_step_summary(act: dict[str, Any]) -> dict[str, object] | None:
-    """Return the first pending step in a compact JSON-friendly form."""
-    steps = act.get("steps")
-    if not isinstance(steps, list):
-        return None
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        if step.get("status") != "pending":
-            continue
-        return {
-            "id": step.get("id"),
-            "title": step.get("title"),
-            "command": step.get("command"),
-        }
     return None
 
 
@@ -162,17 +127,6 @@ def format_status(status: Status) -> str:
     objective = details.get("objective")
     if objective:
         lines.extend(["", "objective", f"  {objective}"])
-
-    next_step = details.get("next_step")
-    if isinstance(next_step, dict) and next_step:
-        next_step_data = cast("dict[str, object]", next_step)
-        lines.extend(["", "next step"])
-        title = next_step_data.get("title")
-        command = next_step_data.get("command")
-        if title:
-            lines.append(f"  {title}")
-        if command:
-            lines.append(f"  {command}")
 
     if status.actions:
         lines.extend(["", "next"])

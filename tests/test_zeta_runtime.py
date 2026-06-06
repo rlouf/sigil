@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -346,6 +347,59 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     assert [
         event["name"] for event in result.events if event.get("type") == "tool_call"
     ] == ["read", "ls"]
+
+
+def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> None:
+    streamed: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"path":"README.md"}',
+                    },
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "analyze_tool",
+        lambda name, params: {"valid": True, "resolved": True},
+    )
+
+    def fake_run_tool(name: str, params: dict[str, Any]) -> dict[str, Any]:
+        del name, params
+        assert [event.get("type") for event in streamed] == [
+            "assistant_message",
+            "tool_call",
+            "tool_analysis",
+        ]
+        return {"ok": True, "content": [{"type": "text", "text": "README"}]}
+
+    monkeypatch.setattr(zeta_agent, "run_tool", fake_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+        event_sink=streamed.append,
+    )
+
+    assert result.events == streamed
+    assert [event.get("type") for event in streamed] == [
+        "assistant_message",
+        "tool_call",
+        "tool_analysis",
+        "tool_result",
+    ]
 
 
 def test_zeta_agent_turn_stops_after_handoff_tool(monkeypatch) -> None:
@@ -1348,6 +1402,131 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     assert captured["context"] == "ctx"
 
 
+def test_zeta_agent_step_double_comma_uses_handoff_mode(
+    monkeypatch,
+    capsys,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, kwargs
+        captured["config"] = config
+        return zeta_agent.AgentTurnResult(final_text="done")
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step("review", glyph=",,")
+
+    assert code == 0
+    config = cast(zeta_agent.AgentConfig, captured["config"])
+    assert config.edit_mode == "review_patch"
+    assert config.execution_mode == "handoff"
+    assert "confirmed loop" in capsys.readouterr().err
+
+
+def test_zeta_agent_step_double_comma_stages_bash_handoff(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    handoff_file = tmp_path / "handoff.json"
+
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "bash",
+                            "arguments": '{"command":"echo Review complete"}',
+                        },
+                    }
+                ]
+            }
+        ]
+    )
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: next(responses),
+    )
+
+    code = zeta_runner.run_agent_step(
+        "Review the changes",
+        glyph=",,",
+        allowed_tools=("bash",),
+        handoff_path=handoff_file,
+        handoff_output="summary",
+    )
+
+    assert code == 0
+    output = capsys.readouterr()
+    assert "staged in prompt" in output.err
+    assert "exit 0" not in output.err
+    assert "Review complete" not in output.out
+    assert json.loads(handoff_file.read_text(encoding="utf-8"))["command"] == (
+        "echo Review complete"
+    )
+
+
+def test_zeta_agent_step_prints_tool_start_while_agent_runs(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        assert callable(event_sink)
+        tool_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+        }
+        event_sink(tool_call)
+        assert "❯ read   README.md" in capsys.readouterr().err
+        tool_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "README"}],
+            },
+        }
+        event_sink(tool_result)
+        return zeta_agent.AgentTurnResult(
+            final_text="It is a README.",
+            events=[tool_call, tool_result],
+        )
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    for glyph in (",,", ",,,"):
+        code = zeta_runner.run_agent_step("inspect", glyph=glyph)
+
+        assert code == 0
+        assert "\nIt is a README.\n" in capsys.readouterr().out
+
+
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(
     monkeypatch,
     capsys,
@@ -1380,7 +1559,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
         ),
     )
 
-    code = zeta_runner.run_agent_step("edit", glyph=",,")
+    code = zeta_runner.run_agent_step("edit", glyph=",,,")
 
     assert code == 0
     output = capsys.readouterr()
@@ -1554,9 +1733,9 @@ def test_zeta_agent_direct_mode_continues_after_edit(
 
 
 def test_zeta_step_glyph_selects_edit_mode() -> None:
-    assert zeta_runner.edit_mode_for_glyph(",,") == "direct_replace"
+    assert zeta_runner.edit_mode_for_glyph(",,") == "review_patch"
     assert zeta_runner.edit_mode_for_glyph(",,,") == "direct_replace"
-    assert zeta_runner.execution_mode_for_glyph(",,") == "direct"
+    assert zeta_runner.execution_mode_for_glyph(",,") == "handoff"
     assert zeta_runner.execution_mode_for_glyph(",,,") == "direct"
 
 
@@ -1881,6 +2060,66 @@ def test_sigil_transcript_shell_result_appends_tool_result(
     assert "uv run pytest (exit 1)" in event["result"]["content"][0]["text"]
 
 
+def test_resolved_shell_handoff_context_keeps_tool_call_with_shell_result(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    zeta.append_transcript(
+        {
+            "type": "assistant_message",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"uv run pytest"}',
+                    },
+                }
+            ],
+        }
+    )
+    zeta.append_transcript(
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "bash",
+            "input": {"command": "uv run pytest"},
+        }
+    )
+    zeta.append_transcript(
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "bash",
+            "result": {
+                "ok": True,
+                "handoff": {
+                    "type": SHELL_PROMPT_HANDOFF_TYPE,
+                    "command": "uv run pytest",
+                    "reason": "Run tests.",
+                },
+            },
+        }
+    )
+    record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
+
+    sigil_handoff.append_shell_result()
+    messages = zeta.transcript_chat_messages(zeta.transcript_tail())
+
+    assert messages[0]["role"] == "assistant"
+    assert messages[0]["tool_calls"][0]["id"] == "call-1"
+    tool_messages = [message for message in messages if message["role"] == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "call-1"
+    tool_content = json.loads(tool_messages[0]["content"])
+    assert tool_content["type"] == SHELL_HANDOFF_RESULT_TYPE
+    assert tool_content["executed_command"] == "uv run pytest"
+
+
 def test_sigil_transcript_shell_result_cancels_modified_handoff(
     tmp_path: Path,
     monkeypatch,
@@ -2058,6 +2297,55 @@ def test_zeta_question_loop_feeds_current_tool_result_to_next_step(
     assert "\n\nIt contains project metadata.\n" in output
     assert "project metadata" in output
     assert len(transcripts) == 1
+
+
+def test_zeta_question_loop_prints_tool_start_while_agent_runs(
+    monkeypatch,
+    capsys,
+) -> None:
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, config
+        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        assert callable(event_sink)
+        tool_call = {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {"path": "README.md"},
+        }
+        event_sink(tool_call)
+        assert "❯ read   README.md" in capsys.readouterr().out
+        tool_result = {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "README"}],
+            },
+        }
+        event_sink(tool_result)
+        return zeta_agent.AgentTurnResult(
+            final_text="It is a README.",
+            events=[tool_call, tool_result],
+        )
+
+    monkeypatch.setattr(answers_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(answers_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = answers_runner.run_tool_answer(
+        "question system",
+        "What does README.md contain?",
+    )
+
+    assert code == 0
+    assert "\nIt is a README.\n" in capsys.readouterr().out
 
 
 def test_zeta_question_loop_passes_follow_up_history_as_turns(

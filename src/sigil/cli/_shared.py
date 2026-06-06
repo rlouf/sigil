@@ -36,8 +36,8 @@ def should_confirm_piped_input(invocation: object) -> bool:
     )
 
 
-def should_run_act_operator(invocation: object) -> bool:
-    """Return whether this invocation targets the implemented act runner."""
+def should_run_agent_operator(invocation: object) -> bool:
+    """Return whether this invocation targets the agent step runner."""
     return getattr(invocation, "base", None) == "," and getattr(
         invocation, "depth", 0
     ) in {2, 3}
