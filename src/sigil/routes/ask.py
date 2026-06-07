@@ -19,7 +19,7 @@ from ..state import (
     read_jsonl,
     write_jsonl,
 )
-from ..display import render_tool_start, render_zeta_status
+from ..display import render_tool_start
 from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 from ..zeta.model import chat_text
@@ -142,13 +142,6 @@ def ask(
         write_jsonl(ANSWER_TRANSCRIPT, [user_turn])
     write_jsonl("last-tools.jsonl", [])
     enabled_tools = parse_tools(tools)
-    render_zeta_status(
-        glyph,
-        enabled_tools,
-        "no execute path",
-        output=sys.stderr,
-        color_enabled=False,
-    )
     return run_tool_answer(
         ANSWER_SYSTEM_PROMPT,
         prompt,

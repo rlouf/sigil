@@ -15,7 +15,6 @@ from ..state import append_jsonl
 from ..display import (
     render_handoff_lines,
     render_tool_start,
-    render_zeta_status,
     tool_result_summary,
 )
 from ..zeta import runtime
@@ -60,13 +59,6 @@ def run_agent_step(
         stdin_text=stdin_text,
     )
     enabled_tools = enabled_tool_tuple(allowed_tools)
-    render_zeta_status(
-        glyph,
-        enabled_tools,
-        route_status_label(glyph),
-        output=output,
-        color_enabled=True,
-    )
     user_event: dict[str, Any] = {
         "type": "user_message",
         "content": prompt,
@@ -211,6 +203,7 @@ def record_agent_event(
             str(persisted.get("name") or ""),
             params if isinstance(params, dict) else {},
             output=output,
+            newline=False,
         )
         return None
     if event_type != "tool_result":
@@ -218,6 +211,7 @@ def record_agent_event(
     name = str(persisted.get("name") or "")
     result_payload = persisted.get("result")
     if not isinstance(result_payload, dict):
+        print(file=output)
         return None
     render_result_summary(name, result_payload, output=output)
     handoff = result_payload.get("handoff")
@@ -234,7 +228,20 @@ def render_result_summary(
     *,
     output: TextIO,
 ) -> None:
-    for line in tool_result_summary(name, result):
+    """Append the result summary onto the open tool-start line and close it.
+
+    A single-line summary trails the detail in parens (`❯ read README.md
+    (42 lines)`); the start line is always closed so nothing dangles.
+    """
+    lines = tool_result_summary(name, result)
+    if not lines:
+        print(file=output)
+        return
+    if len(lines) == 1:
+        print(f"  ({lines[0]})", file=output)
+        return
+    print(file=output)
+    for line in lines:
         print(f"  {line}", file=output)
 
 
@@ -272,14 +279,6 @@ def execution_mode_for_glyph(glyph: str) -> ExecutionMode:
     if glyph == ",,,":
         return "direct"
     return "handoff"
-
-
-def route_status_label(glyph: str) -> str:
-    if glyph == ",,,":
-        return "do"
-    if glyph == ",,":
-        return "propose"
-    return "step"
 
 
 def agent_prompt(objective: str, *, glyph: str, stdin_text: str) -> str:

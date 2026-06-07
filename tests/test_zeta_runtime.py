@@ -1160,7 +1160,7 @@ def test_sigil_display_summarizes_tool_results() -> None:
                 "command": "uv run pytest",
             },
         },
-    ) == ["staged in prompt"]
+    ) == ["staged"]
     assert sigil_display.tool_result_summary(
         "bash",
         {
@@ -1443,8 +1443,7 @@ def test_sigil_zeta_step_writes_handoff_file(
     )
 
     assert result.exit_code == 0
-    assert "❯ bash   uv run pytest" in result.output
-    assert "  staged in prompt" in result.output
+    assert "❯ bash   uv run pytest  (staged)" in result.output
     assert json.loads(handoff_file.read_text(encoding="utf-8")) == {
         "type": SHELL_PROMPT_HANDOFF_TYPE,
         "command": "uv run pytest",
@@ -1459,7 +1458,24 @@ def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
         "run_agent_turn",
         lambda *args, **kwargs: zeta_agent.AgentTurnResult(
             final_text="summary",
-            events=[{"type": "assistant_message", "content": "summary"}],
+            events=[
+                {
+                    "type": "tool_call",
+                    "tool_call_id": "call-1",
+                    "name": "read",
+                    "input": {"path": "README.md"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "read",
+                    "result": {
+                        "ok": True,
+                        "content": [{"type": "text", "text": "a\n"}],
+                    },
+                },
+                {"type": "assistant_message", "content": "summary"},
+            ],
         ),
     )
 
@@ -1467,8 +1483,8 @@ def test_sigil_zeta_step_keeps_trace_off_stdout(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert result.stdout == "\nsummary\n"
-    assert "❯ zeta ,, " in result.stderr
-    assert "❯ zeta ,, " not in result.stdout
+    assert "❯ read" in result.stderr
+    assert "❯ read" not in result.stdout
 
 
 def test_zeta_agent_step_separates_trace_from_final_answer(
@@ -1487,7 +1503,24 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
         captured["context"] = kwargs.get("context")
         return zeta_agent.AgentTurnResult(
             final_text="The answer.",
-            events=[{"type": "assistant_message", "content": "The answer."}],
+            events=[
+                {
+                    "type": "tool_call",
+                    "tool_call_id": "call-1",
+                    "name": "read",
+                    "input": {"path": "README.md"},
+                },
+                {
+                    "type": "tool_result",
+                    "tool_call_id": "call-1",
+                    "name": "read",
+                    "result": {
+                        "ok": True,
+                        "content": [{"type": "text", "text": "a\n"}],
+                    },
+                },
+                {"type": "assistant_message", "content": "The answer."},
+            ],
         )
 
     monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
@@ -1499,7 +1532,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     assert code == 0
     output = capsys.readouterr()
     assert output.out == "\nThe answer.\n"
-    assert "❯ zeta ,, " in output.err
+    assert "❯ read" in output.err
     assert captured["context"] == "ctx"
 
 
@@ -1555,7 +1588,6 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
     config = cast(zeta_agent.AgentConfig, captured["config"])
     assert config.edit_mode == "review_patch"
     assert config.execution_mode == "handoff"
-    assert "propose" in capsys.readouterr().err
 
 
 def test_zeta_agent_step_double_comma_stages_bash_handoff(
@@ -1600,7 +1632,7 @@ def test_zeta_agent_step_double_comma_stages_bash_handoff(
 
     assert code == 0
     output = capsys.readouterr()
-    assert "staged in prompt" in output.err
+    assert "(staged)" in output.err
     assert "exit 0" not in output.err
     assert "Review complete" not in output.out
     assert json.loads(handoff_file.read_text(encoding="utf-8"))["command"] == (
@@ -1692,7 +1724,7 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
     assert code == 0
     output = capsys.readouterr()
     assert output.out == "\nedited and verified\n"
-    assert "  applied · a.txt" in output.err
+    assert "❯ edit   a.txt  (applied · a.txt)" in output.err
 
 
 def test_sigil_transcript_shell_turn_records_recent_turn(

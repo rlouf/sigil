@@ -328,8 +328,9 @@ def test_comma_agent_glyphs_print_tool_start_while_agent_runs() -> None:
         params: dict[str, object],
         *,
         output: object,
+        newline: bool = True,
     ) -> None:
-        del output
+        del output, newline
         rendered.append((name, params))
 
     def fake_run_agent_turn(*args: object, **kwargs: object):

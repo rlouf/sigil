@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Iterable, TextIO, cast
+from typing import Any, TextIO, cast
 
 from .protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
@@ -15,43 +15,22 @@ from .tty import MUTED, RESET
 TRACE_LABEL_WIDTH = 5
 
 
-def render_tool_start(name: str, params: dict[str, Any], *, output: TextIO) -> None:
-    """Print a visible tool-start line using the same shape as the stream renderer."""
-    detail = summarize(name, params)
-    status = f"❯ {name:<{TRACE_LABEL_WIDTH}}  {detail}" if detail else f"❯ {name}"
-    print(muted(status, enabled=should_color(output)), file=output, flush=True)
-
-
-def render_zeta_status(
-    glyph: str,
-    tools: Iterable[object],
-    suffix: str,
+def render_tool_start(
+    name: str,
+    params: dict[str, Any],
     *,
     output: TextIO,
-    color_enabled: bool | None = None,
+    newline: bool = True,
 ) -> None:
-    """Print a compact Zeta route status line."""
-    if color_enabled is None:
-        color_enabled = should_color(output)
-    print(
-        muted(render_zeta_status_line(glyph, tools, suffix), enabled=color_enabled),
-        file=output,
-    )
+    """Print a visible tool-start line using the same shape as the stream renderer.
 
-
-def render_zeta_status_line(
-    glyph: str,
-    tools: Iterable[object],
-    suffix: str,
-) -> str:
-    """Return the compact status line shared by Zeta routes."""
-    return f"❯ zeta {glyph:<5} · {render_tool_label(tools)} · {suffix}"
-
-
-def render_tool_label(tools: Iterable[object]) -> str:
-    """Return a compact plus-joined tool label."""
-    label = "+".join(str(tool) for tool in tools if str(tool))
-    return label or "no tools"
+    Pass ``newline=False`` to leave the line open so a result summary can be
+    appended onto it; the caller is then responsible for closing the line.
+    """
+    detail = summarize(name, params)
+    status = f"❯ {name:<{TRACE_LABEL_WIDTH}}  {detail}" if detail else f"❯ {name}"
+    end = "\n" if newline else ""
+    print(muted(status, enabled=should_color(output)), file=output, flush=True, end=end)
 
 
 def render_handoff_lines(handoff: dict[str, Any]) -> list[str]:
@@ -233,14 +212,14 @@ def handoff_summary(name: str, handoff: dict[str, Any]) -> list[str]:
     """Return compact lines for a tool result that stages shell work."""
     artifact = str(handoff.get("artifact") or "")
     if name == "bash":
-        return ["staged in prompt"]
+        return ["staged"]
     if name == "edit":
         return [f"staged patch · {artifact}" if artifact else "staged patch"]
     if name == "write":
         return [f"staged write · {artifact}" if artifact else "staged write"]
     if artifact:
-        return [f"staged in prompt · {artifact}"]
-    return ["staged in prompt"]
+        return [f"staged · {artifact}"]
+    return ["staged"]
 
 
 def text_content(value: dict[str, Any]) -> str:

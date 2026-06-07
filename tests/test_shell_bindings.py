@@ -73,8 +73,7 @@ def make_stub(tmp: Path) -> Path:
                   *) command="echo zeta"; reason="Run zeta handoff." ;;
                 esac
               fi
-              printf '❯ bash   %s\n' "$command"
-              printf '  staged in prompt\n'
+              printf '❯ bash   %s  (staged)\n' "$command"
               if [ -n "$handoff_file" ]; then
                 printf '{"type":"shell_prompt","command":%s,"reason":%s}\n' \
                   "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$command")" \
@@ -86,7 +85,7 @@ def make_stub(tmp: Path) -> Path:
             if [ "$1" = "display" ]; then
               payload="$(cat)"
               case "$*" in
-                "display tool-result bash") printf '%s\n' "staged in prompt" ;;
+                "display tool-result bash") printf '%s\n' "staged" ;;
                 "display tool-result read") printf '%s\n' "2 lines" ;;
                 "display tool-result ls") printf '%s\n' "2 entries" ;;
                 "display tool-result grep") printf '%s\n' "2 matches · 2 files" ;;
@@ -237,8 +236,7 @@ def test_bash_wrappers_call_current_cli_contract() -> None:
             *zeta_step_calls(),
         ]
         assert "answer" in result.stdout
-        assert "❯ bash   echo zeta" in result.stdout
-        assert "  staged in prompt" in result.stdout
+        assert "❯ bash   echo zeta  (staged)" in result.stdout
         assert "Run zeta handoff." not in result.stdout
         assert "history=+ echo zeta" in result.stdout
 
@@ -291,7 +289,7 @@ def test_bash_agent_step_uses_zeta_handoff_directly() -> None:
             stub,
         )
         assert_success(result)
-        assert "  staged in prompt" in result.stdout
+        assert "(staged)" in result.stdout
         assert "Run tests." not in result.stdout
         assert "history=+ uv run pytest" in result.stdout
 
@@ -310,7 +308,7 @@ def test_bash_bare_agent_step_continues_after_shell_handoff() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == ["zeta-step --continue"]
-        assert "  staged in prompt" in result.stdout
+        assert "(staged)" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
         assert "history=+ echo continued" in result.stdout
 
@@ -626,8 +624,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
             *zeta_step_calls(),
         ]
         assert "answer" in result.stdout
-        assert "❯ bash   echo zeta" in result.stdout
-        assert "  staged in prompt" in result.stdout
+        assert "❯ bash   echo zeta  (staged)" in result.stdout
         assert "Run zeta handoff." not in result.stdout
         assert "history=+ echo zeta" in result.stdout
 
@@ -646,7 +643,7 @@ def test_zsh_agent_step_uses_zeta_handoff_directly() -> None:
             stub,
         )
         assert_success(result)
-        assert "  staged in prompt" in result.stdout
+        assert "(staged)" in result.stdout
         assert "Run tests." not in result.stdout
         assert "history=+ uv run pytest" in result.stdout
 
@@ -666,7 +663,7 @@ def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
         )
         assert_success(result)
         assert read_log(tmp) == ["zeta-step --continue"]
-        assert "  staged in prompt" in result.stdout
+        assert "(staged)" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
         assert "history=+ echo continued" in result.stdout
 
@@ -710,7 +707,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
             *zeta_step_calls(),
         ]
         assert "readonly stream answer" in result.stdout
-        assert "  staged in prompt" in result.stdout
+        assert "(staged)" in result.stdout
         assert "Run piped handoff." not in result.stdout
 
 
