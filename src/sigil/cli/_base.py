@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import click
 
+from .._version import __version__
+
 
 @click.group(
     context_settings={"help_option_names": ["-h", "--help"]},
     invoke_without_command=True,
 )
+@click.version_option(__version__, "-V", "--version", prog_name="sigil")
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """Natural-language shell assistant.

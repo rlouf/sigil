@@ -1017,6 +1017,27 @@ def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
     assert data["content"][0]["text"] == "hello zeta\n"
 
 
+def test_zeta_tool_read_offset_and_limit_select_lines(tmp_path: Path) -> None:
+    target = tmp_path / "lines.txt"
+    target.write_text("one\ntwo\nthree\nfour\nfive\n", encoding="utf-8")
+
+    data = zeta.run_tool("read", {"path": str(target), "offset": 1, "limit": 2})
+
+    assert data["ok"] is True
+    assert data["content"][0]["text"] == "two\nthree\n"
+    assert data["metadata"]["offset"] == 1
+    assert data["metadata"]["limit"] == 2
+
+
+def test_zeta_tool_read_limit_past_end_returns_remaining_lines(tmp_path: Path) -> None:
+    target = tmp_path / "short.txt"
+    target.write_text("alpha\nbeta\n", encoding="utf-8")
+
+    data = zeta.run_tool("read", {"path": str(target), "offset": 1, "limit": 10})
+
+    assert data["content"][0]["text"] == "beta\n"
+
+
 def test_zeta_tool_bash_returns_handoff() -> None:
     result = CliRunner().invoke(
         zeta_cli,

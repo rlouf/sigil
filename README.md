@@ -87,7 +87,6 @@ updates the binding without duplicating the rc block.
   `http://127.0.0.1:8080/v1/chat/completions`)
 - The bundled `zeta` runtime entrypoint installed with Sigil. `sigil doctor`
   checks that both `sigil` and its runtime service are visible on PATH.
-- `glow` for Markdown rendering, optional but recommended
 
 Useful environment variables:
 
@@ -97,8 +96,6 @@ ZETA_MODEL_NAME=local-model
 ZETA_MODEL_PATH=/path/to/model.gguf
 SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_RUN_CAPTURE_BYTES=6000
-SIGIL_GLOW_STYLE=notty
-SIGIL_GLOW_WIDTH=88
 # Optional override used by sigil doctor/runtime service discovery.
 ZETA_BIN=/path/to/zeta
 ```

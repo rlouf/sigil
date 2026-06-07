@@ -28,6 +28,15 @@ def cmd_model_list() -> int:
     catalog = load_model_profiles()
     for diagnostic in catalog.diagnostics:
         click.echo(f"model config: {diagnostic.message}", err=True)
+    if not catalog.profiles:
+        default = default_model_selection()
+        click.echo(f"{default.profile}\t{default.model}\t{default.url}")
+        click.echo(
+            "no profiles configured; using ZETA_MODEL_* defaults. "
+            "Add profiles in ~/.zeta/models.toml.",
+            err=True,
+        )
+        return 1 if catalog.diagnostics else 0
     for profile in sorted(catalog.profiles.values(), key=lambda item: item.name):
         click.echo(
             f"{profile.name}\t{profile.model}\t{profile.url or zeta_model.model_url()}"

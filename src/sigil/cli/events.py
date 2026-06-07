@@ -124,7 +124,7 @@ def format_event_time(value: object) -> str:
     """Format an event timestamp for a compact local terminal view."""
     if not isinstance(value, int | float):
         return "-"
-    return datetime.fromtimestamp(value).strftime("%H:%M:%S")
+    return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def event_glyph(event: dict[str, object]) -> str:
@@ -138,7 +138,7 @@ def event_glyph(event: dict[str, object]) -> str:
         nested = operator.get("glyph")
         if isinstance(nested, str) and nested:
             return nested
-    return "?"
+    return "-"
 
 
 def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:

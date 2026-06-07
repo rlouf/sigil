@@ -7,7 +7,7 @@ from typing import Any
 
 from .base import ToolSpec, analysis, effect, error_result, missing
 
-DEFAULT_READ_LIMIT = 20_000
+DEFAULT_READ_LIMIT = 2_000
 
 SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -15,8 +15,16 @@ SCHEMA: dict[str, Any] = {
     "required": ["path"],
     "properties": {
         "path": {"type": "string"},
-        "offset": {"type": "integer", "minimum": 0},
-        "limit": {"type": "integer", "minimum": 1},
+        "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of leading lines to skip (0-based).",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Maximum number of lines to return.",
+        },
     },
 }
 
@@ -38,7 +46,8 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return error_result("read-failed", str(exc))
-    content = text[offset : offset + limit]
+    lines = text.splitlines(keepends=True)
+    content = "".join(lines[offset : offset + limit])
     return {
         "ok": True,
         "content": [{"type": "text", "text": content}],
