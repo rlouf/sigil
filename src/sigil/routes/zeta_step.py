@@ -77,6 +77,7 @@ def run_agent_step(
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
+    prior_transcript = runtime.transcript_tail()
     append_jsonl(runtime.TRANSCRIPT, user_event)
     context = runtime.load_project_context()
     recorder = AgentStepEventRecorder(
@@ -87,7 +88,7 @@ def run_agent_step(
     )
     result = run_agent_turn(
         prompt,
-        runtime.transcript_tail(),
+        prior_transcript,
         AgentConfig(
             system_prompt=system,
             allowed_tools=enabled_tools,

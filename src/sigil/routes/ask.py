@@ -198,11 +198,10 @@ def run_tool_answer(
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
-    append_jsonl(runtime.TRANSCRIPT, user_event)
     turn_events: list[dict[str, Any]] = [
         dict(turn) for turn in history if turn.get("role") in {"user", "assistant"}
     ]
-    turn_events.append(user_event)
+    append_jsonl(runtime.TRANSCRIPT, user_event)
     result = run_agent_turn(
         prompt,
         turn_events,

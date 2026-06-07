@@ -158,6 +158,41 @@ def test_events_default_lists_recent_events() -> None:
     assert "short_id" not in json.loads(raw.output)[0]
 
 
+def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        old_state_dir = os.environ.get("SIGIL_STATE_DIR")
+        old_session_id = os.environ.get("SIGIL_SESSION_ID")
+        os.environ["SIGIL_STATE_DIR"] = tmp
+        os.environ["SIGIL_SESSION_ID"] = "test"
+        try:
+            event = append_event(
+                {
+                    "type": "failure_recorded",
+                    "glyph": "failure",
+                    "command": "false",
+                    "status": 1,
+                }
+            )
+            text = CliRunner().invoke(cli, ["events", "--limit", "1"])
+            listed = CliRunner().invoke(cli, ["events", "list", "--json"])
+        finally:
+            if old_state_dir is None:
+                os.environ.pop("SIGIL_STATE_DIR", None)
+            else:
+                os.environ["SIGIL_STATE_DIR"] = old_state_dir
+            if old_session_id is None:
+                os.environ.pop("SIGIL_SESSION_ID", None)
+            else:
+                os.environ["SIGIL_SESSION_ID"] = old_session_id
+
+    assert text.exit_code == 0, text.output
+    assert str(event["id"])[:8] in text.output
+    assert "failure recorded" in text.output
+    assert "failure failure recorded" not in text.output
+    assert listed.exit_code == 0, listed.output
+    assert json.loads(listed.output)[0]["action"] == "failure recorded"
+
+
 def test_confirmation_uses_exported_tty_before_dev_tty() -> None:
     with patch_dict(
         os.environ,

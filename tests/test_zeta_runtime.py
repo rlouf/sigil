@@ -27,6 +27,7 @@ from sigil.zeta import agent as zeta_agent
 from sigil.zeta import runtime as zeta
 from sigil.zeta import model as zeta_model
 from sigil.zeta import models as zeta_models
+from sigil.zeta.tools import grep as grep_tool
 from sigil.zeta.tools import validate_tool_args
 from sigil.zeta.cli import cli as zeta_cli
 
@@ -347,6 +348,41 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     assert [
         event["name"] for event in result.events if event.get("type") == "tool_call"
     ] == ["read", "ls"]
+
+
+def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del kwargs
+        captured["messages"] = messages
+        return {"content": "done"}
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "inspect the repo",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assert result.final_text == "done"
+    messages = cast(list[dict[str, Any]], captured["messages"])
+    prompt_messages = [
+        message
+        for message in messages
+        if message.get("role") == "user"
+        and "Objective:\ninspect the repo" in str(message.get("content"))
+    ]
+    assert len(prompt_messages) == 1
 
 
 def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> None:
@@ -1038,6 +1074,42 @@ def test_zeta_tool_read_limit_past_end_returns_remaining_lines(tmp_path: Path) -
     assert data["content"][0]["text"] == "beta\n"
 
 
+def test_zeta_tool_grep_reports_total_limited_metadata(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("needle one\nneedle two\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("needle three\n", encoding="utf-8")
+
+    data = zeta.run_tool(
+        "grep", {"path": str(tmp_path), "pattern": "needle", "limit": 2}
+    )
+
+    assert data["ok"] is True
+    assert data["content"][0]["text"].count("needle") == 2
+    assert data["metadata"]["matches"] == 2
+    assert data["metadata"]["files"] == 1
+    assert data["metadata"]["limit"] == 2
+    assert data["metadata"]["truncated"] is True
+    assert data["metadata"]["match_limit_reached"] is True
+
+
+def test_zeta_tool_grep_reports_content_truncation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "long.txt"
+    target.write_text("needle " + ("x" * 80) + "\n", encoding="utf-8")
+    monkeypatch.setattr(grep_tool, "MAX_TOOL_RESULT_CHARS", 20)
+
+    data = zeta.run_tool("grep", {"path": str(target), "pattern": "needle"})
+
+    assert data["ok"] is True
+    assert len(data["content"][0]["text"]) == 20
+    assert data["metadata"]["matches"] == 1
+    assert data["metadata"]["files"] == 1
+    assert data["metadata"]["truncated"] is True
+    assert data["metadata"]["match_limit_reached"] is False
+    assert data["metadata"]["content_truncated"] is True
+
+
 def test_zeta_tool_bash_returns_handoff() -> None:
     result = CliRunner().invoke(
         zeta_cli,
@@ -1111,6 +1183,14 @@ def test_sigil_display_summarizes_tool_results() -> None:
         "grep",
         {"ok": True, "content": [{"type": "text", "text": "a.py:1:x\nb.py:2:y\n"}]},
     ) == ["2 matches · 2 files"]
+    assert sigil_display.tool_result_summary(
+        "grep",
+        {
+            "ok": True,
+            "content": [{"type": "text", "text": "a.py:1:x\n"}],
+            "metadata": {"matches": 10, "files": 3, "truncated": True},
+        },
+    ) == ["10 matches · 3 files · truncated"]
 
 
 def test_sigil_display_summarizes_shell_results() -> None:
@@ -1421,6 +1501,33 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
     assert output.out == "\nThe answer.\n"
     assert "❯ zeta ,, " in output.err
     assert captured["context"] == "ctx"
+
+
+def test_zeta_agent_step_does_not_pass_current_user_event_as_transcript(
+    monkeypatch,
+    capsys,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, config, kwargs
+        captured["transcript"] = transcript
+        return zeta_agent.AgentTurnResult(final_text="done")
+
+    monkeypatch.setattr(zeta_runner, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step("answer me", glyph=",,")
+
+    assert code == 0
+    assert cast(list[dict[str, Any]], captured["transcript"]) == []
+    assert zeta.transcript_tail()[-1]["type"] == "user_message"
+    assert capsys.readouterr().out == "\ndone\n"
 
 
 def test_zeta_agent_step_double_comma_uses_handoff_mode(
@@ -2036,7 +2143,8 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     assert config.model_name == "fast-model"
     assert config.model_url == "http://127.0.0.1:8081/v1/chat/completions"
     transcript = cast(list[dict[str, Any]], captured["transcript"])
-    assert transcript[-1]["model"] == {
+    assert transcript == []
+    assert zeta.transcript_tail()[-1]["model"] == {
         "profile": "fast",
         "model": "fast-model",
         "url": "http://127.0.0.1:8081/v1/chat/completions",
@@ -2407,18 +2515,15 @@ def test_zeta_question_loop_passes_follow_up_history_as_turns(
     )
 
     assert code == 0
-    assert transcripts[0][:3] == [
+    assert transcripts[0][:2] == [
         {"role": "user", "content": "summarize README"},
         {"role": "assistant", "content": "It is a Sigil README."},
-        {
-            "type": "user_message",
-            "content": "and why?",
-            "runtime": "zeta",
-            "route": "answer",
-            "system": "question system",
-            "available_tools": ["read", "grep", "ls"],
-        },
     ]
+    assert not any(turn.get("content") == "and why?" for turn in transcripts[0][:2])
+    assert transcripts[0][-1] == {
+        "type": "assistant_message",
+        "content": "follow-up answer",
+    }
     assert captured["context"] == "ctx"
 
 

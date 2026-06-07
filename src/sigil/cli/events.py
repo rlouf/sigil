@@ -12,6 +12,7 @@ from ._shared import pretty_print_json
 from ..session import read_event_log
 
 EVENT_LIST_COLUMNS = ("time", "id", "action", "session", "summary")
+ROUTE_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
 
 
 @cli.group("events", invoke_without_command=True)
@@ -130,13 +131,13 @@ def format_event_time(value: object) -> str:
 def event_glyph(event: dict[str, object]) -> str:
     """Return the route glyph for an event, including nested operator events."""
     glyph = event.get("glyph")
-    if isinstance(glyph, str) and glyph:
+    if isinstance(glyph, str) and glyph in ROUTE_GLYPHS:
         return glyph
     operator = event.get("operator")
     if isinstance(operator, dict):
         operator = cast("dict[str, object]", operator)
         nested = operator.get("glyph")
-        if isinstance(nested, str) and nested:
+        if isinstance(nested, str) and nested in ROUTE_GLYPHS:
             return nested
     return "-"
 
@@ -161,8 +162,11 @@ def event_action(event: dict[str, object], glyph: str, event_type: str) -> str:
         "plan_completed": "plan complete",
         "plan_aborted": "plan aborted",
         "command_selected": "selected",
+        "failure_recorded": "failure recorded",
     }
     label = labels.get(event_type, event_type.replace("_", " "))
+    if glyph == "-":
+        return label
     return f"{glyph} {label}"
 
 

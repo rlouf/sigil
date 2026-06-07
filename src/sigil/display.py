@@ -125,28 +125,61 @@ def tool_result_summary(name: str, result: dict[str, Any]) -> list[str]:
         return direct_summary
     text = text_content(result)
     if name == "read":
-        return [f"{count_lines(text)} lines"]
+        return read_result_summary(text)
     if name == "ls":
-        entries = metadata.get("entries")
-        if isinstance(entries, int):
-            return [f"{entries} entries"]
-        return [f"{count_lines(text)} entries"]
+        return ls_result_summary(text, metadata)
     if name == "grep":
-        matches = [line for line in text.splitlines() if line]
-        files = {line.split(":", 1)[0] for line in matches if ":" in line}
-        if files:
-            return [f"{len(matches)} matches · {len(files)} files"]
-        return [f"{len(matches)} matches"]
+        return grep_result_summary(text, metadata)
     if name == "edit" and metadata.get("mode") == "direct_replace":
-        location = metadata.get("location")
-        if isinstance(location, str) and location:
-            return [f"applied · {location}"]
-        return ["applied"]
+        return edit_result_summary(metadata)
     if result.get("ok") is False:
         return [str(result.get("message") or result.get("error") or "failed")]
     if result.get("ok") is True:
         return ["ok"]
     return []
+
+
+def read_result_summary(text: str) -> list[str]:
+    return [f"{count_lines(text)} lines"]
+
+
+def ls_result_summary(text: str, metadata: dict[str, Any]) -> list[str]:
+    entries = metadata.get("entries")
+    if isinstance(entries, int):
+        return [f"{entries} entries"]
+    return [f"{count_lines(text)} entries"]
+
+
+def grep_result_summary(text: str, metadata: dict[str, Any]) -> list[str]:
+    match_count = metadata.get("matches")
+    file_count = metadata.get("files")
+    if isinstance(match_count, int):
+        return [grep_metadata_summary(match_count, file_count, metadata)]
+    matches = [line for line in text.splitlines() if line]
+    files = {line.split(":", 1)[0] for line in matches if ":" in line}
+    if files:
+        return [f"{len(matches)} matches · {len(files)} files"]
+    return [f"{len(matches)} matches"]
+
+
+def grep_metadata_summary(
+    matches: int,
+    files: object,
+    metadata: dict[str, Any],
+) -> str:
+    summary = f"{matches} matches"
+    if isinstance(files, int) and files:
+        summary += f" · {files} files"
+    if metadata.get("truncated") is True:
+        summary += " · truncated"
+    return summary
+
+
+def edit_result_summary(metadata: dict[str, Any]) -> list[str]:
+    location = metadata.get("location")
+    if isinstance(location, str) and location:
+        return [f"applied · {location}"]
+    return ["applied"]
 
 
 def direct_tool_result_summary(name: str, metadata: dict[str, Any]) -> list[str]:

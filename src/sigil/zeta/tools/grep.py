@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -39,29 +40,68 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     if not pattern:
         return error_result("missing-pattern", "missing pattern")
     try:
-        proc = subprocess.run(
-            ["rg", "--line-number", "--max-count", str(limit), pattern, path],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-        text = proc.stdout if proc.returncode in {0, 1} else proc.stderr
+        result = run_ripgrep(pattern, path, limit)
     except FileNotFoundError:
-        text = grep_fallback(pattern, Path(path), limit)
+        result = grep_fallback(pattern, Path(path), limit)
+    text, content_truncated = truncate_content(result.text)
+    truncated = result.truncated or content_truncated
     return {
-        "ok": True,
+        "ok": result.ok,
         "content": [{"type": "text", "text": text[:MAX_TOOL_RESULT_CHARS]}],
-        "metadata": {"pattern": pattern, "path": path},
+        "metadata": {
+            "pattern": pattern,
+            "path": path,
+            "limit": limit,
+            "matches": result.matches,
+            "files": result.files,
+            "truncated": truncated,
+            "match_limit_reached": result.truncated,
+            "content_truncated": content_truncated,
+            "max_chars": MAX_TOOL_RESULT_CHARS,
+            "status": result.status,
+        },
     }
 
 
-def grep_fallback(pattern: str, root: Path, limit: int) -> str:
+@dataclass(frozen=True)
+class GrepResult:
+    text: str
+    matches: int
+    files: int
+    truncated: bool
+    ok: bool = True
+    status: int = 0
+
+
+def run_ripgrep(pattern: str, path: str, limit: int) -> GrepResult:
+    proc = subprocess.Popen(
+        ["rg", "--line-number", "--color", "never", pattern, path],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert proc.stdout is not None
+    lines = []
+    truncated = False
+    for line in proc.stdout:
+        if len(lines) >= limit:
+            truncated = True
+            proc.terminate()
+            break
+        lines.append(line.rstrip("\n"))
+    _, stderr = proc.communicate()
+    status = proc.returncode or 0
+    if status not in {0, 1} and not truncated:
+        message = stderr.strip()
+        return GrepResult(message, 0, 0, False, ok=False, status=status)
+    return grep_result_from_lines(lines, truncated=truncated, status=status)
+
+
+def grep_fallback(pattern: str, root: Path, limit: int) -> GrepResult:
     matches: list[str] = []
+    truncated = False
     paths = [root] if root.is_file() else root.rglob("*")
     for path in paths:
-        if len(matches) >= limit:
-            break
         if not path.is_file():
             continue
         try:
@@ -70,7 +110,32 @@ def grep_fallback(pattern: str, root: Path, limit: int) -> str:
             continue
         for index, line in enumerate(lines, start=1):
             if pattern in line:
-                matches.append(f"{path}:{index}:{line}")
                 if len(matches) >= limit:
+                    truncated = True
                     break
-    return "\n".join(matches)
+                matches.append(f"{path}:{index}:{line}")
+        if truncated:
+            break
+    return grep_result_from_lines(matches, truncated=truncated)
+
+
+def grep_result_from_lines(
+    lines: list[str],
+    *,
+    truncated: bool,
+    status: int = 0,
+) -> GrepResult:
+    files = {line.split(":", 1)[0] for line in lines if ":" in line}
+    return GrepResult(
+        "\n".join(lines),
+        matches=len(lines),
+        files=len(files),
+        truncated=truncated,
+        status=status,
+    )
+
+
+def truncate_content(text: str) -> tuple[str, bool]:
+    if len(text) <= MAX_TOOL_RESULT_CHARS:
+        return text, False
+    return text[:MAX_TOOL_RESULT_CHARS], True
