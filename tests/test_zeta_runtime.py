@@ -963,6 +963,28 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
     assert len(prompt_messages) == 1
 
 
+def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
+    transcript = [{"role": "user", "content": f"prior-{index}"} for index in range(25)]
+    current_events = [
+        {"type": "assistant_message", "content": f"current-{index}"}
+        for index in range(25)
+    ]
+
+    messages = zeta.zeta_chat_messages(
+        "inspect",
+        transcript,
+        allowed_tools=(),
+        current_events=current_events,
+    )
+    contents = [str(message.get("content") or "") for message in messages]
+
+    assert "prior-0" in contents
+    assert "prior-24" in contents
+    assert "Objective:\ninspect" in contents[26]
+    assert "current-0" in contents
+    assert "current-24" in contents
+
+
 def test_zeta_agent_turn_orders_follow_up_history_before_current_events(
     monkeypatch,
 ) -> None:
