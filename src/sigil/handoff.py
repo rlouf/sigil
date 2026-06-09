@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from .session import recent_turns, record_turn
+from .session import event_time, recent_turns, record_turn
 from .protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
@@ -14,7 +14,7 @@ from .protocols import (
     SHELL_HANDOFF_CANCEL_NO_TURNS,
     SHELL_HANDOFF_RESULT_SCHEMA,
     SHELL_HANDOFF_RESULT_TYPE,
-    is_shell_handoff_result as protocol_is_shell_handoff_result,
+    is_shell_handoff_result,
     is_shell_prompt_handoff,
 )
 from .zeta import runtime as zeta_runtime
@@ -195,7 +195,7 @@ def latest_unresolved_shell_handoff(
         if not isinstance(result, dict):
             continue
         tool_call_id = str(event.get("tool_call_id") or "")
-        if protocol_is_shell_handoff_result(result):
+        if is_shell_handoff_result(result):
             if tool_call_id:
                 resolved_call_ids.add(tool_call_id)
             continue
@@ -213,11 +213,6 @@ def latest_unresolved_shell_handoff(
             "time": event.get("time"),
         }
     return {}
-
-
-def is_shell_handoff_result(result: dict[str, Any]) -> bool:
-    """Return whether a result resolves a shell handoff."""
-    return protocol_is_shell_handoff_result(result)
 
 
 def shell_handoff_summary(handoff: dict[str, Any]) -> dict[str, Any]:
@@ -251,11 +246,6 @@ def normalize_shell_turn(turn: dict[str, Any]) -> dict[str, Any]:
     if isinstance(stderr, str) and stderr:
         normalized["stderr_snippet"] = stderr
     return normalized
-
-
-def event_time(event: dict[str, Any]) -> float:
-    value = event.get("time")
-    return value if isinstance(value, int | float) else 0.0
 
 
 def optional_text(value: object) -> str | None:

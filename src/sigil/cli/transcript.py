@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any, TextIO
 
 import click
 
 from ._base import cli
+from ._shared import pretty_print_json, read_json_stdin
 from .. import handoff
 
 
@@ -24,19 +24,5 @@ def transcript_shell_turn() -> int:
         turn = read_json_stdin(sys.stdin)
     except (json.JSONDecodeError, ValueError) as exc:
         raise click.BadParameter(str(exc), param_hint="stdin") from exc
-    print_json(handoff.append_shell_turn(turn))
+    pretty_print_json(handoff.append_shell_turn(turn))
     return 0
-
-
-def read_json_stdin(stdin: TextIO) -> dict[str, Any]:
-    raw = stdin.read()
-    if not raw.strip():
-        return {}
-    data = json.loads(raw)
-    if not isinstance(data, dict):
-        raise ValueError("expected JSON object")
-    return data
-
-
-def print_json(value: Any) -> None:
-    print(json.dumps(value, ensure_ascii=False, indent=2))

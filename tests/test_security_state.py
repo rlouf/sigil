@@ -115,8 +115,8 @@ def test_events_default_lists_recent_events() -> None:
                 }
             )
             text = CliRunner().invoke(cli, ["events", "--limit", "1"])
-            listed = CliRunner().invoke(cli, ["events", "list", "--json"])
-            raw = CliRunner().invoke(cli, ["events", "list", "--json", "--raw"])
+            listed = CliRunner().invoke(cli, ["events", "--json"])
+            raw = CliRunner().invoke(cli, ["events", "--json", "--raw"])
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)
@@ -169,7 +169,7 @@ def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
                 }
             )
             text = CliRunner().invoke(cli, ["events", "--limit", "1"])
-            listed = CliRunner().invoke(cli, ["events", "list", "--json"])
+            listed = CliRunner().invoke(cli, ["events", "--json"])
         finally:
             if old_state_dir is None:
                 os.environ.pop("SIGIL_STATE_DIR", None)

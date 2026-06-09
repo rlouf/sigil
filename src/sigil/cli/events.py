@@ -14,7 +14,7 @@ EVENT_LIST_COLUMNS = ("time", "route", "event", "session", "detail")
 ROUTE_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
 
 
-@cli.group("events", invoke_without_command=True)
+@cli.command("events")
 @click.option("--json", "json_output", is_flag=True)
 @click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
 @click.option(
@@ -24,26 +24,8 @@ ROUTE_GLYPHS = frozenset({",", ",,", ",,,", "?", "ask"})
     show_default=True,
     help="Number of recent events to show.",
 )
-@click.pass_context
-def cmd_events(ctx: click.Context, json_output: bool, raw: bool, limit: int) -> int:
+def cmd_events(json_output: bool, raw: bool, limit: int) -> int:
     """Inspect Sigil's read-only event log."""
-    if ctx.invoked_subcommand is not None:
-        return 0
-    return print_events_list(json_output=json_output, raw=raw, limit=limit)
-
-
-@cmd_events.command("list")
-@click.option("--json", "json_output", is_flag=True)
-@click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
-@click.option(
-    "--limit",
-    type=click.IntRange(min=1),
-    default=20,
-    show_default=True,
-    help="Number of recent events to show.",
-)
-def cmd_events_list(json_output: bool, raw: bool, limit: int) -> int:
-    """Show recent events from the global event log."""
     return print_events_list(json_output=json_output, raw=raw, limit=limit)
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from typing import Any, TextIO
 
 
 def piped_stdin_text() -> str | None:
@@ -19,6 +20,17 @@ def question_with_stdin(question: str, stdin_text: str) -> str:
     if question:
         return f"{question}\n\nPiped input:\n{stdin_text}"
     return f"Piped input:\n{stdin_text}"
+
+
+def read_json_stdin(stdin: TextIO) -> dict[str, Any]:
+    """Read a JSON object from stdin."""
+    raw = stdin.read()
+    if not raw.strip():
+        return {}
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("expected JSON object")
+    return data
 
 
 def pretty_print_json(value: object) -> None:
