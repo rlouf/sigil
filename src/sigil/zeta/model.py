@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sys
 import urllib.error
 import urllib.request
 from collections.abc import Iterable, Iterator, Mapping
@@ -13,6 +14,8 @@ from urllib.parse import urlparse, urlunparse
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
+
+from ..tty import LOVE, MUTED, RESET
 
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
@@ -671,3 +674,35 @@ def chat_text(
         telemetry_sink=telemetry_sink,
     )
     return str(payload["choices"][0]["message"]["content"])
+
+
+def local_model_path() -> str:
+    """Return the optional local model path shown in startup help text."""
+    return os.environ.get("ZETA_MODEL_PATH") or "<path-to-model.gguf>"
+
+
+def ensure_server(
+    *,
+    selected_url: str | None = None,
+    selected_model: str | None = None,
+) -> bool:
+    """Check that the configured OpenAI-compatible endpoint is reachable."""
+    url = model_url(selected_url)
+    if model_endpoint_open(selected_url):
+        return True
+    print("", file=sys.stderr)
+    print(
+        f"{LOVE}✗ model: no OpenAI-compatible endpoint reachable at {url}{RESET}",
+        file=sys.stderr,
+    )
+    print("", file=sys.stderr)
+    print(f"{MUTED}  Start a local OpenAI-compatible server:", file=sys.stderr)
+    print("      llama-server \\", file=sys.stderr)
+    print(f"        -m {local_model_path()} \\", file=sys.stderr)
+    print(
+        f"        --alias {model_name(selected_model)} --host 127.0.0.1 --port 8080 \\",
+        file=sys.stderr,
+    )
+    print(f"        -ngl 99 -c 262144 -fa on --reasoning auto{RESET}", file=sys.stderr)
+    print("", file=sys.stderr)
+    return False

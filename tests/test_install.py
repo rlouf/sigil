@@ -46,7 +46,7 @@ def test_install_zsh_binding_can_disable_glyph_aliases_in_rc_snippet() -> None:
 def test_install_zsh_binding_bakes_resolved_runtime_bins_into_rc() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        bins = {"sigil": "/opt/sigil/bin/sigil", "zeta": "/opt/sigil/bin/zeta"}
+        bins = {"sigil": "/opt/sigil/bin/sigil"}
         with patch("sigil.install.shutil.which", side_effect=bins.get):
             install_zsh_binding(
                 install_dir=root / "bindings",
@@ -55,8 +55,7 @@ def test_install_zsh_binding_bakes_resolved_runtime_bins_into_rc() -> None:
 
         rc_text = (root / ".zshrc").read_text(encoding="utf-8")
         assert "export SIGIL_BIN=/opt/sigil/bin/sigil" in rc_text
-        assert "runtime service discovery" in rc_text
-        assert "export ZETA_BIN=/opt/sigil/bin/zeta" in rc_text
+        assert "ZETA_BIN" not in rc_text
 
 
 def test_install_zsh_binding_cli_json_reports_paths() -> None:
@@ -106,7 +105,7 @@ def test_doctor_reports_expected_checks() -> None:
                             checks = doctor_checks()
     names = {check.name for check in checks}
     assert "sigil:installed" in names
-    assert "zeta:installed" in names
+    assert "zeta:installed" not in names
     assert "model:endpoint" in names
     assert "state:writable" in names
     assert "shell:supported" in names
@@ -147,7 +146,6 @@ def test_doctor_reports_disabled_glyphs() -> None:
 def test_doctor_cli_answers_setup_questions() -> None:
     checks = [
         DoctorCheck("sigil:installed", "ok", "/bin/sigil"),
-        DoctorCheck("zeta:installed", "ok", "/bin/zeta"),
         DoctorCheck("model:endpoint", "warn", "not reachable"),
         DoctorCheck("shell:binding-installed", "ok", "/tmp/sigil.zsh"),
         DoctorCheck("shell:binding-loaded", "ok", "session test"),
@@ -160,7 +158,6 @@ def test_doctor_cli_answers_setup_questions() -> None:
     output = stdout.getvalue()
     assert code == 0
     assert "sigil installed?" in output
-    assert "zeta runtime installed?" in output
     assert "model endpoint reachable?" in output
     assert "shell binding installed?" in output
     assert "shell binding loaded in this shell?" in output
@@ -170,7 +167,7 @@ def test_doctor_cli_answers_setup_questions() -> None:
 def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
     checks = [
         DoctorCheck("sigil:installed", "ok", "/bin/sigil"),
-        DoctorCheck("zeta:installed", "fail", "zeta is not on PATH"),
+        DoctorCheck("model:endpoint", "fail", "not reachable"),
     ]
     stdout = StringIO()
     with patch("sigil.cli.install.doctor_checks", return_value=checks):
@@ -178,5 +175,5 @@ def test_doctor_cli_json_returns_nonzero_for_failures() -> None:
             code = main(["doctor", "--json"])
     assert code == 1
     payload = json.loads(stdout.getvalue())
-    assert payload[1]["name"] == "zeta:installed"
+    assert payload[1]["name"] == "model:endpoint"
     assert payload[1]["status"] == "fail"

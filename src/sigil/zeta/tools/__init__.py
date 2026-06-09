@@ -84,7 +84,6 @@ def tools_list(allowed_tools: Iterable[str] | None = None) -> dict[str, Any]:
     tools = []
     for name in allowed_tool_names(allowed_tools):
         meta = tool_metadata(name)
-        meta["command"] = ["zeta", "tool", name]
         meta.update(TOOL_ORIGINS.get(name, {"origin": "builtin"}))
         tools.append(meta)
     result: dict[str, Any] = {"tools": tools}

@@ -34,7 +34,6 @@ from sigil.zeta import models as zeta_models
 from sigil.zeta import trace as zeta_trace
 from sigil.zeta.tools import grep as grep_tool
 from sigil.zeta.tools import validate_tool_args
-from sigil.zeta.cli import cli as zeta_cli
 
 
 class TtyBuffer(StringIO):
@@ -2960,9 +2959,7 @@ def test_zeta_system_prompt_advertises_enabled_skills_only_with_read(
 
 
 def test_zeta_tools_list_exposes_v1_builtins() -> None:
-    result = CliRunner().invoke(zeta_cli, ["tools", "list", "--json"])
-    assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = zeta.tools_list()
     names = {tool["name"] for tool in data["tools"]}
     assert {"read", "grep", "ls", "bash", "edit", "write"} <= names
     assert data["tools"][0]["origin"] == "builtin"
@@ -3069,7 +3066,7 @@ def write_tools_config(
     )
 
 
-def test_zeta_cli_plugin_tool_flows_through_registry(
+def test_zeta_plugin_tool_flows_through_registry(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3079,13 +3076,10 @@ def test_zeta_cli_plugin_tool_flows_through_registry(
     write_tools_config(home, [sys.executable, str(script)])
     monkeypatch.setenv("HOME", str(home))
 
-    listed = CliRunner().invoke(zeta_cli, ["tools", "list", "--json"])
-    assert listed.exit_code == 0
-    tools = json.loads(listed.output)["tools"]
+    tools = zeta.tools_list()["tools"]
     plugin = next(tool for tool in tools if tool["name"] == "docs_search")
     assert plugin["origin"] == "plugin"
     assert plugin["plugin"] == sys.executable
-    assert plugin["command"] == ["zeta", "tool", "docs_search"]
 
     descriptors = zeta.model_tool_descriptors(("docs_search",))
     assert descriptors == [
@@ -3111,16 +3105,8 @@ def test_zeta_cli_plugin_tool_flows_through_registry(
     assert data["ok"] is True
     assert data["content"][0]["text"] == "docs:install"
 
-    cli_run = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "docs_search"],
-        input=json.dumps({"query": "cli"}),
-    )
-    assert cli_run.exit_code == 0
-    assert json.loads(cli_run.output)["content"][0]["text"] == "docs:cli"
 
-
-def test_zeta_cli_plugin_name_collision_is_ignored(
+def test_zeta_plugin_name_collision_is_ignored(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3137,7 +3123,7 @@ def test_zeta_cli_plugin_name_collision_is_ignored(
     assert data["diagnostics"][0]["code"] == "plugin-name-collision"
 
 
-def test_zeta_cli_plugin_invalid_metadata_reports_diagnostic(
+def test_zeta_plugin_invalid_metadata_reports_diagnostic(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3152,7 +3138,7 @@ def test_zeta_cli_plugin_invalid_metadata_reports_diagnostic(
     assert data["diagnostics"][0]["code"] == "plugin-metadata-invalid-json"
 
 
-def test_zeta_cli_plugin_missing_command_reports_diagnostic(
+def test_zeta_plugin_missing_command_reports_diagnostic(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3164,7 +3150,7 @@ def test_zeta_cli_plugin_missing_command_reports_diagnostic(
     assert data["diagnostics"][0]["code"] == "plugin-metadata-failed"
 
 
-def test_zeta_cli_plugin_metadata_timeout_reports_diagnostic(
+def test_zeta_plugin_metadata_timeout_reports_diagnostic(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3178,7 +3164,7 @@ def test_zeta_cli_plugin_metadata_timeout_reports_diagnostic(
     assert data["diagnostics"][0]["code"] == "plugin-metadata-timeout"
 
 
-def test_zeta_cli_plugin_nonzero_execution_returns_tool_error(
+def test_zeta_plugin_nonzero_execution_returns_tool_error(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -3194,28 +3180,13 @@ def test_zeta_cli_plugin_nonzero_execution_returns_tool_error(
     assert "status 7" in data["error"]["message"]
 
 
-def test_zeta_help_frames_cli_as_bundled_runtime_service() -> None:
-    result = CliRunner().invoke(zeta_cli, ["--help"])
-
-    assert result.exit_code == 0
-    assert "Bundled runtime service commands used by Sigil." in result.output
-
-
 def test_zeta_tool_read_schema_and_run(tmp_path: Path) -> None:
     target = tmp_path / "note.txt"
     target.write_text("hello zeta\n", encoding="utf-8")
 
-    schema = CliRunner().invoke(zeta_cli, ["tool", "read", "--schema"])
-    assert schema.exit_code == 0
-    assert json.loads(schema.output)["required"] == ["path"]
+    assert zeta.tool_metadata("read")["schema"]["required"] == ["path"]
 
-    result = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "read"],
-        input=json.dumps({"path": str(target)}),
-    )
-    assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = zeta.run_tool("read", {"path": str(target)})
     assert data["ok"] is True
     assert data["content"][0]["text"] == "hello zeta\n"
 
@@ -3278,13 +3249,8 @@ def test_zeta_tool_grep_reports_content_truncation(
 
 
 def test_zeta_tool_bash_returns_handoff() -> None:
-    result = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "bash"],
-        input=json.dumps({"command": "uv run pytest", "reason": "Run tests."}),
-    )
-    assert result.exit_code == 0
-    data = json.loads(result.output)
+    data = zeta.run_tool("bash", {"command": "uv run pytest", "reason": "Run tests."})
+
     assert data["handoff"]["command"] == "uv run pytest"
     assert data["handoff"]["reason"] == "Run tests."
 
@@ -3664,14 +3630,8 @@ def test_zeta_tool_ls_lists_directory_contents(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
 
-    result = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "ls"],
-        input=json.dumps({"path": str(tmp_path)}),
-    )
+    data = zeta.run_tool("ls", {"path": str(tmp_path)})
 
-    assert result.exit_code == 0
-    data = json.loads(result.output)
     assert data["ok"] is True
     assert data["content"][0]["text"].splitlines() == [
         "-\tdir\tsrc/",
@@ -3689,21 +3649,16 @@ def test_zeta_tool_ls_can_filter_large_files_without_shelling_out(
     (tmp_path / "src" / "large.bin").write_bytes(b"x" * 12)
     (tmp_path / "small.txt").write_bytes(b"x" * 4)
 
-    result = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "ls"],
-        input=json.dumps(
-            {
-                "path": str(tmp_path),
-                "recursive": True,
-                "min_size_bytes": 10,
-                "exclude": [".git"],
-            }
-        ),
+    data = zeta.run_tool(
+        "ls",
+        {
+            "path": str(tmp_path),
+            "recursive": True,
+            "min_size_bytes": 10,
+            "exclude": [".git"],
+        },
     )
 
-    assert result.exit_code == 0
-    data = json.loads(result.output)
     assert data["ok"] is True
     assert data["content"][0]["text"].splitlines() == ["12\tfile\tsrc/large.bin"]
     assert data["metadata"]["entries"] == 1
@@ -3714,13 +3669,9 @@ def test_zeta_tool_edit_writes_patch_artifact(tmp_path: Path) -> None:
     target = tmp_path / "a.txt"
     target.write_text("old\n", encoding="utf-8")
 
-    result = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "edit"],
-        input=json.dumps({"location": str(target), "old": "old\n", "new": "new\n"}),
+    data = zeta.run_tool(
+        "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
-    assert result.exit_code == 0
-    data = json.loads(result.output)
     artifact = Path(data["handoff"]["artifact"])
     assert artifact.exists()
     patch = artifact.read_text(encoding="utf-8")
@@ -3739,15 +3690,9 @@ def test_zeta_tool_edit_accepts_exact_replacement(tmp_path: Path) -> None:
         "reason": "Replace one line.",
     }
 
-    result = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "edit"],
-        input=json.dumps(payload),
-    )
+    data = zeta.run_tool("edit", payload)
 
     assert validate_tool_args("edit", payload) == []
-    assert result.exit_code == 0
-    data = json.loads(result.output)
     artifact = Path(data["handoff"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
     assert data["handoff"]["command"].startswith("git apply ")
@@ -3780,14 +3725,10 @@ def test_zeta_tool_edit_rejects_ambiguous_exact_replacement(tmp_path: Path) -> N
     target = tmp_path / "a.txt"
     target.write_text("old\nold\n", encoding="utf-8")
 
-    result = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "edit"],
-        input=json.dumps({"location": str(target), "old": "old\n", "new": "new\n"}),
+    data = zeta.run_tool(
+        "edit", {"location": str(target), "old": "old\n", "new": "new\n"}
     )
 
-    assert result.exit_code == 0
-    data = json.loads(result.output)
     assert data["ok"] is False
     assert data["error"]["code"] == "old-text-not-unique"
 
@@ -3796,14 +3737,8 @@ def test_zeta_tool_edit_marks_no_newline_exact_replacement(tmp_path: Path) -> No
     target = tmp_path / "a.txt"
     target.write_text("old", encoding="utf-8")
 
-    result = CliRunner().invoke(
-        zeta_cli,
-        ["tool", "edit"],
-        input=json.dumps({"location": str(target), "old": "old", "new": "new"}),
-    )
+    data = zeta.run_tool("edit", {"location": str(target), "old": "old", "new": "new"})
 
-    assert result.exit_code == 0
-    data = json.loads(result.output)
     artifact = Path(data["handoff"]["artifact"])
     patch = artifact.read_text(encoding="utf-8")
     assert "-old\n\\ No newline at end of file\n" in patch
@@ -3814,19 +3749,11 @@ def test_zeta_transcript_append_and_tail(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
 
-    runner = CliRunner()
-    appended = runner.invoke(
-        zeta_cli,
-        ["transcript", "append"],
-        input=json.dumps({"type": "tool_call", "name": "read"}),
-    )
-    assert appended.exit_code == 0
+    zeta.append_transcript({"type": "tool_call", "name": "read"})
 
-    tail = runner.invoke(zeta_cli, ["transcript", "tail", "--limit", "1"])
-    assert tail.exit_code == 0
-    data = json.loads(tail.output)
-    assert data["events"][0]["type"] == "tool_call"
-    assert data["events"][0]["name"] == "read"
+    events = zeta.transcript_tail(1)
+    assert events[0]["type"] == "tool_call"
+    assert events[0]["name"] == "read"
     assert not (tmp_path / "sessions" / "zeta-test" / zeta.TRANSCRIPT).exists()
     assert zeta.list_trace_refs()[zeta.current_run_head_ref("zeta-test")]
 
@@ -3864,12 +3791,6 @@ def test_zeta_transcript_projects_from_ref_and_object(
         ]
         == "second"
     )
-
-
-def test_zeta_transcript_does_not_expose_shell_handoff_verbs() -> None:
-    result = CliRunner().invoke(zeta_cli, ["transcript", "shell-result"])
-
-    assert result.exit_code != 0
 
 
 def test_sigil_zeta_step_writes_handoff_file(

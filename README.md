@@ -77,8 +77,6 @@ without duplicating the rc block.
 - A local OpenAI-compatible chat completions endpoint for command generation
   and Zeta-backed answer/agent routes (default
   `http://127.0.0.1:8080/v1/chat/completions`)
-- The bundled `zeta` runtime entrypoint installed with Sigil. `sigil doctor`
-  checks that both `sigil` and its runtime service are visible on PATH.
 
 Useful environment variables:
 
@@ -90,8 +88,6 @@ ZETA_MODEL_PATH=/path/to/model.gguf
 ZETA_MODEL_IDLE_TIMEOUT_SECONDS=0
 SIGIL_STATE_DIR=$HOME/.sigil
 SIGIL_RUN_CAPTURE_BYTES=6000
-# Optional override used by sigil doctor/runtime service discovery.
-ZETA_BIN=/path/to/zeta
 ```
 
 Sigil sends Zeta model requests with OpenAI-compatible streaming enabled
@@ -275,14 +271,8 @@ sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
 
-Sigil also installs a bundled `zeta` entrypoint. It is a service API used by
-the shell bindings and Sigil routes, not the primary user interface:
-
-```text
-zeta tools list --json
-zeta tool {read|ls|grep|bash|edit|write}
-zeta transcript {append|tail}
-```
+The bundled Zeta agent runtime is an internal Python package; Sigil routes run
+it in-process. There is no separate `zeta` command.
 
 Copy-pasteable examples:
 

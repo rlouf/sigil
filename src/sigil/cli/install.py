@@ -92,7 +92,6 @@ def cmd_doctor(json_output: bool) -> int:
 
 DOCTOR_LABELS = {
     "sigil:installed": "sigil installed?",
-    "zeta:installed": "zeta runtime installed?",
     "model:endpoint": "model endpoint reachable?",
     "shell:binding-installed": "shell binding installed?",
     "shell:binding-loaded": "shell binding loaded in this shell?",

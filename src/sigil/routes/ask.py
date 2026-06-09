@@ -35,7 +35,7 @@ from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 from ..zeta.model import ChatCompletionStreamSink, chat_text
 from ..zeta.models import ModelSelection, active_model_selection, model_selection_event
-from ..zeta.server import ensure_server
+from ..zeta.model import ensure_server
 from ..zeta.trace import latest_prompt_trace_fields
 
 

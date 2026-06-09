@@ -48,7 +48,6 @@ Issues = "https://github.com/rlouf/sigil/issues"
 
 [project.scripts]
 sigil = "sigil.cli:main"
-zeta = "sigil.zeta.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

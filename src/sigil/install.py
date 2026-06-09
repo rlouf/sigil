@@ -87,16 +87,12 @@ def source_snippet(
     *,
     enable_glyphs: bool = True,
     sigil_bin: str | None = None,
-    zeta_bin: str | None = None,
 ) -> str:
     """Return the rc block that loads a Sigil shell binding."""
     reference = shell_reference(binding_path)
     lines = ["", "# Sigil", f"if [[ -r {reference} ]]; then"]
     if sigil_bin:
         lines.append(f"  export SIGIL_BIN={shlex.quote(sigil_bin)}")
-    if zeta_bin:
-        lines.append("  # Used by sigil doctor for bundled runtime service discovery.")
-        lines.append(f"  export ZETA_BIN={shlex.quote(zeta_bin)}")
     if not enable_glyphs:
         lines.append("  export SIGIL_ENABLE_GLYPHS=0")
     else:
@@ -149,7 +145,6 @@ def install_zsh_binding(
         binding_path,
         enable_glyphs=enable_glyphs,
         sigil_bin=shutil.which("sigil"),
-        zeta_bin=shutil.which("zeta"),
     )
     rc.parent.mkdir(parents=True, exist_ok=True)
     rc.touch(exist_ok=True)
@@ -225,24 +220,6 @@ def check_sigil_installed() -> DoctorCheck:
     check = check_configured_executable("sigil", "SIGIL_BIN")
     return DoctorCheck(
         name="sigil:installed",
-        status=check.status,
-        detail=check.detail,
-        hint=check.hint,
-    )
-
-
-def check_zeta_installed() -> DoctorCheck:
-    """Check that the Zeta service command is available."""
-    check = check_configured_executable(
-        "zeta",
-        "ZETA_BIN",
-        hint=(
-            "Install Sigil with the zeta entrypoint or set ZETA_BIN as a "
-            "runtime-service override."
-        ),
-    )
-    return DoctorCheck(
-        name="zeta:installed",
         status=check.status,
         detail=check.detail,
         hint=check.hint,
@@ -360,7 +337,6 @@ def doctor_checks() -> list[DoctorCheck]:
     """Run Sigil environment checks."""
     checks = [
         check_sigil_installed(),
-        check_zeta_installed(),
         check_endpoint(),
         check_shell_binding_installed(),
         check_shell_binding_loaded(),

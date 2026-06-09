@@ -25,7 +25,7 @@ from ..display import (
 from ..zeta import runtime
 from ..zeta.agent import AgentConfig, AgentTurnResult, run_agent_turn
 from ..zeta.models import active_model_selection, model_selection_event
-from ..zeta.server import ensure_server
+from ..zeta.model import ensure_server
 from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
