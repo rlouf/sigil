@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -64,16 +65,34 @@ def append_event(event: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def write_text_atomic(path: Path, text: str) -> None:
+    """Replace a file through a unique fsynced tmp file in the same directory.
+
+    Unique tmp names keep concurrent writers from clobbering each other's
+    half-written files; fsync before rename keeps a crash from leaving an
+    empty renamed file behind.
+    """
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        prefix=f"{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(f.name, path)
+
+
 def write_json(name: str, value: Any) -> None:
     """Atomically write a session-scoped JSON document."""
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
-    tmp = root / f"{name}.tmp"
-    final = root / name
-    tmp.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    write_text_atomic(
+        root / name, json.dumps(value, ensure_ascii=False, indent=2) + "\n"
     )
-    tmp.replace(final)
 
 
 def remove_json(name: str) -> bool:
@@ -105,23 +124,24 @@ def write_jsonl(name: str, events: list[dict[str, Any]]) -> list[dict[str, Any]]
     """Replace a session-scoped JSONL file atomically."""
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
-    tmp = root / f"{name}.tmp"
-    final = root / name
     payloads = []
-    with tmp.open("w", encoding="utf-8") as f:
-        for event in events:
-            payload = {
+    for event in events:
+        payloads.append(
+            {
                 "id": str(uuid.uuid4()),
                 "time": time.time(),
                 "cwd": os.getcwd(),
                 "session": session_id(),
                 **event,
             }
-            payloads.append(payload)
-            f.write(
-                json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
-            )
-    tmp.replace(final)
+        )
+    write_text_atomic(
+        root / name,
+        "".join(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+            for payload in payloads
+        ),
+    )
     return payloads
 
 

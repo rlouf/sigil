@@ -22,11 +22,13 @@ from .failure import (
 )
 from .state import (
     ANSWER_HISTORY,
+    append_jsonl_line,
     read_jsonl,
     read_jsonl_path,
     session_dir,
     session_id,
     state_dir,
+    write_text_atomic,
 )
 
 SESSION_FILES = (
@@ -262,18 +264,7 @@ def _append_recent_turn(entry: dict[str, Any]) -> None:
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
     path = root / RECENT_TURNS_FILE
-
-    existing: list[str] = []
-    if path.exists():
-        existing = [
-            line for line in path.read_text(encoding="utf-8").splitlines() if line
-        ]
-
-    serialized = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
-    existing.append(serialized)
-    if len(existing) > RECENT_TURNS_LIMIT:
-        existing = existing[-RECENT_TURNS_LIMIT:]
-
-    tmp = root / f"{RECENT_TURNS_FILE}.tmp"
-    tmp.write_text("\n".join(existing) + "\n", encoding="utf-8")
-    tmp.replace(path)
+    append_jsonl_line(path, entry)
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line]
+    if len(lines) > RECENT_TURNS_LIMIT:
+        write_text_atomic(path, "\n".join(lines[-RECENT_TURNS_LIMIT:]) + "\n")

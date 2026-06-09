@@ -553,6 +553,68 @@ def test_record_turn_trims_buffer_to_last_fifty_entries() -> None:
         assert rows[-1]["command"] == "cmd-59"
 
 
+def test_record_turn_appends_in_place_under_the_buffer_limit() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            record_turn("cmd-1", 0, "/repo")
+            path = Path(tmp) / "sessions" / "test" / "recent-turns.jsonl"
+            inode = path.stat().st_ino
+            record_turn("cmd-2", 0, "/repo")
+            assert path.stat().st_ino == inode
+
+        rows = read_recent_turns(tmp)
+        assert [row["command"] for row in rows] == ["cmd-1", "cmd-2"]
+
+
+RECORD_TURNS_SCRIPT = """
+import os
+import sys
+import time
+from sigil.session import record_turn
+
+marker, ready_path, start_path = sys.argv[1:4]
+open(ready_path, "w").close()
+while not os.path.exists(start_path):
+    time.sleep(0.001)
+for index in range(10):
+    record_turn(f"cmd-{marker}-{index}", 0, "/repo")
+"""
+
+
+def test_record_turn_keeps_all_turns_across_concurrent_processes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = {**os.environ, "SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"}
+        start_gate = Path(tmp) / "start"
+        ready_gates = [Path(tmp) / "ready-a", Path(tmp) / "ready-b"]
+        procs = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    RECORD_TURNS_SCRIPT,
+                    marker,
+                    str(ready),
+                    str(start_gate),
+                ],
+                env=env,
+            )
+            for marker, ready in zip(("a", "b"), ready_gates)
+        ]
+        deadline = time.monotonic() + 30
+        while not all(gate.exists() for gate in ready_gates):
+            assert time.monotonic() < deadline
+            time.sleep(0.001)
+        start_gate.touch()
+        for proc in procs:
+            assert proc.wait(timeout=60) == 0
+
+        rows = read_recent_turns(tmp)
+        assert len(rows) == 20
+
+
 def test_record_turn_skips_empty_command() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
