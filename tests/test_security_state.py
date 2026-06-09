@@ -25,11 +25,6 @@ from sigil.session import (
     record_turn,
 )
 from sigil.state import append_event, read_jsonl, write_jsonl
-from sigil.tty import (
-    clear_lines_on_tty,
-    confirmation_tty_paths,
-    confirm_on_tty,
-)
 
 
 class TtyStringIO(StringIO):
@@ -113,11 +108,10 @@ def test_events_default_lists_recent_events() -> None:
             first = append_event({"type": "first"})
             second = append_event(
                 {
-                    "type": "operator_command_executed",
+                    "type": "failure_recorded",
                     "glyph": ",,",
                     "command": "git status --short",
                     "status": 0,
-                    "mode": "execute-write",
                 }
             )
             text = CliRunner().invoke(cli, ["events", "--limit", "1"])
@@ -142,18 +136,18 @@ def test_events_default_lists_recent_events() -> None:
         "detail",
     ]
     assert str(second["id"])[:8] not in text.output
-    assert ",,     executed command" in text.output
+    assert ",,     failure recorded" in text.output
     assert "git status --short -> 0" in text.output
     assert first["id"] not in text.output
     assert listed.exit_code == 0, listed.output
     summaries = json.loads(listed.output)
     assert [event["type"] for event in summaries] == [
         "first",
-        "operator_command_executed",
+        "failure_recorded",
     ]
     assert summaries[-1]["short_id"] == str(second["id"])[:8]
     assert summaries[-1]["route"] == ",,"
-    assert summaries[-1]["event"] == "executed command"
+    assert summaries[-1]["event"] == "failure recorded"
     assert summaries[-1]["detail"] == "git status --short -> 0"
     assert raw.exit_code == 0, raw.output
     assert "short_id" not in json.loads(raw.output)[0]
@@ -196,74 +190,6 @@ def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
     assert summary["route"] == "-"
     assert summary["event"] == "failure recorded"
     assert summary["detail"] == "false -> 1"
-
-
-def test_confirmation_uses_exported_tty_before_dev_tty() -> None:
-    with patch_dict(
-        os.environ,
-        {"SIGIL_TTY": "/tmp/sigil-tty", "TTY": "/tmp/fallback-tty"},
-        clear=True,
-    ):
-        assert confirmation_tty_paths() == [
-            "/tmp/sigil-tty",
-            "/tmp/fallback-tty",
-            "/dev/tty",
-        ]
-
-
-def test_confirmation_uses_exported_tty_fd_before_paths() -> None:
-    master_fd, slave_fd = os.openpty()
-    try:
-        with (
-            patch_dict(
-                os.environ,
-                {"SIGIL_TTY_FD": str(slave_fd), "SIGIL_TTY": "/tmp/sigil-tty"},
-                clear=True,
-            ),
-            patch("os.open", side_effect=AssertionError("path fallback used")),
-        ):
-            os.write(master_fd, b"yes\n")
-            assert confirm_on_tty("Use it? ")
-    finally:
-        os.close(master_fd)
-        os.close(slave_fd)
-
-
-def test_clear_lines_writes_erase_sequence_to_exported_tty_fd() -> None:
-    master_fd, slave_fd = os.openpty()
-    try:
-        with patch_dict(os.environ, {"SIGIL_TTY_FD": str(slave_fd)}, clear=True):
-            clear_lines_on_tty(3)
-        assert os.read(master_fd, 1024) == b"\033[3A\r\033[J"
-    finally:
-        os.close(master_fd)
-        os.close(slave_fd)
-
-
-def test_clear_lines_is_a_noop_for_nonpositive_counts() -> None:
-    master_fd, slave_fd = os.openpty()
-    try:
-        with patch_dict(os.environ, {"SIGIL_TTY_FD": str(slave_fd)}, clear=True):
-            clear_lines_on_tty(0)
-        os.set_blocking(master_fd, False)
-        with pytest.raises(BlockingIOError):
-            os.read(master_fd, 1024)
-    finally:
-        os.close(master_fd)
-        os.close(slave_fd)
-
-
-def test_confirmation_failure_is_visible() -> None:
-    stderr = StringIO()
-    with (
-        patch_dict(os.environ, {}, clear=True),
-        patch("os.open", side_effect=OSError()),
-        redirect_stderr(stderr),
-    ):
-        assert not confirm_on_tty("Use it? ")
-
-    assert stderr.getvalue().count("could not open a terminal") == 1
-    assert "tried /dev/tty" in stderr.getvalue()
 
 
 def test_session_list_includes_last_event_context() -> None:

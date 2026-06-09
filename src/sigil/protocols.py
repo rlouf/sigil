@@ -16,14 +16,6 @@ SHELL_HANDOFF_OUTCOME_NO_PENDING = "no_pending_handoff"
 SHELL_HANDOFF_CANCEL_NO_TURNS = "no_shell_turns_after_handoff"
 SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED = "expected_command_not_executed"
 
-LEGACY_SHELL_HANDOFF_RESULT_TYPES = frozenset(
-    {
-        SHELL_HANDOFF_RESULT_TYPE,
-        "shell_command_result",
-        "shell_call_cancelled",
-    }
-)
-
 
 def shell_prompt_handoff(
     command: str,
@@ -70,6 +62,4 @@ def is_shell_handoff_result(value: object) -> bool:
     if not isinstance(value, Mapping):
         return False
     payload = cast(Mapping[str, object], value)
-    if payload.get("schema") == SHELL_HANDOFF_RESULT_SCHEMA:
-        return True
-    return payload.get("type") in LEGACY_SHELL_HANDOFF_RESULT_TYPES
+    return payload.get("schema") == SHELL_HANDOFF_RESULT_SCHEMA

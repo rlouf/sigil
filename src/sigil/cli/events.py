@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import cast
 
 import click
 
@@ -106,7 +105,7 @@ def event_summary(event: dict[str, object]) -> dict[str, object]:
         "time_label": format_event_time(event.get("time")),
         "type": event_type,
         "route": route,
-        "event": event_label(event, event_type),
+        "event": event_label(event_type),
         "session": session or "-",
         "short_session": short_token(session),
         "cwd": str(event.get("cwd") or "-"),
@@ -127,38 +126,20 @@ def format_event_time(value: object) -> str:
 
 
 def event_route(event: dict[str, object]) -> str:
-    """Return the route glyph for an event, including nested operator events."""
+    """Return the route glyph for an event."""
     glyph = event.get("glyph")
     if isinstance(glyph, str) and glyph in ROUTE_GLYPHS:
         return glyph
-    operator = event.get("operator")
-    if isinstance(operator, dict):
-        operator = cast("dict[str, object]", operator)
-        nested = operator.get("glyph")
-        if isinstance(nested, str) and nested in ROUTE_GLYPHS:
-            return nested
     return "-"
 
 
-def event_label(event: dict[str, object], event_type: str) -> str:
+def event_label(event_type: str) -> str:
     """Return the lifecycle label without route information."""
-    operator = event.get("operator")
-    if event_type == "operator_completed" and isinstance(operator, dict):
-        operator = cast("dict[str, object]", operator)
-        return str(operator.get("name") or "operator")
     labels = {
         "answer_requested": "answer request",
-        "answer_done": "answer",
         "answer": "answer",
         "tool_start": "tool start",
         "tool_end": "tool end",
-        "operator_command_executed": "executed command",
-        "plan_created": "plan created",
-        "plan_step_decision": "plan decision",
-        "plan_step_executed": "executed command",
-        "plan_completed": "plan complete",
-        "plan_aborted": "plan aborted",
-        "command_selected": "staged command",
         "failure_recorded": "failure recorded",
     }
     return labels.get(event_type, event_type.replace("_", " "))
@@ -166,9 +147,6 @@ def event_label(event: dict[str, object], event_type: str) -> str:
 
 def event_detail(event: dict[str, object], event_type: str) -> str:
     """Return the most useful human summary available on an event."""
-    operator_detail = operator_completed_detail(event, event_type)
-    if operator_detail is not None:
-        return operator_detail
     if event_type == "answer_requested":
         return clean_summary_text(event.get("input")) or "answer request"
     if event_type == "tool_start":
@@ -177,38 +155,9 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
         return f"{tool}: {detail}" if detail else tool
     if event_type == "tool_end":
         return clean_summary_text(event.get("tool")) or "tool finished"
-    if event_type == "operator_command_executed":
-        return command_status_summary(event)
     if event_type == "failure_recorded":
         return command_status_summary(event)
-    if event_type.startswith("plan_"):
-        return staged_step_detail(event, event_type)
-    if event_type == "answer_done":
-        return f"{event.get('bytes') or 0} bytes"
     return fallback_event_detail(event, event_type)
-
-
-def operator_completed_detail(event: dict[str, object], event_type: str) -> str | None:
-    """Return the summary for an operator_completed event, or None."""
-    if event_type != "operator_completed":
-        return None
-    operator = event.get("operator")
-    if not isinstance(operator, dict):
-        return None
-    operator = cast("dict[str, object]", operator)
-    prompt = clean_summary_text(operator.get("prompt"))
-    output = clean_summary_text(event.get("output_snippet"))
-    detail = prompt or output
-    return detail or "-"
-
-
-def staged_step_detail(event: dict[str, object], event_type: str) -> str:
-    """Return the summary for a plan staged step event."""
-    if event_type == "plan_step_executed":
-        return command_status_summary(event)
-    return clean_summary_text(event.get("objective")) or clean_summary_text(
-        event.get("command")
-    )
 
 
 def fallback_event_detail(event: dict[str, object], event_type: str) -> str:

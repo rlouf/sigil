@@ -17,13 +17,6 @@ def cmd_transcript() -> None:
     """Record and reconcile Sigil shell transcript events."""
 
 
-@cmd_transcript.command("shell-result")
-def transcript_shell_result() -> int:
-    """Append the shell handoff result used for empty Zeta continuation."""
-    print_json(handoff.append_shell_result())
-    return 0
-
-
 @cmd_transcript.command("shell-turn")
 def transcript_shell_turn() -> int:
     """Record one shell command executed after a Zeta handoff."""

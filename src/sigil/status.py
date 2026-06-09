@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from .failure import latest_active_failure
-from .session import read_event_log
 from .state import session_id
 
 StatusState = Literal["clean", "attention"]
@@ -49,22 +48,6 @@ def current_status() -> Status:
             },
         )
 
-    failed = latest_failed_sigil_execution()
-    if failed is not None:
-        event_id = str(failed.get("id") or "")
-        return attention(
-            "last Sigil action failed",
-            session=current_session,
-            cwd=cwd,
-            actions=("sigil events",),
-            details={
-                "event_id": event_id,
-                "type": failed.get("type"),
-                "command": failed.get("command"),
-                "status": failed.get("status"),
-            },
-        )
-
     return Status(
         state="clean",
         reason="clean",
@@ -92,24 +75,6 @@ def attention(
         actions=actions,
         details=details,
     )
-
-
-def latest_failed_sigil_execution() -> dict[str, Any] | None:
-    """Return the latest failed Sigil execution event for this session."""
-    current_session = session_id()
-    failure_types = {
-        "operator_command_executed",
-        "plan_step_executed",
-    }
-    for event in reversed(read_event_log()):
-        if event.get("session") != current_session:
-            continue
-        if event.get("type") not in failure_types:
-            continue
-        status = event.get("status")
-        if isinstance(status, int) and status != 0:
-            return event
-    return None
 
 
 def format_status(status: Status) -> str:

@@ -12,6 +12,8 @@ from ..routes.ask import (
     discussion_turns,
 )
 
+DEFAULT_QUESTION = "Inspect and summarize the current shell context."
+
 
 @cli.command("ask")
 @click.argument("question", required=False)
@@ -39,10 +41,8 @@ def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
             tools=ZETA_ANSWER_TOOLS,
             json_output=json_output,
         )
-    if question is None:
-        raise click.UsageError("QUESTION is required unless stdin is piped.")
     return ask(
-        question,
+        question or DEFAULT_QUESTION,
         glyph="ask",
         tools=ZETA_ANSWER_TOOLS,
         json_output=json_output,

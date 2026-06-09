@@ -9,7 +9,6 @@ from click.testing import CliRunner
 from sigil.cli import cli
 from sigil.session import record_turn
 from sigil.status import current_status, format_status
-from sigil.state import append_event
 
 
 def test_status_clean_when_no_live_state() -> None:
@@ -37,22 +36,6 @@ def test_status_ignores_stale_failure_after_successful_turn() -> None:
         status = current_status()
 
     assert status.state == "clean"
-
-
-def test_status_reports_failed_sigil_execution() -> None:
-    with isolated_sigil_state(session_id="status-session"):
-        append_event(
-            {
-                "type": "operator_command_executed",
-                "operator": {"glyph": ",,"},
-                "status": 2,
-                "command": "uv run pytest",
-            }
-        )
-        status = current_status()
-
-    assert status.reason == "last Sigil action failed"
-    assert status.actions == ("sigil events",)
 
 
 def test_status_cli_is_public_surface() -> None:

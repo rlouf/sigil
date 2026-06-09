@@ -5053,7 +5053,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     }
 
 
-def test_sigil_transcript_shell_result_appends_tool_result(
+def test_append_shell_result_appends_tool_result(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -5076,10 +5076,8 @@ def test_sigil_transcript_shell_result_appends_tool_result(
     )
     record_turn("uv run pytest", 1, "/repo", stderr_snippet="test failed")
 
-    result = CliRunner().invoke(sigil_cli, ["transcript", "shell-result"])
+    event = sigil_handoff.append_shell_result()
 
-    assert result.exit_code == 0
-    event = json.loads(result.output)
     assert event["type"] == "tool_result"
     assert event["tool_call_id"] == "call-1"
     assert event["name"] == "bash"

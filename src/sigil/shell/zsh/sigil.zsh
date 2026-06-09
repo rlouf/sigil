@@ -34,23 +34,6 @@ if [[ -z "${SIGIL_SESSION_ID:-}" ]]; then
   fi
 fi
 
-# Keep a stable terminal path/fd around for CLI prompts that need to ask the user
-# even when stdin/stdout are part of a pipeline. These are not used to capture
-# command output.
-if [[ -z "${SIGIL_TTY:-}" ]]; then
-  if [[ -n "${TTY:-}" ]]; then
-    export SIGIL_TTY="$TTY"
-  else
-    __sigil_tty_path="$(tty 2>/dev/null || true)"
-    [[ -n "$__sigil_tty_path" && "$__sigil_tty_path" != "not a tty" ]] && export SIGIL_TTY="$__sigil_tty_path"
-  fi
-fi
-
-if [[ -z "${SIGIL_TTY_FD:-}" && ( -t 0 || -t 1 || -t 2 ) ]]; then
-  if { exec {__sigil_confirmation_tty_fd}<>/dev/tty; } 2>/dev/null; then
-    export SIGIL_TTY_FD="$__sigil_confirmation_tty_fd"
-  fi
-fi
 # ── Prompt And History Helpers ───────────────────────────────────────────
 
 __sigil_history_insert() {

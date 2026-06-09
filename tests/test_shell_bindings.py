@@ -24,11 +24,6 @@ def make_stub(tmp: Path) -> Path:
               printf '%s\n' '{"id":"evt"}'
               exit 0
             fi
-            if [ "$*" = "transcript shell-result" ]; then
-              printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
-              printf '%s\n' '{"id":"shell-result"}'
-              exit 0
-            fi
             if [ "$*" = "transcript shell-turn" ]; then
               payload="$(cat)"
               printf '%s\t%s\n' "$*" "$payload" >> "$SIGIL_STUB_LOG"
@@ -80,22 +75,6 @@ def make_stub(tmp: Path) -> Path:
                   "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$reason")" \
                   > "$handoff_file"
               fi
-              exit 0
-            fi
-            if [ "$1" = "display" ]; then
-              payload="$(cat)"
-              case "$*" in
-                "display tool-result bash") printf '%s\n' "staged" ;;
-                "display tool-result read") printf '%s\n' "2 lines" ;;
-                "display tool-result ls") printf '%s\n' "2 entries" ;;
-                "display tool-result grep") printf '%s\n' "2 matches · 2 files" ;;
-                "display shell-result")
-                  case "$payload" in
-                    *'"outcome":"executed"'*) printf '%s\n%s\n%s\n' "❯ shell  captured" "  uv run pytest" "  exit 0 · 1 shell turn" ;;
-                    *'"outcome":"cancelled"'*) printf '%s\n%s\n%s\n' "❯ shell  changed" "  expected: uv run pytest" "  ran:      uv run pytest -q" ;;
-                  esac
-                  ;;
-              esac
               exit 0
             fi
             printf '%s\n' "$*" >> "$SIGIL_STUB_LOG"
@@ -216,40 +195,6 @@ def shell_turn_payloads(tmp: Path) -> list[dict[str, object]]:
             continue
         payloads.append(json.loads(line.split("\t", 1)[1]))
     return payloads
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_exports_tty_for_pipeline_confirmations() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell(
-            "zsh",
-            textwrap.dedent(
-                '                    unset SIGIL_TTY\n                    export TTY=/tmp/sigil-test-tty\n                    source src/sigil/shell/zsh/sigil.zsh\n                    print -- "sigil_tty=$SIGIL_TTY"\n                    '
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert result.stdout == "sigil_tty=/tmp/sigil-test-tty\n"
-
-
-@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_binding_preserves_stderr_when_opening_tty_fd() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp = Path(tmp_dir)
-        stub = make_stub(tmp)
-        result = run_shell_pty(
-            "zsh",
-            textwrap.dedent(
-                "                    source src/sigil/shell/zsh/sigil.zsh\n                    print -u2 -- stderr-ok\n                    "
-            ),
-            tmp,
-            stub,
-        )
-        assert_success(result)
-        assert "stderr-ok" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")

@@ -59,6 +59,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except click.exceptions.Exit as error:
         return int(error.exit_code)
+    except RuntimeError as error:
+        click.echo(f"sigil: {error}", err=True)
+        click.echo(
+            "Check the model endpoint with `sigil doctor`, then retry.", err=True
+        )
+        return 1
     except FileNotFoundError as error:
         program = error.filename or "required executable"
         click.echo(f"sigil: missing executable: {program}", err=True)

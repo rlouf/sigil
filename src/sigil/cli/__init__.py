@@ -12,7 +12,6 @@ from __future__ import annotations
 from ._base import cli, main
 from . import (  # noqa: F401  (imported for command registration side effects)
     ask,
-    display,
     events,
     install,
     model,
