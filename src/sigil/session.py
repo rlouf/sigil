@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -132,14 +133,17 @@ def current_session_snapshot() -> dict[str, Any]:
 
 
 def clear_current_session() -> list[str]:
-    """Remove current-session continuity files and report what changed."""
+    """Remove the whole session directory and report the files it held.
+
+    Continuity lives in more than the inspectable files: the Zeta trace store
+    and the active-model selection must go too, or the next agent step resumes
+    the conversation the user just cleared.
+    """
     root = session_dir()
-    removed = []
-    for name in SESSION_FILES:
-        path = root / name
-        if path.exists():
-            path.unlink()
-            removed.append(str(path))
+    if not root.exists():
+        return []
+    removed = [str(path) for path in sorted(root.rglob("*")) if path.is_file()]
+    shutil.rmtree(root)
     return removed
 
 

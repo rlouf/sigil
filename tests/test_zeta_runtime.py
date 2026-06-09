@@ -6166,3 +6166,23 @@ def test_zeta_step_model_failure_records_turn_abort(
     assert timeline[-1]["glyph"] == ",,"
     assert "model request failed" in timeline[-1]["error"]
     assert timeline[-2]["type"] == "user_message"
+
+
+def test_session_clear_removes_zeta_continuity(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    zeta.record_event({"type": "user_message", "content": "hello"})
+    record_turn("ls", 0, "/repo")
+    session_root = tmp_path / "sessions" / "zeta-test"
+    assert zeta.current_timeline() != []
+    assert session_root.exists()
+
+    result = CliRunner().invoke(sigil_cli, ["session", "clear"])
+
+    assert result.exit_code == 0
+    assert "zeta-trace.sqlite3" in result.output
+    assert not session_root.exists()
+    assert zeta.current_timeline() == []
