@@ -9,6 +9,9 @@ from typing import Any
 
 from .components import PromptComponent
 
+STRUCTURAL_TRIM_TOOL_NAMES = frozenset({"read", "grep"})
+DEFAULT_MAX_CONTENT_CHARS = 120_000
+
 
 class StructuralTrimPromptTransform:
     """Replace bulky transcript mechanics with trace-linked compact messages."""
@@ -18,7 +21,7 @@ class StructuralTrimPromptTransform:
     def __init__(
         self,
         *,
-        max_content_chars: int = 4_000,
+        max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
         preserve_current_tool_results: bool = True,
     ) -> None:
         self.max_content_chars = max_content_chars
@@ -38,6 +41,10 @@ class StructuralTrimPromptTransform:
         if self.preserve_current_tool_results and component.kind == "tool_result":
             return False
         if not is_tool_result_component(component):
+            return False
+        # Limit default structural trimming to reproducible read/search outputs.
+        # Trimming arbitrary tools can hide non-recoverable evidence from the model.
+        if tool_name(component) not in STRUCTURAL_TRIM_TOOL_NAMES:
             return False
         return message_content_length(component.message) > self.max_content_chars
 
@@ -163,6 +170,15 @@ def tool_call_id(component: PromptComponent) -> str:
     if component.message is None:
         return ""
     return str(component.message.get("tool_call_id") or "")
+
+
+def tool_name(component: PromptComponent) -> str:
+    event = source_event(component)
+    if event is not None:
+        name = str(event.get("tool_name") or event.get("name") or "")
+        if name:
+            return name
+    return str(component.data.get("source_tool_name") or "")
 
 
 def tool_result(component: PromptComponent) -> dict[str, Any] | None:

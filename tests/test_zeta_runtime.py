@@ -137,9 +137,13 @@ def tool_result_transcript(
     text: str,
     *,
     metadata: dict[str, Any],
+    tool_name: str = "read",
 ) -> list[dict[str, Any]]:
     return [
-        {"type": "assistant_message", "tool_calls": tool_call_fixture(call_id)},
+        {
+            "type": "assistant_message",
+            "tool_calls": tool_call_fixture(call_id, name=tool_name),
+        },
         tool_result_event(call_id, text, metadata=metadata),
     ]
 
@@ -630,7 +634,9 @@ def test_zeta_prompt_components_keep_source_events() -> None:
         if component.data.get("source_event", {}).get("type") == "tool_result"
     )
     assert tool_component.kind == "transcript_message"
+    assert tool_component.data["source_tool_name"] == "read"
     assert tool_component.data["source_event"]["tool_call_id"] == "call-read"
+    assert tool_component.data["source_event"]["tool_name"] == "read"
     assert tool_component.data["source_event"]["result"]["metadata"] == {
         "path": "big.txt"
     }
@@ -640,17 +646,40 @@ def test_zeta_prompt_components_keep_source_events() -> None:
     }
 
 
-def test_zeta_structural_trim_compacts_old_bulky_tool_results() -> None:
+@pytest.mark.parametrize(
+    ("tool_name", "metadata"),
+    [
+        ("read", {"path": "big.txt", "offset": 0, "limit": 80}),
+        (
+            "grep",
+            {
+                "pattern": "important",
+                "path": ".",
+                "limit": 80,
+                "matches": 80,
+                "files": 1,
+            },
+        ),
+    ],
+)
+def test_zeta_structural_trim_compacts_old_bulky_read_or_grep_tool_results(
+    tool_name: str,
+    metadata: dict[str, Any],
+) -> None:
     store = zeta_trace.InMemoryStore()
     raw_text = "\n".join(f"line {index}: important but bulky" for index in range(80))
-    metadata = {"path": "big.txt", "offset": 0, "limit": 80}
 
     prepared = zeta.PromptBuilder(
         store=store,
         transform=zeta.StructuralTrimPromptTransform(max_content_chars=120),
     ).build(
         "continue",
-        tool_result_transcript("call-read", raw_text, metadata=metadata),
+        tool_result_transcript(
+            "call-read",
+            raw_text,
+            metadata=metadata,
+            tool_name=tool_name,
+        ),
         allowed_tools=(),
         tools=[],
     )
@@ -674,6 +703,80 @@ def test_zeta_structural_trim_compacts_old_bulky_tool_results() -> None:
         trimmed_payload,
         metadata=metadata,
     )
+
+
+def test_zeta_structural_trim_skips_non_read_grep_tool_results() -> None:
+    store = zeta_trace.InMemoryStore()
+    raw_text = "non-recoverable tool evidence " * 100
+
+    prepared = zeta.PromptBuilder(
+        store=store,
+        transform=zeta.StructuralTrimPromptTransform(max_content_chars=120),
+    ).build(
+        "continue",
+        tool_result_transcript(
+            "call-bash",
+            raw_text,
+            metadata={"command": "python script.py"},
+            tool_name="bash",
+        ),
+        allowed_tools=(),
+        tools=[],
+    )
+
+    tool_messages = [
+        message for message in prepared.messages if message.get("role") == "tool"
+    ]
+    assert len(tool_messages) == 1
+    assert "non-recoverable tool evidence" in str(tool_messages[0]["content"])
+    assert "source_object_id" not in str(tool_messages[0]["content"])
+
+    assert prepared.prompt_object_id is not None
+    prompt = store.get_object(prepared.prompt_object_id)
+    assert prompt is not None
+    assert "transcript_message" in linked_kinds(store, prompt)
+    assert "compacted_context" not in linked_kinds(store, prompt)
+
+
+def test_zeta_structural_trim_default_is_late_safety_valve() -> None:
+    transform = zeta.StructuralTrimPromptTransform()
+    below = zeta.PromptComponent(
+        kind="transcript_message",
+        data={
+            "source_event": {
+                "type": "tool_result",
+                "tool_call_id": "call-below",
+                "tool_name": "read",
+            }
+        },
+        message={
+            "role": "tool",
+            "tool_call_id": "call-below",
+            "content": "x" * 119_999,
+        },
+        object_id="sha256:below",
+    )
+    above = zeta.PromptComponent(
+        kind="transcript_message",
+        data={
+            "source_event": {
+                "type": "tool_result",
+                "tool_call_id": "call-above",
+                "tool_name": "read",
+            }
+        },
+        message={
+            "role": "tool",
+            "tool_call_id": "call-above",
+            "content": "x" * 120_001,
+        },
+        object_id="sha256:above",
+    )
+
+    trimmed = transform.apply([below, above])
+
+    assert trimmed[0].kind == "transcript_message"
+    assert trimmed[1].kind == "compacted_context"
 
 
 def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> None:
@@ -724,6 +827,7 @@ def test_zeta_structural_trim_uses_source_event_without_message_json() -> None:
             "source_event": {
                 "type": "tool_result",
                 "tool_call_id": "call-structured",
+                "tool_name": "read",
                 "result": {
                     "ok": True,
                     "content": [{"type": "text", "text": raw_text}],

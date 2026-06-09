@@ -116,22 +116,34 @@ def transcript_message_components(
     *,
     default_kind: str | None,
 ) -> list[PromptComponent]:
+    entries = transcript_chat_message_entries(events)
     components = []
-    for message_index, entry in enumerate(transcript_chat_message_entries(events)):
+    tool_call_names: dict[str, str] = {}
+    for message_index, entry in enumerate(entries):
         kind = default_kind or current_event_component_kind(entry.message)
+        tool_name = (
+            tool_call_names.get(str(entry.event.get("tool_call_id") or "")) or ""
+        )
         components.append(
             PromptComponent(
                 kind=kind,
-                data=transcript_message_component_data(message_index, entry),
+                data=transcript_message_component_data(
+                    message_index,
+                    entry,
+                    tool_name=tool_name,
+                ),
                 message=entry.message,
             )
         )
+        record_tool_call_names(entry.message, tool_call_names)
     return components
 
 
 def transcript_message_component_data(
     message_index: int,
     entry: TranscriptChatMessage,
+    *,
+    tool_name: str = "",
 ) -> dict[str, Any]:
     data = {
         "index": message_index,
@@ -140,19 +152,44 @@ def transcript_message_component_data(
         "source_event_type": str(entry.event.get("type") or ""),
         "source_event_role": str(entry.event.get("role") or ""),
     }
-    source_event_value = structured_source_event(entry.event)
+    if tool_name:
+        data["source_tool_name"] = tool_name
+    source_event_value = structured_source_event(entry.event, tool_name=tool_name)
     if source_event_value:
         data["source_event"] = source_event_value
     return data
 
 
-def structured_source_event(event: dict[str, Any]) -> dict[str, Any]:
+def record_tool_call_names(
+    message: dict[str, Any],
+    tool_call_names: dict[str, str],
+) -> None:
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        call_id = str(call.get("id") or "")
+        function = call.get("function")
+        name = function.get("name") if isinstance(function, dict) else None
+        if call_id and isinstance(name, str) and name:
+            tool_call_names[call_id] = name
+
+
+def structured_source_event(
+    event: dict[str, Any],
+    *,
+    tool_name: str = "",
+) -> dict[str, Any]:
     event_type = str(event.get("type") or "")
     if event_type == "tool_result":
         data: dict[str, Any] = {
             "type": "tool_result",
             "tool_call_id": str(event.get("tool_call_id") or ""),
         }
+        if tool_name:
+            data["tool_name"] = tool_name
         result = event.get("result")
         if isinstance(result, dict):
             data["result"] = result
