@@ -44,9 +44,9 @@ def append_shell_result() -> dict[str, Any]:
     )
 
 
-def shell_result_event(transcript: list[dict[str, Any]]) -> dict[str, Any]:
-    """Build the transcript event that resumes a user-run shell handoff."""
-    handoff = latest_unresolved_shell_handoff(transcript)
+def shell_result_event(timeline: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the timeline event that resumes a user-run shell handoff."""
+    handoff = latest_unresolved_shell_handoff(timeline)
     if not handoff:
         return {
             "type": "shell_resume",
@@ -186,11 +186,11 @@ def first_matching_turn(
 
 
 def latest_unresolved_shell_handoff(
-    transcript: list[dict[str, Any]],
+    timeline: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Return metadata for the latest bash handoff in a transcript."""
+    """Return metadata for the latest bash handoff in a timeline."""
     resolved_call_ids: set[str] = set()
-    for event in reversed(transcript):
+    for event in reversed(timeline):
         result = event.get("result")
         if not isinstance(result, dict):
             continue
@@ -216,7 +216,7 @@ def latest_unresolved_shell_handoff(
 
 
 def shell_handoff_summary(handoff: dict[str, Any]) -> dict[str, Any]:
-    """Return the stable subset of handoff metadata for transcript context."""
+    """Return the stable subset of handoff metadata for timeline context."""
     summary = {
         "tool_call_id": str(handoff.get("tool_call_id") or ""),
         "tool": str(handoff.get("name") or "bash"),

@@ -37,6 +37,7 @@ from sigil.zeta import timeline as zeta_timeline
 from sigil.zeta import model as zeta_model
 from sigil.zeta import models as zeta_models
 from sigil.zeta import trace as zeta_trace
+from sigil.zeta.tools import bash as bash_tool
 from sigil.zeta.tools import grep as grep_tool
 from sigil.zeta.tools import validate_tool_args
 
@@ -2708,7 +2709,7 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
     tool_result = next(
         event for event in result.events if event.get("type") == "tool_result"
     )
-    assert tool_result["result"]["metadata"]["stdout"] == "direct-bash"
+    assert "direct-bash" in tool_result["result"]["content"][0]["text"]
 
 
 def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> None:
@@ -3285,8 +3286,49 @@ def test_zeta_tool_bash_direct_executes_command() -> None:
     assert data["ok"] is True
     assert data["metadata"]["mode"] == "direct"
     assert data["metadata"]["status"] == 0
-    assert data["metadata"]["stdout"] == "direct-bash"
+    assert "stdout" not in data["metadata"]
+    assert "stderr" not in data["metadata"]
     assert "direct-bash" in data["content"][0]["text"]
+
+
+def test_zeta_tool_bash_direct_replaces_invalid_utf8_output() -> None:
+    data = zeta_tools.run_tool(
+        "bash",
+        {"command": "printf '\\xff\\xfe'"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is True
+    assert "�" in data["content"][0]["text"]
+
+
+def test_zeta_tool_bash_direct_kills_command_on_timeout(monkeypatch) -> None:
+    monkeypatch.setattr(bash_tool, "DEFAULT_TIMEOUT_SECONDS", 0.2)
+
+    data = zeta_tools.run_tool(
+        "bash",
+        {"command": "sleep 5"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is False
+    assert data["error"]["code"] == "bash-timeout"
+    assert data["metadata"]["timed_out"] is True
+    assert "timed out" in data["content"][0]["text"]
+
+
+def test_zeta_tool_bash_direct_truncates_large_output() -> None:
+    data = zeta_tools.run_tool(
+        "bash",
+        {"command": "head -c 100000 /dev/zero | tr '\\0' 'x'"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is True
+    assert data["metadata"]["stdout_truncated"] is True
+    text = data["content"][0]["text"]
+    assert len(text) < 2 * bash_tool.MAX_OUTPUT_CHARS
+    assert "truncated" in text
 
 
 def test_zeta_tool_write_direct_writes_file(tmp_path: Path) -> None:
@@ -3776,8 +3818,9 @@ def test_zeta_timeline_record_and_tail(tmp_path: Path, monkeypatch) -> None:
     events = zeta.current_timeline(1)
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
-    assert not (tmp_path / "sessions" / "zeta-test" / "zeta-transcript.jsonl").exists()
-    assert zeta_trace.default_store().refs()[zeta_timeline.run_head_ref("zeta-test")]
+    refs = zeta_trace.default_store().refs()
+    assert refs[zeta_timeline.run_head_ref("zeta-test")]
+    assert refs[zeta_timeline.event_head_ref("zeta-test")]
 
 
 def test_zeta_timeline_projects_from_ref_and_object(
