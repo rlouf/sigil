@@ -102,7 +102,7 @@ TASK_STATE_SCHEMA: dict[str, Any] = {
 }
 
 TASK_STATE_SYSTEM_PROMPT = """\
-Extract compact task state from prior agent transcript components.
+Extract compact task state from prior agent timeline components.
 
 Return only the current state that matters for continuing the task:
 - objective: the user's active objective, not implementation chatter
@@ -150,7 +150,7 @@ class ModelTaskStateExtractor:
 
 
 class TaskStateExtractionPromptTransform:
-    """Replace prior transcript messages with structured task state."""
+    """Replace prior timeline messages with structured task state."""
 
     producer = "PromptTaskStateExtractor:v1"
 
@@ -198,7 +198,7 @@ def replace_sources_with_task_state(
 def task_state_source_components(
     components: list[PromptComponent],
 ) -> list[PromptComponent]:
-    """Return older transcript components that can be replaced by task state."""
+    """Return older timeline components that can be replaced by task state."""
     return [
         component
         for component in components
@@ -250,7 +250,7 @@ def task_state_extraction_messages(
         {"role": "system", "content": TASK_STATE_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": "Prior transcript components JSON:\n"
+            "content": "Prior timeline components JSON:\n"
             + json.dumps(
                 [
                     component_for_extraction(index, component)

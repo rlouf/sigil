@@ -15,7 +15,7 @@ DEFAULT_MAX_CONTENT_CHARS = 120_000
 
 
 class StructuralTrimPromptTransform:
-    """Replace bulky transcript mechanics with trace-linked compact messages."""
+    """Replace bulky timeline mechanics with trace-linked compact messages."""
 
     producer = "PromptStructuralTrim:v1"
 

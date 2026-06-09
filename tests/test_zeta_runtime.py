@@ -2712,6 +2712,53 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
     assert "direct-bash" in tool_result["result"]["content"][0]["text"]
 
 
+def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> None:
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "read",
+                            "arguments": '{"path":"x"}',
+                        },
+                    }
+                ]
+            },
+            {"content": "recovered"},
+        ]
+    )
+
+    def crash_run_tool(name: str, params: dict[str, Any], **kwargs: object) -> dict:
+        raise ValueError("boom")
+
+    def fake_chat_completion_messages(*args: object, **kwargs: object) -> dict:
+        del args, kwargs
+        return next(responses)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+    monkeypatch.setattr(zeta_agent, "run_tool", crash_run_tool)
+
+    result = zeta_agent.run_agent_turn(
+        "test",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=3),
+    )
+
+    assert result.final_text == "recovered"
+    tool_result = next(
+        event for event in result.events if event.get("type") == "tool_result"
+    )
+    assert tool_result["result"]["ok"] is False
+    assert tool_result["result"]["error"]["code"] == "tool-crashed"
+    assert "boom" in tool_result["result"]["error"]["message"]
+
+
 def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> None:
     ran = False
 

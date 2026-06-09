@@ -126,7 +126,7 @@ def default_model_selection() -> ModelSelection:
 
 
 def model_selection_event(selection: ModelSelection | None) -> dict[str, str]:
-    """Return non-secret model metadata suitable for transcript events."""
+    """Return non-secret model metadata suitable for timeline events."""
     active = selection or default_model_selection()
     return {"profile": active.profile, "model": active.model, "url": active.url}
 

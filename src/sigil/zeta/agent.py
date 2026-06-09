@@ -448,12 +448,15 @@ def handle_tool_call(
     )
     emit_event(events, call_event, event_sink)
     emit_event(events, analysis_event, event_sink)
-    result = run_tool_for_mode(
-        name,
-        params,
-        edit_mode=edit_mode,
-        execution_mode=execution_mode,
-    )
+    try:
+        result = run_tool_for_mode(
+            name,
+            params,
+            edit_mode=edit_mode,
+            execution_mode=execution_mode,
+        )
+    except Exception as exc:
+        result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
     handoff = result_handoff(result)
     stop = bool(
         execution_mode == "handoff" and name == "edit" and result.get("ok") is True
