@@ -6390,3 +6390,54 @@ def test_zeta_task_state_transform_keeps_newest_messages_verbatim() -> None:
     assert "old message one" not in joined
     assert "recent message three" in joined
     assert "recent message six" in joined
+
+
+def test_zeta_task_state_extraction_input_omits_duplicate_source_event() -> None:
+    component = zeta_prompt.PromptComponent(
+        kind="transcript_message",
+        data={
+            "source_event_type": "tool_result",
+            "source_event_role": "",
+            "source_event": {
+                "type": "tool_result",
+                "tool_call_id": "call-1",
+                "result": {"ok": True, "content": [{"type": "text", "text": "big"}]},
+            },
+        },
+        message={"role": "tool", "tool_call_id": "call-1", "content": "big"},
+    )
+
+    messages = zeta_prompt.task_state_extraction_messages([component])
+
+    payload = json.loads(
+        str(messages[1]["content"]).removeprefix("Prior timeline components JSON:\n")
+    )
+    assert "source_event" not in payload[0]
+    assert payload[0]["source_event_type"] == "tool_result"
+    assert payload[0]["message"]["content"] == "big"
+
+
+def test_zeta_task_state_extraction_is_cached_per_source_set() -> None:
+    class CountingExtractor:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def extract(
+            self,
+            components: list[zeta_prompt.PromptComponent],
+        ) -> dict[str, Any]:
+            del components
+            self.calls += 1
+            return task_state_fixture(objective="cached objective")
+
+    timeline = [{"role": "user", "content": f"message {index}"} for index in range(6)]
+    components = zeta_prompt.prompt_components("continue", timeline, allowed_tools=())
+    extractor = CountingExtractor()
+    transform = zeta_prompt.TaskStateExtractionPromptTransform(extractor=extractor)
+
+    first = transform.apply(components)
+    second = transform.apply(components)
+
+    assert extractor.calls == 1
+    assert [c.kind for c in first] == [c.kind for c in second]
+    assert any(c.kind == "task_state" for c in second)

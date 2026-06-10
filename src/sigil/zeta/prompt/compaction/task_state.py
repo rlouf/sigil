@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Protocol
 
@@ -162,17 +163,24 @@ class TaskStateExtractionPromptTransform:
     ) -> None:
         self.extractor = extractor or ModelTaskStateExtractor()
         self.fail_open = fail_open
+        # One builder/transform serves every model call of a turn; sources stay
+        # constant within the turn, so caching avoids re-extracting each call.
+        self._extracted: dict[tuple[str, ...], dict[str, Any]] = {}
 
     def apply(self, components: list[PromptComponent]) -> list[PromptComponent]:
         sources = task_state_source_components(components)
         if not sources:
             return list(components)
-        try:
-            state = validated_task_state(self.extractor.extract(sources))
-        except Exception:
-            if self.fail_open:
-                return list(components)
-            raise
+        key = tuple(source_fingerprint(component) for component in sources)
+        state = self._extracted.get(key)
+        if state is None:
+            try:
+                state = validated_task_state(self.extractor.extract(sources))
+            except Exception:
+                if self.fail_open:
+                    return list(components)
+                raise
+            self._extracted[key] = state
         compacted = task_state_component(state, sources)
         return replace_sources_with_task_state(components, sources, compacted)
 
@@ -272,7 +280,7 @@ def component_for_extraction(
     index: int,
     component: PromptComponent,
 ) -> dict[str, Any]:
-    data: dict[str, Any] = {
+    return {
         "index": index,
         "kind": component.kind,
         "object_id": component.object_id,
@@ -280,10 +288,19 @@ def component_for_extraction(
         "source_event_type": component.data.get("source_event_type", ""),
         "source_event_role": component.data.get("source_event_role", ""),
     }
-    source_event = component.data.get("source_event")
-    if isinstance(source_event, dict):
-        data["source_event"] = source_event
-    return data
+
+
+def source_fingerprint(component: PromptComponent) -> str:
+    """Return a stable identity for a source, with or without a trace id."""
+    if component.object_id is not None:
+        return component.object_id
+    serialized = json.dumps(
+        component.message,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "sha256:" + hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def validated_task_state(state: dict[str, Any]) -> dict[str, Any]:
