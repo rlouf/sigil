@@ -71,6 +71,7 @@ dev = [
     "complexipy>=5.5.0",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.14",
     "ty>=0.0.39",
     "vulture>=2.16",
