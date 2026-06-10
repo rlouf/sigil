@@ -95,16 +95,30 @@ def make_stub(tmp: Path) -> Path:
     return stub
 
 
+def shell_env(tmp: Path, stub: Path) -> dict[str, str]:
+    """Deterministic environment for binding tests.
+
+    Built from scratch rather than copied from os.environ, so developer
+    shell state (sigil variables, rc exports, terminal config) cannot
+    change the behavior under test. PATH is inherited to locate zsh,
+    bash, and system tools.
+    """
+    return {
+        "PATH": os.environ["PATH"],
+        "HOME": str(tmp),
+        "TMPDIR": str(tmp),
+        "SIGIL_BIN": str(stub),
+        "SIGIL_STUB_LOG": str(tmp / "calls.log"),
+        "SIGIL_SESSION_ID": "shell-test",
+        "SIGIL_STATE_DIR": str(tmp / "state"),
+        "ZLE_LOG": str(tmp / "zle.log"),
+    }
+
+
 def run_shell(
     shell: str, script: str, tmp: Path, stub: Path
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["SIGIL_BIN"] = str(stub)
-    env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
-    env["SIGIL_SESSION_ID"] = "shell-test"
-    env["ZLE_LOG"] = str(tmp / "zle.log")
-    for leaked in ("SIGIL_TTY", "SIGIL_TTY_FD", "TTY"):
-        env.pop(leaked, None)
+    env = shell_env(tmp, stub)
     return subprocess.run(
         [shell, "-c", script],
         cwd=ROOT,
@@ -119,13 +133,7 @@ def run_shell(
 def run_shell_args(
     args: list[str], script: str, tmp: Path, stub: Path
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["SIGIL_BIN"] = str(stub)
-    env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
-    env["SIGIL_SESSION_ID"] = "shell-test"
-    env["ZLE_LOG"] = str(tmp / "zle.log")
-    for leaked in ("SIGIL_TTY", "SIGIL_TTY_FD", "TTY"):
-        env.pop(leaked, None)
+    env = shell_env(tmp, stub)
     return subprocess.run(
         [*args, script],
         cwd=ROOT,
@@ -140,13 +148,7 @@ def run_shell_args(
 def run_shell_stdin(
     args: list[str], script: str, tmp: Path, stub: Path
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["SIGIL_BIN"] = str(stub)
-    env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
-    env["SIGIL_SESSION_ID"] = "shell-test"
-    env["ZLE_LOG"] = str(tmp / "zle.log")
-    for leaked in ("SIGIL_TTY", "SIGIL_TTY_FD", "TTY"):
-        env.pop(leaked, None)
+    env = shell_env(tmp, stub)
     return subprocess.run(
         args,
         input=script,
@@ -166,13 +168,7 @@ def run_shell_pty(
     stub: Path,
     timeout_seconds: float = SHELL_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["SIGIL_BIN"] = str(stub)
-    env["SIGIL_STUB_LOG"] = str(tmp / "calls.log")
-    env["SIGIL_SESSION_ID"] = "shell-test"
-    env["ZLE_LOG"] = str(tmp / "zle.log")
-    for leaked in ("SIGIL_TTY", "SIGIL_TTY_FD", "TTY"):
-        env.pop(leaked, None)
+    env = shell_env(tmp, stub)
 
     pid, fd = pty.fork()
     if pid == 0:
@@ -931,3 +927,19 @@ def test_pty_harness_kills_a_wedged_shell() -> None:
                 stub,
                 timeout_seconds=1.0,
             )
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_shell_harness_does_not_inherit_developer_environment(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_DEV_LEAK", "leaked")
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            'printf "%s" "${SIGIL_DEV_LEAK:-clean}"',
+            tmp,
+            stub,
+        )
+        assert result.returncode == 0
+        assert result.stdout == "clean"
