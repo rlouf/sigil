@@ -1272,3 +1272,25 @@ def test_zeta_prompt_object_stores_payload_hash_not_payload() -> None:
         if obj is not None and "message" in obj.data
     ]
     assert linked_messages == prepared.messages
+
+
+def test_zeta_prompt_builder_discovers_skills_once_per_turn(monkeypatch) -> None:
+    calls = 0
+
+    def fake_available_skills() -> list[zeta_skills.Skill]:
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(
+        "sigil.zeta.prompt.components.available_skills", fake_available_skills
+    )
+    monkeypatch.setattr(
+        "sigil.zeta.prompt.builder.available_skills", fake_available_skills
+    )
+    builder = zeta_prompt.PromptBuilder(store=zeta_trace.InMemoryStore())
+
+    builder.build("question", [], allowed_tools=("read",), tools=[])
+    builder.build("question", [], allowed_tools=("read",), tools=[])
+
+    assert calls == 1

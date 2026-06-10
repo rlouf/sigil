@@ -54,6 +54,7 @@ def prompt_components(
     current_events: Iterable[dict[str, Any]] = (),
     tools: list[dict[str, Any]] | None = None,
     include_non_message_components: bool = True,
+    skills: list[Skill] | None = None,
 ) -> list[PromptComponent]:
     """Return prompt components in stable prefix-cache-friendly order.
 
@@ -61,7 +62,8 @@ def prompt_components(
     then volatile timeline/objective/current-turn components.
     """
     enabled_tools = tuple(allowed_tool_names(allowed_tools))
-    skills = available_skills() if can_read_skill_files(enabled_tools) else []
+    if skills is None:
+        skills = available_skills() if can_read_skill_files(enabled_tools) else []
     system_content = system_prompt(system, allowed_tools=enabled_tools, skills=skills)
     components = [
         PromptComponent(

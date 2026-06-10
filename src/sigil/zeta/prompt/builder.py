@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
 from ..model import chat_completion_request_body
+from ..skills import Skill, available_skills
+from ..tools import allowed_tool_names
 from ..trace import (
     Derivation,
     Object,
@@ -28,6 +30,7 @@ from .components import (
     prompt_component_object,
     prompt_components,
 )
+from .system import can_read_skill_files
 from .transforms import NoOpPromptTransform, PromptTransform
 
 
@@ -55,6 +58,9 @@ class PromptBuilder:
         self._store = store
         self._store_initialized = store is not None
         self.transform = transform or NoOpPromptTransform()
+        # One builder serves every model call of a turn; skills discovery
+        # walks the filesystem, so do it once per tool set instead.
+        self._skills: dict[tuple[str, ...], list[Skill]] = {}
 
     def build(
         self,
@@ -78,6 +84,7 @@ class PromptBuilder:
             context=context,
             current_events=current_events,
             tools=tools,
+            skills=self._skills_for(allowed_tools),
         )
         fallback_tools = tools or []
         return self._build_traced_prompt(
@@ -190,6 +197,14 @@ class PromptBuilder:
         except Exception as exc:
             warn_trace_failure_once("record_tool_result", exc)
             return None
+
+    def _skills_for(self, allowed_tools: Iterable[str] | None) -> list[Skill]:
+        enabled = tuple(allowed_tool_names(allowed_tools))
+        cached = self._skills.get(enabled)
+        if cached is None:
+            cached = available_skills() if can_read_skill_files(enabled) else []
+            self._skills[enabled] = cached
+        return cached
 
     def store(self) -> Store | None:
         if self._store_initialized:
