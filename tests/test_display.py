@@ -399,6 +399,44 @@ def test_transcript_renders_conversation_blocks() -> None:
     assert "read README.md" in text
     assert "2 lines" in text
     assert "(turn aborted: model down)" in text
+    assert "╭" in text
+
+
+def test_transcript_renders_tool_calls_embedded_in_assistant_messages() -> None:
+    output, console = transcript_console()
+    events = [
+        {
+            "type": "assistant_message",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "grep",
+                        "arguments": '{"pattern": "todo"}',
+                    },
+                }
+            ],
+        },
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "grep",
+            "input": {"pattern": "todo"},
+        },
+        {
+            "type": "tool_call",
+            "id": "call-2",
+            "name": "ls",
+            "input": {"path": "src"},
+        },
+    ]
+
+    display_render.render_transcript(events, console=console)
+    text = output.getvalue()
+
+    assert text.count("grep todo") == 1
+    assert "ls src" in text
 
 
 def test_transcript_skips_noise_and_empty_events() -> None:

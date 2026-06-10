@@ -13,6 +13,7 @@ from rich.constrain import Constrain
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
+from rich.panel import Panel
 from rich.text import Text
 
 from ..zeta.prompt.budget import estimated_tokens_for_text
@@ -604,8 +605,9 @@ TRANSCRIPT_PROMPT_ID_CHARS = 8
 
 def render_transcript(events: list[dict[str, Any]], *, console: Console) -> None:
     """Render a session timeline as a conversation transcript."""
+    seen_call_ids: set[str] = set()
     for event in events:
-        renderables = transcript_event_renderables(event)
+        renderables = transcript_event_renderables(event, seen_call_ids)
         if not renderables:
             continue
         for renderable in renderables:
@@ -613,17 +615,29 @@ def render_transcript(events: list[dict[str, Any]], *, console: Console) -> None
         console.print()
 
 
-def transcript_event_renderables(event: dict[str, Any]) -> list[Any]:
-    """Map one timeline event to its transcript renderables, if any."""
+def transcript_event_renderables(
+    event: dict[str, Any],
+    seen_call_ids: set[str],
+) -> list[Any]:
+    """Map one timeline event to its transcript renderables, if any.
+
+    Tool calls appear both embedded in assistant messages and as separate
+    events depending on the projection path; ``seen_call_ids`` keeps each
+    call rendered once.
+    """
     event_type = str(event.get("type") or "")
     if event_type in TRANSCRIPT_SKIP_EVENT_TYPES:
         return []
     if event_type == "user_message":
-        return transcript_message_block("you", "bold cyan", event)
+        return transcript_message_panel("you", "cyan", event)
     if event_type == "assistant_message":
-        return transcript_assistant_block(event)
+        return transcript_assistant_block(event, seen_call_ids)
     if event_type == "tool_call":
-        return transcript_tool_call_line(event)
+        call_id = str(event.get("id") or event.get("tool_call_id") or "")
+        if call_id and call_id in seen_call_ids:
+            return []
+        name = str(event.get("name") or "")
+        return [transcript_tool_call_line(name, event.get("input"))]
     if event_type == "tool_result":
         return transcript_tool_result_lines(event)
     if event_type == "turn_aborted":
@@ -632,37 +646,87 @@ def transcript_event_renderables(event: dict[str, Any]) -> list[Any]:
     role = str(event.get("role") or "")
     if role:
         label = "you" if role == "user" else role
-        style = "bold cyan" if role == "user" else "bold"
-        return transcript_message_block(label, style, event)
+        style = "cyan" if role == "user" else "white"
+        return transcript_message_panel(label, style, event)
     return []
 
 
-def transcript_message_block(
+def transcript_message_panel(
     label: str,
-    style: str,
+    border_style: str,
     event: dict[str, Any],
 ) -> list[Any]:
     content = str(event.get("content") or "")
     if not content:
         return []
-    return [Text(label, style=style), Text(content)]
+    return [
+        Panel(
+            Text(content),
+            title=Text(label, style=f"bold {border_style}"),
+            title_align="left",
+            border_style=border_style,
+        )
+    ]
 
 
-def transcript_assistant_block(event: dict[str, Any]) -> list[Any]:
+def transcript_assistant_block(
+    event: dict[str, Any],
+    seen_call_ids: set[str],
+) -> list[Any]:
+    renderables: list[Any] = []
     content = str(event.get("content") or "")
-    if not content:
+    if content:
+        prompt_id = transcript_prompt_id(event)
+        renderables.append(
+            Panel(
+                Markdown(content),
+                title=Text("sigil", style="bold magenta"),
+                title_align="left",
+                subtitle=Text(prompt_id, style="dim") if prompt_id else None,
+                subtitle_align="right",
+                border_style="magenta",
+            )
+        )
+    renderables.extend(transcript_embedded_tool_calls(event, seen_call_ids))
+    return renderables
+
+
+def transcript_embedded_tool_calls(
+    event: dict[str, Any],
+    seen_call_ids: set[str],
+) -> list[Any]:
+    tool_calls = event.get("tool_calls")
+    if not isinstance(tool_calls, list):
         return []
-    header = Text("sigil", style="bold magenta")
-    prompt_id = transcript_prompt_id(event)
-    if prompt_id:
-        header.append(f"  {prompt_id}", style="dim")
-    return [header, Markdown(content)]
+    lines = []
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        call_id = str(call.get("id") or "")
+        if call_id:
+            seen_call_ids.add(call_id)
+        name = str(function.get("name") or "")
+        lines.append(
+            transcript_tool_call_line(name, parse_arguments(function.get("arguments")))
+        )
+    return lines
 
 
-def transcript_tool_call_line(event: dict[str, Any]) -> list[Any]:
-    name = str(event.get("name") or "")
-    label = summarize(name, event.get("input"))
-    return [Text(f"→ {name} {label}".rstrip(), style="dim")]
+def parse_arguments(arguments: Any) -> dict[str, Any]:
+    if not isinstance(arguments, str):
+        return {}
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def transcript_tool_call_line(name: str, args: Any) -> Text:
+    return Text(f"→ {name} {summarize(name, args)}".rstrip(), style="dim")
 
 
 def transcript_tool_result_lines(event: dict[str, Any]) -> list[Any]:
