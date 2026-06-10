@@ -22,11 +22,8 @@ from ..agent_io import (
     record_zeta_event,
     render_final_text,
 )
-from ..display import (
-    render_handoff_lines,
-    render_tool_result_summary,
-    thinking_status_factory,
-)
+from ..display.render import render_tool_result_summary, thinking_status_factory
+from ..display.summarize import render_handoff_lines
 from ..zeta.agent import AgentConfig, run_agent_turn
 from ..zeta.context import load_project_context
 from ..zeta.models import active_model_selection, model_selection_event

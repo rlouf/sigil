@@ -12,7 +12,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from .display import (
+from .display.render import (
     ContextUsageFooter,
     TraceAwareStreamRenderer,
     TraceRenderState,

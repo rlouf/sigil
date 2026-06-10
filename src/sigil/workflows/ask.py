@@ -23,7 +23,7 @@ from ..agent_io import (
     record_turn_abort,
     render_final_text,
 )
-from ..display import (
+from ..display.render import (
     StreamRenderer,
     ThinkingStatus,
     render_tool_result_summary,

@@ -16,7 +16,7 @@ from _patch import patch, patch_dict
 from click.testing import CliRunner
 
 from sigil.cli import cli, main
-from sigil.display import should_color
+from sigil.display.tty import should_color
 from sigil.failure import failure_context_prompt, record_failure, truncate_snippet
 from sigil.session import (
     read_event_log,
@@ -141,6 +141,18 @@ def test_shell_turn_dispatch_does_not_load_display_or_model() -> None:
             check=True,
             stdout=subprocess.DEVNULL,
         )
+
+
+def test_tty_helpers_do_not_load_display_renderer() -> None:
+    script = (
+        "import sys; "
+        "import sigil.display.tty; "
+        "import sigil.zeta.model; "
+        "heavy = [name for name in sys.modules "
+        "if name == 'sigil.display.render' or name.startswith('rich')]; "
+        "assert not heavy, heavy"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True)
 
 
 def test_every_lazy_command_resolves() -> None:

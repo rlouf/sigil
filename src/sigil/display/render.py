@@ -14,9 +14,9 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
 
-from ..tty import is_interactive, muted, should_color
 from ..zeta.prompt.budget import estimated_tokens_for_text
 from .summarize import summarize, text_content, tool_result_summary
+from .tty import is_interactive, muted, should_color
 
 TRACE_LABEL_WIDTH = 5
 THINKING_STATUS_INTERVAL_SECONDS = 1.0

@@ -16,7 +16,7 @@ from urllib.parse import urlparse, urlunparse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from ..tty import LOVE, RESET, muted, should_color
+from ..display.tty import LOVE, RESET, muted, should_color
 
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"

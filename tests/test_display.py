@@ -9,7 +9,9 @@ from _zeta_helpers import (
     visible_terminal_text,
 )
 
-from sigil import display as sigil_display
+import sigil.display.render as display_render
+import sigil.display.summarize as display_summarize
+from sigil.display.tty import MUTED, RESET
 from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
@@ -18,7 +20,7 @@ from sigil.protocols import (
 
 
 def test_sigil_display_summarizes_tool_results() -> None:
-    assert sigil_display.tool_result_summary(
+    assert display_summarize.tool_result_summary(
         "bash",
         {
             "ok": True,
@@ -28,25 +30,25 @@ def test_sigil_display_summarizes_tool_results() -> None:
             },
         },
     ) == ["staged"]
-    assert sigil_display.tool_result_summary(
+    assert display_summarize.tool_result_summary(
         "bash",
         {
             "ok": True,
             "metadata": {"mode": "direct", "status": 0},
         },
     ) == ["succeeded"]
-    assert sigil_display.tool_result_summary(
+    assert display_summarize.tool_result_summary(
         "bash",
         {
             "ok": False,
             "metadata": {"mode": "direct", "status": 2},
         },
     ) == ["failed · exit 2"]
-    assert sigil_display.tool_result_summary(
+    assert display_summarize.tool_result_summary(
         "read",
         {"ok": True, "content": [{"type": "text", "text": "a\nb\n"}]},
     ) == ["2 lines"]
-    assert sigil_display.tool_result_summary(
+    assert display_summarize.tool_result_summary(
         "read",
         {
             "ok": False,
@@ -56,18 +58,18 @@ def test_sigil_display_summarizes_tool_results() -> None:
             },
         },
     ) == ["read-failed: [Errno 2] No such file or directory: 'missing.md'"]
-    assert sigil_display.tool_result_summary(
+    assert display_summarize.tool_result_summary(
         "write",
         {
             "ok": True,
             "metadata": {"mode": "direct", "path": "notes.txt"},
         },
     ) == ["wrote · notes.txt"]
-    assert sigil_display.tool_result_summary(
+    assert display_summarize.tool_result_summary(
         "grep",
         {"ok": True, "content": [{"type": "text", "text": "a.py:1:x\nb.py:2:y\n"}]},
     ) == ["2 matches · 2 files"]
-    assert sigil_display.tool_result_summary(
+    assert display_summarize.tool_result_summary(
         "grep",
         {
             "ok": True,
@@ -78,7 +80,7 @@ def test_sigil_display_summarizes_tool_results() -> None:
 
 
 def test_sigil_display_summarizes_current_context_estimate() -> None:
-    line = sigil_display.context_usage_line(
+    line = display_render.context_usage_line(
         {
             "usage": {
                 "prompt_tokens": 18_432,
@@ -91,13 +93,13 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
 
     assert line == "context  [█░░░░░░░░░░░░░░░░░░░] 7%"
     assert (
-        sigil_display.context_usage_line(
+        display_render.context_usage_line(
             {"usage": {"prompt_tokens": 18_432, "completion_tokens": 391}}
         )
         == ""
     )
     assert (
-        sigil_display.context_usage_line(
+        display_render.context_usage_line(
             {"estimated_context_tokens": 200, "model_context_tokens": 1_000}
         )
         == "context  [████░░░░░░░░░░░░░░░░] 20% est."
@@ -106,7 +108,7 @@ def test_sigil_display_summarizes_current_context_estimate() -> None:
 
 def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> None:
     output = StringIO()
-    footer = sigil_display.ContextUsageFooter(output)
+    footer = display_render.ContextUsageFooter(output)
     base_telemetry = {
         "usage": {"prompt_tokens": 100, "completion_tokens": 0},
         "model_context_tokens": 1_000,
@@ -116,8 +118,8 @@ def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> No
     footer.update(base_telemetry)
     footer.update_for_tool_result(None, result)
 
-    estimated_tokens = 100 + sigil_display.estimated_tool_result_context_tokens(result)
-    assert footer.current_line() == sigil_display.context_usage_line(
+    estimated_tokens = 100 + display_render.estimated_tool_result_context_tokens(result)
+    assert footer.current_line() == display_render.context_usage_line(
         {
             "estimated_context_tokens": estimated_tokens,
             "model_context_tokens": 1_000,
@@ -136,7 +138,7 @@ def test_sigil_display_context_usage_footer_estimates_tool_result_tokens() -> No
 
 
 def test_sigil_display_tool_result_telemetry_replaces_stale_estimates() -> None:
-    footer = sigil_display.ContextUsageFooter(StringIO())
+    footer = display_render.ContextUsageFooter(StringIO())
     stale_result = {"ok": True, "content": [{"type": "text", "text": "x" * 400}]}
     fresh_result = {"ok": True, "content": [{"type": "text", "text": "y" * 40}]}
     fresh_telemetry = {
@@ -153,18 +155,18 @@ def test_sigil_display_tool_result_telemetry_replaces_stale_estimates() -> None:
     footer.update_for_tool_result(None, stale_result)
     footer.update_for_tool_result(fresh_telemetry, fresh_result)
 
-    expected_tokens = 420 + sigil_display.estimated_tool_result_context_tokens(
+    expected_tokens = 420 + display_render.estimated_tool_result_context_tokens(
         fresh_result
     )
-    assert footer.current_line() == sigil_display.context_usage_line(
+    assert footer.current_line() == display_render.context_usage_line(
         {
             "estimated_context_tokens": expected_tokens,
             "model_context_tokens": 1_000,
         }
     )
-    assert sigil_display.context_usage_line({"model_context_tokens": 262_144}) == ""
+    assert display_render.context_usage_line({"model_context_tokens": 262_144}) == ""
     assert (
-        sigil_display.context_usage_line(
+        display_render.context_usage_line(
             {
                 "usage": {"prompt_tokens": 18_432},
                 "model_context_tokens": 262_144,
@@ -183,7 +185,7 @@ def test_sigil_display_context_usage_footer_is_ephemeral_for_tty(
         "model_context_tokens": 262_144,
     }
     output = TtyBuffer()
-    footer = sigil_display.ContextUsageFooter(output)
+    footer = display_render.ContextUsageFooter(output)
 
     assert footer.update(telemetry)
     assert not output.getvalue().endswith("\n")
@@ -201,7 +203,7 @@ def test_sigil_display_context_usage_footer_prints_final_only_for_non_tty() -> N
         "model_context_tokens": 262_144,
     }
     output = StringIO()
-    footer = sigil_display.ContextUsageFooter(output)
+    footer = display_render.ContextUsageFooter(output)
 
     assert not footer.update(telemetry)
     assert output.getvalue() == ""
@@ -211,19 +213,19 @@ def test_sigil_display_context_usage_footer_prints_final_only_for_non_tty() -> N
 
 def test_sigil_display_stream_renderer_factory_selects_output_mode() -> None:
     assert isinstance(
-        sigil_display.create_stream_renderer(StringIO()),
-        sigil_display.TerminalStreamRenderer,
+        display_render.create_stream_renderer(StringIO()),
+        display_render.TerminalStreamRenderer,
     )
-    assert sigil_display.create_stream_renderer(StringIO(), json_output=True) is None
+    assert display_render.create_stream_renderer(StringIO(), json_output=True) is None
     assert isinstance(
-        sigil_display.create_stream_renderer(TtyBuffer()),
-        sigil_display.RichStreamRenderer,
+        display_render.create_stream_renderer(TtyBuffer()),
+        display_render.RichStreamRenderer,
     )
 
 
 def test_sigil_display_rich_stream_renderer_renders_markdown() -> None:
     output = TtyBuffer()
-    renderer = sigil_display.RichStreamRenderer(output, refresh_interval=0)
+    renderer = display_render.RichStreamRenderer(output, refresh_interval=0)
 
     renderer.content_delta("Hello ")
     renderer.content_delta("**world**")
@@ -236,7 +238,7 @@ def test_sigil_display_rich_stream_renderer_renders_markdown() -> None:
 
 def test_sigil_display_rich_stream_renderer_wraps_with_left_padding() -> None:
     output = TtyBuffer()
-    renderer = sigil_display.RichStreamRenderer(
+    renderer = display_render.RichStreamRenderer(
         output,
         width=24,
         refresh_interval=0,
@@ -256,7 +258,7 @@ def test_sigil_display_rich_stream_renderer_wraps_with_left_padding() -> None:
 
 def test_sigil_display_rich_stream_renderer_finalizes_trace_boundaries() -> None:
     output = TtyBuffer()
-    renderer = sigil_display.RichStreamRenderer(output, refresh_interval=0)
+    renderer = display_render.RichStreamRenderer(output, refresh_interval=0)
 
     renderer.content_delta("First")
     renderer.ensure_trace_boundary()
@@ -281,7 +283,7 @@ def test_sigil_display_thinking_status_updates_and_clears(monkeypatch) -> None:
     def clock() -> float:
         return now
 
-    with sigil_display.ThinkingStatus(output, interval=60, clock=clock) as status:
+    with display_render.ThinkingStatus(output, interval=60, clock=clock) as status:
         now = 10.4
         status.refresh()
 
@@ -295,12 +297,10 @@ def test_sigil_display_thinking_status_is_muted(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
     output = TtyBuffer()
 
-    with sigil_display.ThinkingStatus(output, interval=60):
+    with display_render.ThinkingStatus(output, interval=60):
         pass
 
-    assert f"{sigil_display.MUTED}  thinking 0s{sigil_display.RESET}" in (
-        output.getvalue()
-    )
+    assert f"{MUTED}  thinking 0s{RESET}" in (output.getvalue())
 
 
 def test_sigil_display_thinking_status_includes_context_detail(
@@ -309,7 +309,7 @@ def test_sigil_display_thinking_status_includes_context_detail(
     monkeypatch.setenv("NO_COLOR", "1")
     output = TtyBuffer()
 
-    with sigil_display.ThinkingStatus(
+    with display_render.ThinkingStatus(
         output,
         interval=60,
         detail=lambda: "context  [█░░░░░░░░░░░░░░░░░░░] 7%",
@@ -326,14 +326,14 @@ def test_sigil_display_thinking_status_includes_context_detail(
 def test_sigil_display_thinking_status_skips_non_tty() -> None:
     output = StringIO()
 
-    with sigil_display.ThinkingStatus(output):
+    with display_render.ThinkingStatus(output):
         pass
 
     assert output.getvalue() == ""
 
 
 def test_sigil_display_summarizes_shell_results() -> None:
-    assert sigil_display.shell_result_summary(
+    assert display_summarize.shell_result_summary(
         {
             "type": "tool_result",
             "result": {
@@ -344,7 +344,7 @@ def test_sigil_display_summarizes_shell_results() -> None:
             },
         }
     ) == ["❯ shell  captured", "  uv run pytest", "  exit 0 · 1 shell turn"]
-    assert sigil_display.shell_result_summary(
+    assert display_summarize.shell_result_summary(
         {
             "type": "tool_result",
             "result": {

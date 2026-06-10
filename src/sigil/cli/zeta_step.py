@@ -9,7 +9,7 @@ from typing import TextIO
 import click
 
 from .. import handoff as sigil_handoff
-from ..display import shell_result_summary
+from ..display.summarize import shell_result_summary
 from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
 from ..workflows.do import run_do_step
 from ..workflows.propose import run_propose_step
