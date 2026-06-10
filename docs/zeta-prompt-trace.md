@@ -57,14 +57,12 @@ Examples:
 - transformed context objects such as `compacted_context` or `task_state`
 
 **Refs** are mutable names that point at object ids. They let us talk about
-things like the current prompt or current system prompt without pretending
-those objects are mutable.
+things like the current prompt or current run head without pretending those
+objects are mutable.
 
 Examples:
 
 - `prompt/current`
-- `prompt/current/system_prompt`
-- `prompt/current/user_objective`
 - `run/<id>/head`
 
 The run head names the latest meaningful trace leaf for a run. In a completed
@@ -73,7 +71,7 @@ handoff it may temporarily be a `tool_result`, because that is the leaf the
 next prompt must continue from.
 
 **Derivations** record how an object was produced. They contain the producer
-name, input ids, resolved refs, and parameters.
+name, input ids, and parameters.
 
 Examples:
 

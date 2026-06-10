@@ -71,7 +71,6 @@ def trimmed_component(component: PromptComponent) -> PromptComponent:
         message=trimmed_message,
         links=(component.object_id,),
         object_id=None,
-        ref_name=None,
     )
 
 

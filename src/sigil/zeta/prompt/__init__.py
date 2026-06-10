@@ -20,7 +20,6 @@ from .components import (
     component_messages,
     prompt_component_object,
     prompt_components,
-    update_component_refs,
     zeta_context_message,
 )
 from .system import (
@@ -127,6 +126,5 @@ __all__ = [
     "tool_available",
     "tool_signature",
     "tools_prompt",
-    "update_component_refs",
     "zeta_context_message",
 ]

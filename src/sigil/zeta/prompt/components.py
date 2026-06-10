@@ -9,7 +9,7 @@ from typing import Any, Iterable, Literal
 from ..skills import Skill, available_skills, expand_skill_directive
 from ..timeline import ChatMessageEntry, _chat_message_entries
 from ..tools import allowed_tool_names
-from ..trace import Object, ObjectId, Store
+from ..trace import Object, ObjectId
 from .system import system_prompt
 
 Representation = Literal["full", "summary", "stub", "absent"]
@@ -26,7 +26,6 @@ class PromptComponent:
     source_object_id: ObjectId | None = None
     links: tuple[ObjectId, ...] = ()
     object_id: ObjectId | None = None
-    ref_name: str | None = None
 
 
 def can_read_skill_files(enabled_tools: Iterable[str]) -> bool:
@@ -77,7 +76,6 @@ def prompt_components(
                 "allowed_tools": list(enabled_tools),
             },
             message={"role": "system", "content": system_content},
-            ref_name="prompt/current/system_prompt",
         )
     ]
     if include_non_message_components:
@@ -107,7 +105,6 @@ def prompt_components(
                 "message": {"role": "user", "content": objective_message},
             },
             message={"role": "user", "content": objective_message},
-            ref_name="prompt/current/user_objective",
         )
     )
     components.extend(
@@ -297,7 +294,6 @@ def non_message_components(
                     "allowed_tools": list(enabled_tools),
                     "tools": tools,
                 },
-                ref_name="prompt/current/tool_descriptor_set",
             )
         )
     if skills:
@@ -314,7 +310,6 @@ def non_message_components(
                         for skill in skills
                     ]
                 },
-                ref_name="prompt/current/skill_context",
             )
         )
     if context.strip():
@@ -322,7 +317,6 @@ def non_message_components(
             PromptComponent(
                 kind="project_context",
                 data={"objective": objective, "content": context.strip()},
-                ref_name="prompt/current/project_context",
             )
         )
     return components
@@ -355,16 +349,3 @@ def prompt_component_object(component: PromptComponent) -> Object:
         data=data,
         links=component.links,
     )
-
-
-def update_component_refs(
-    store: Store,
-    components: list[PromptComponent],
-) -> dict[str, ObjectId]:
-    resolved_refs: dict[str, ObjectId] = {}
-    for component in components:
-        if component.ref_name is None or component.object_id is None:
-            continue
-        store.set_ref(component.ref_name, component.object_id)
-        resolved_refs[component.ref_name] = component.object_id
-    return resolved_refs

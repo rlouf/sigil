@@ -421,7 +421,6 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
             producer="test:v1",
             output_id=child_id,
             input_ids=(parent_id,),
-            resolved_refs={"context/current": parent_id},
             params={"mode": "unit"},
         )
     )

@@ -37,7 +37,6 @@ class Derivation:
     producer: str
     output_id: ObjectId
     input_ids: tuple[ObjectId, ...] = ()
-    resolved_refs: dict[str, ObjectId] = field(default_factory=dict)
     params: dict[str, Any] = field(default_factory=dict)
 
 
@@ -143,7 +142,6 @@ def derivation_payload(derivation: Derivation) -> dict[str, Any]:
         "producer": derivation.producer,
         "output_id": derivation.output_id,
         "input_ids": list(derivation.input_ids),
-        "resolved_refs": derivation.resolved_refs,
         "params": derivation.params,
     }
 
@@ -303,7 +301,6 @@ class SqliteStore(StoreBase):
                   producer TEXT NOT NULL,
                   output_id TEXT NOT NULL,
                   input_ids_json TEXT NOT NULL,
-                  resolved_refs_json TEXT NOT NULL,
                   params_json TEXT NOT NULL,
                   created_at REAL NOT NULL
                 );
@@ -403,16 +400,14 @@ class SqliteStore(StoreBase):
             self.connection.execute(
                 """
                 INSERT OR IGNORE INTO derivations
-                  (id, producer, output_id, input_ids_json, resolved_refs_json,
-                   params_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                  (id, producer, output_id, input_ids_json, params_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     id_value,
                     stored.producer,
                     stored.output_id,
                     canonical_json(list(stored.input_ids)),
-                    canonical_json(stored.resolved_refs),
                     canonical_json(stored.params),
                     time.time(),
                 ),
@@ -423,7 +418,7 @@ class SqliteStore(StoreBase):
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]:
         rows = self.connection.execute(
             """
-            SELECT producer, output_id, input_ids_json, resolved_refs_json, params_json
+            SELECT producer, output_id, input_ids_json, params_json
             FROM derivations
             WHERE output_id = ?
             ORDER BY created_at, id
@@ -435,7 +430,6 @@ class SqliteStore(StoreBase):
                 producer=str(row["producer"]),
                 output_id=str(row["output_id"]),
                 input_ids=tuple(json.loads(str(row["input_ids_json"]))),
-                resolved_refs=json.loads(str(row["resolved_refs_json"])),
                 params=json.loads(str(row["params_json"])),
             )
             for row in rows
@@ -491,9 +485,5 @@ def normalize_derivation(derivation: Derivation) -> Derivation:
         producer=derivation.producer,
         output_id=derivation.output_id,
         input_ids=tuple(str(input_id) for input_id in derivation.input_ids),
-        resolved_refs={
-            str(name): str(object_id_value)
-            for name, object_id_value in derivation.resolved_refs.items()
-        },
         params=normalize_json(derivation.params),
     )

@@ -24,7 +24,6 @@ from .components import (
     component_messages,
     prompt_component_object,
     prompt_components,
-    update_component_refs,
 )
 from .transforms import NoOpPromptTransform, PromptTransform
 
@@ -339,13 +338,11 @@ class PromptBuilder:
                 links=component_ids,
             )
         )
-        resolved_refs = update_component_refs(store, components)
         store.record_derivation(
             Derivation(
                 producer="SigilPromptBuilder:v1",
                 output_id=prompt_id,
                 input_ids=component_ids,
-                resolved_refs=resolved_refs,
                 params={
                     "max_tokens": max_tokens,
                     "selected_model": selected_model,
