@@ -4,6 +4,9 @@
 # functions to the CLI. The Zeta glyph route keeps prompt insertion and command
 # capture here, but delegates the model/tool loop to Python.
 
+# Exported on purpose: `sigil doctor` runs as a child process and reads this
+# from its inherited environment to tell whether an ancestor shell loaded the
+# binding (install.py check_shell_binding_loaded).
 export SIGIL_BINDING_LOADED="zsh"
 
 # ── CLI Resolution ───────────────────────────────────────────────────────
@@ -78,8 +81,12 @@ typeset -g __sigil_zeta_current_command=""
 
 __sigil_zeta_enable_capture() {
   emulate -L zsh
+  # Recording is the point of the capture window; there is no off switch in
+  # this alpha. Non-positive or non-numeric limits fall back to the default.
   local limit="${SIGIL_ZETA_CAPTURE_TURNS:-20}"
-  [[ "$limit" == <-> ]] || limit=20
+  if [[ "$limit" != <-> ]] || (( limit <= 0 )); then
+    limit=20
+  fi
   __sigil_zeta_capture_active=1
   __sigil_zeta_capture_remaining="$limit"
 }
@@ -97,7 +104,7 @@ __sigil_zeta_recordable_command() {
   [[ -n "$command" ]] || return 1
   [[ -n "${command//[[:space:]]/}" ]] || return 1
   case "$command" in
-    [[:space:]]*|,*|+*|sigil\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*)
+    [[:space:]]*|,*|+*|sigil|sigil\ *|*/sigil|*/sigil\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*)
       return 1
       ;;
   esac
@@ -162,8 +169,10 @@ __sigil_zeta_turn() {
     if [[ -z "$objective" ]]; then
       __sigil_zeta_consume_capture
       args+=(--continue)
+    else
+      args+=("$objective")
     fi
-    "$__sigil_bin" zeta-step --glyph "$glyph" --handoff-file "$handoff_file" "${args[@]}" "$objective"
+    "$__sigil_bin" zeta-step --glyph "$glyph" --handoff-file "$handoff_file" "${args[@]}"
     step_status=$?
     if [[ "$step_status" == "0" && -s "$handoff_file" ]]; then
       # The CLI writes the staged command verbatim; the substitution strips the

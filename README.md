@@ -181,7 +181,8 @@ Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
 answer turns, handoff timeline events, and command results recorded through `+`
 or a Zeta handoff capture window. The capture window expires after
 `SIGIL_ZETA_CAPTURE_TURNS` (default 20) recorded commands when a handoff is
-never resumed.
+never resumed. Recording has no off switch; non-positive or non-numeric
+values fall back to the default.
 
 ## Glyph Reference
 

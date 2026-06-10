@@ -27,6 +27,7 @@ def make_stub(tmp: Path) -> Path:
               continue_step=0
               handoff_file=""
               objective=""
+              argc=0
               while [ "$#" -gt 0 ]; do
                 case "$1" in
                   --handoff-file)
@@ -45,12 +46,13 @@ def make_stub(tmp: Path) -> Path:
                     ;;
                   *)
                     objective="$1"
+                    argc=$((argc + 1))
                     shift
                     ;;
                 esac
               done
               if [ "$continue_step" = "1" ]; then
-                printf '%s\n' "zeta-step --continue" >> "$SIGIL_STUB_LOG"
+                printf '%s\n' "zeta-step --continue argc=$argc" >> "$SIGIL_STUB_LOG"
                 command="echo continued"
                 reason="Continue after shell handoff."
               else
@@ -264,7 +266,9 @@ def test_zsh_bare_agent_step_continues_after_shell_handoff() -> None:
             stub,
         )
         assert_success(result)
-        assert read_log(tmp) == ["zeta-step --continue"]
+        # argc=0: a bare continue passes no positional, not an empty string the
+        # CLI has to know to ignore.
+        assert read_log(tmp) == ["zeta-step --continue argc=0"]
         assert "(staged)" in result.stdout
         assert "Continue after shell handoff." not in result.stdout
         assert "history=+ echo continued" in result.stdout
@@ -689,6 +693,67 @@ def test_zsh_capture_window_expires_after_turn_limit() -> None:
         assert len(calls) == 2
         assert "--command echo one" in calls[0]
         assert "--command echo two" in calls[1]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_capture_turn_limit_zero_falls_back_to_default() -> None:
+    # Recording is the point of the capture window in this alpha; there is no
+    # off switch. Non-positive or non-numeric limits use the default instead
+    # of recording a single command and expiring.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                export SIGIL_ZETA_CAPTURE_TURNS=0
+                source src/sigil/bindings/sigil.zsh
+                sigil_agent_step hello >/dev/null
+                for command in "echo one" "echo two"; do
+                  __sigil_zeta_before_command "$command"
+                  true
+                  __sigil_zeta_after_command_before_prompt
+                done
+                wait
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        calls = shell_turn_calls(tmp)
+        assert len(calls) == 2
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_recordable_command_excludes_all_sigil_invocations() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                __sigil_zeta_recordable_command "sigil"; print -- "bare=$?"
+                __sigil_zeta_recordable_command "sigil status"; print -- "args=$?"
+                __sigil_zeta_recordable_command "./sigil status"; print -- "relative=$?"
+                __sigil_zeta_recordable_command "/usr/local/bin/sigil status"; print -- "absolute=$?"
+                __sigil_zeta_recordable_command "echo sigil"; print -- "mention=$?"
+                __sigil_zeta_recordable_command "echo hi"; print -- "plain=$?"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "bare=1" in result.stdout
+        assert "args=1" in result.stdout
+        assert "relative=1" in result.stdout
+        assert "absolute=1" in result.stdout
+        assert "mention=0" in result.stdout
+        assert "plain=0" in result.stdout
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
