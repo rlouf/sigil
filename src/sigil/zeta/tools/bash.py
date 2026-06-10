@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import os
-import re
 import shlex
 import signal
 import subprocess
 from typing import Any
 
-from .base import ToolSpec, analysis, diagnostic, effect, error_result, handoff, missing
+from .base import ToolSpec, analysis, effect, error_result, handoff, missing
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12_000
@@ -31,32 +30,17 @@ SPEC = ToolSpec(
     True,
 )
 
-SHELL_META_PATTERN = re.compile(r"[|&;<>()`$*?{}\[\]~]")
-
 
 def analyze(params: dict[str, Any]) -> dict[str, Any]:
     command = str(params.get("command") or "").strip()
     if not command:
         return missing("command")
-    diagnostics = []
-    resolved = True
     try:
         argv = shlex.split(command)
-    except ValueError as exc:
+    except ValueError:
         argv = []
-        resolved = False
-        diagnostics.append(diagnostic("shell-parse-error", str(exc)))
-    if SHELL_META_PATTERN.search(command):
-        resolved = False
-        diagnostics.append(
-            diagnostic("shell-grammar", "command contains shell grammar")
-        )
     target = argv[0] if argv else command
-    return analysis(
-        resolved=resolved,
-        effects=[effect("execute", target, resource="process")],
-        diagnostics=diagnostics,
-    )
+    return analysis(effects=[effect("execute", target, resource="process")])
 
 
 def run(params: dict[str, Any]) -> dict[str, Any]:

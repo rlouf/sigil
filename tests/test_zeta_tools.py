@@ -538,3 +538,11 @@ def test_zeta_edit_analysis_reports_location() -> None:
     assert data["valid"] is True
     assert data["resolved"] is True
     assert [effect["target"] for effect in data["effects"]] == ["src/new.py"]
+
+
+def test_zeta_bash_analysis_accepts_shell_grammar_without_diagnostics() -> None:
+    data = zeta_tools.analyze_tool("bash", {"command": "ls | wc -l && echo $HOME"})
+    assert data["valid"] is True
+    assert data["resolved"] is True
+    assert [item["kind"] for item in data["effects"]] == ["execute"]
+    assert data["diagnostics"] == []
