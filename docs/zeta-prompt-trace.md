@@ -19,9 +19,11 @@ Those input objects are prompt components: the system prompt, user objective,
 project context, timeline messages, tool descriptors, tool calls, tool
 results, and any transformed context components.
 
-The prompt object stores the exact final model payload. That means the stored
-prompt is not an approximation of the request. It is the request: messages,
-tools, tool choice, model, max tokens, and model options.
+The prompt object stores the content hash of the exact final model payload
+and links to every component that produced it. The stored graph is not an
+approximation of the request: the payload — messages, tools, tool choice,
+model, max tokens, and model options — is reconstructible from the linked
+components, and the hash verifies the reconstruction.
 
 The model answer is another object derived from that prompt.
 
@@ -101,7 +103,7 @@ through the model boundary, and records the assistant message.
         v
   +---------------+       +-----------+       +----------------------+
   | prompt P1     | ----> | ModelCall | ----> | assistant_message A1 |
-  | exact payload |       +-----------+       +----------------------+
+  | payload hash  |       +-----------+       +----------------------+
   +---------------+
 ```
 
@@ -162,7 +164,7 @@ Turn 2
         v
   +---------------+       +-----------+       +----------------------+
   | prompt P2     | ----> | ModelCall | ----> | assistant_message A2 |
-  | exact payload |       +-----------+       +----------------------+
+  | payload hash  |       +-----------+       +----------------------+
   +---------------+
 ```
 
@@ -220,10 +222,10 @@ which point back to the assistant output that requested them.
 Without prompt objects, debugging often starts with an unanswerable question:
 "What exactly did we send to the model?"
 
-With prompt trace, the answer is an object lookup. The prompt object stores the
-exact final payload, including all messages and tool descriptors. That makes it
-possible to inspect a bad answer by looking at the real model input rather than
-reconstructing it from logs and assumptions.
+With prompt trace, the answer is a graph walk. The prompt object links every
+message and tool descriptor that entered the payload and stores the payload's
+content hash. That makes it possible to inspect a bad answer by looking at the
+real model input rather than guessing at it from logs and assumptions.
 
 This is especially important as prompt construction becomes more dynamic. A
 system prompt can depend on tools, available skills, project context, current
@@ -236,7 +238,8 @@ There are two useful meanings of replay.
 
 **Prompt replay** is deterministic. Given a run head, prompt components, refs,
 and builder settings, we can rebuild the prompt payload. Given a prompt object
-id, we can inspect the exact payload that was actually sent.
+id, we can rebuild the exact payload that was actually sent from its linked
+components and check it against the stored payload hash.
 
 **Model replay** means sending a payload to a model again. That is useful, but
 not guaranteed to reproduce the same assistant output unless the model,
@@ -334,7 +337,7 @@ auditable protocol.
 The prompt trace substrate gives us:
 
 - exact model input inspection
-- prompt replay from stored payloads
+- prompt replay rebuilt from stored components
 - alternate prompt rebuilds from the same session
 - prompt diffs across transforms, models, or system prompts
 - assistant output attribution to the prompt that produced it
@@ -355,7 +358,8 @@ model, backend, sampling, or external state differs.
 Prompt trace also does not mean the user sees the raw graph. The displayed chat
 history is still useful as a UI projection, but for Zeta it is derived from
 trace objects. The canonical continuity pointer is the run head, and the
-canonical model input is the prompt object payload.
+canonical model input is the payload rebuilt from the prompt object's
+components and verified by its stored hash.
 
 Finally, the system still needs better user-facing tools. The graph exists, but
 the practical workflow should eventually include commands such as:

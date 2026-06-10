@@ -8,6 +8,8 @@ import logging
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
@@ -87,6 +89,7 @@ class Store(Protocol):
     def get_object(self, object_id: ObjectId) -> Object | None: ...
     def set_ref(self, name: str, object_id: ObjectId) -> None: ...
     def get_ref(self, name: str) -> ObjectId | None: ...
+    def batch(self) -> AbstractContextManager[None]: ...
     def record_derivation(self, derivation: Derivation) -> str: ...
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]: ...
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]: ...
@@ -215,6 +218,10 @@ class InMemoryStore(StoreBase):
     def get_ref(self, name: str) -> ObjectId | None:
         return self._refs.get(name)
 
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        yield
+
     def record_derivation(self, derivation: Derivation) -> str:
         stored = normalize_derivation(derivation)
         id_value = derivation_id(stored)
@@ -256,10 +263,27 @@ class SqliteStore(StoreBase):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(str(path))
         self.connection.row_factory = sqlite3.Row
-        self._write_lock = threading.Lock()
+        self._write_lock = threading.RLock()
+        self._batch_depth = 0
         self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA busy_timeout=5000")
         self._init_schema()
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        """Group writes into one transaction committed at batch exit."""
+        with self._write_lock:
+            self._batch_depth += 1
+            try:
+                yield
+            finally:
+                self._batch_depth -= 1
+                if self._batch_depth == 0:
+                    self.connection.commit()
+
+    def _commit(self) -> None:
+        if self._batch_depth == 0:
+            self.connection.commit()
 
     def close(self) -> None:
         self.connection.close()
@@ -311,7 +335,7 @@ class SqliteStore(StoreBase):
                     canonical_json(list(stored.links)),
                 ),
             )
-            self.connection.commit()
+            self._commit()
         return object_id_value
 
     def get_object(self, object_id: ObjectId) -> Object | None:
@@ -337,7 +361,7 @@ class SqliteStore(StoreBase):
                 """,
                 (name, object_id),
             )
-            self.connection.commit()
+            self._commit()
 
     def get_ref(self, name: str) -> ObjectId | None:
         row = self.connection.execute(
@@ -367,7 +391,7 @@ class SqliteStore(StoreBase):
                     time.time(),
                 ),
             )
-            self.connection.commit()
+            self._commit()
         return id_value
 
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]:

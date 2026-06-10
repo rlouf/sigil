@@ -40,33 +40,34 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
     payload = event_payload(event)
     try:
         store = default_store()
-        previous_event_id = store.get_ref(event_head_ref())
-        links = event_links(payload, previous_event_id)
-        event_id = store.put_object(
-            Object(
-                kind=RUN_EVENT_KIND,
-                schema="zeta.run_event.v1",
-                data={
-                    "event": payload,
-                    "previous_event_object_id": previous_event_id or "",
-                },
-                links=links,
+        with store.batch():
+            previous_event_id = store.get_ref(event_head_ref())
+            links = event_links(payload, previous_event_id)
+            event_id = store.put_object(
+                Object(
+                    kind=RUN_EVENT_KIND,
+                    schema="zeta.run_event.v1",
+                    data={
+                        "event": payload,
+                        "previous_event_object_id": previous_event_id or "",
+                    },
+                    links=links,
+                )
             )
-        )
-        store.record_derivation(
-            Derivation(
-                producer="SigilRunEvent:v1",
-                output_id=event_id,
-                input_ids=links,
-                params={"type": str(payload.get("type") or "")},
+            store.record_derivation(
+                Derivation(
+                    producer="SigilRunEvent:v1",
+                    output_id=event_id,
+                    input_ids=links,
+                    params={"type": str(payload.get("type") or "")},
+                )
             )
-        )
-        store.set_ref(event_head_ref(), event_id)
-        head_id = event_domain_object_id(payload) or event_id
-        if should_update_run_head(payload):
-            store.set_ref(run_head_ref(), head_id)
-        elif store.get_ref(run_head_ref()) is None:
-            store.set_ref(run_head_ref(), head_id)
+            store.set_ref(event_head_ref(), event_id)
+            head_id = event_domain_object_id(payload) or event_id
+            if should_update_run_head(payload):
+                store.set_ref(run_head_ref(), head_id)
+            elif store.get_ref(run_head_ref()) is None:
+                store.set_ref(run_head_ref(), head_id)
     except Exception as exc:
         warn_trace_failure_once("record_event", exc)
     return payload

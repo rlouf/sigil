@@ -6,6 +6,8 @@ system_prompt, tool descriptors, project context, then volatile components.
 
 from __future__ import annotations
 
+import hashlib
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any, Iterable
 
@@ -16,6 +18,7 @@ from ..trace import (
     ObjectId,
     PromptTrace,
     Store,
+    canonical_json,
     default_store,
     warn_trace_failure_once,
 )
@@ -209,16 +212,20 @@ class PromptBuilder:
         selected_model: str | None,
     ) -> PreparedPrompt:
         try:
-            stored_components = self._store_components(components)
-            transformed_components = self.transform.apply(stored_components)
-            traced_components = self._store_transform_outputs(transformed_components)
-            return self._prepared_prompt(
-                traced_components,
-                tools=tools,
-                tool_choice=tool_choice,
-                max_tokens=max_tokens,
-                selected_model=selected_model,
-            )
+            store = self.store()
+            with store.batch() if store is not None else nullcontext():
+                stored_components = self._store_components(components)
+                transformed_components = self.transform.apply(stored_components)
+                traced_components = self._store_transform_outputs(
+                    transformed_components
+                )
+                return self._prepared_prompt(
+                    traced_components,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    max_tokens=max_tokens,
+                    selected_model=selected_model,
+                )
         except Exception as exc:
             warn_trace_failure_once("build_prompt", exc)
             messages = component_messages(components)
@@ -330,11 +337,13 @@ class PromptBuilder:
             for component in components
             if component.object_id is not None
         )
+        # The exact payload is reconstructible from the linked components;
+        # embedding it here grew the store quadratically with turns.
         prompt_id = store.put_object(
             Object(
                 kind="prompt",
                 schema="zeta.prompt.v1",
-                data={"payload": payload},
+                data={"payload_sha256": payload_sha256(payload)},
                 links=component_ids,
             )
         )
@@ -351,6 +360,13 @@ class PromptBuilder:
         )
         store.set_ref("prompt/current", prompt_id)
         return prompt_id
+
+
+def payload_sha256(payload: dict[str, Any]) -> str:
+    """Return the content address of a model request payload."""
+    return (
+        "sha256:" + hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+    )
 
 
 def tool_call_object_data(event: dict[str, Any]) -> dict[str, Any]:

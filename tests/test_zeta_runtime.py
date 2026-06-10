@@ -5,6 +5,7 @@ import re
 import shutil
 import sys
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from io import StringIO
 from pathlib import Path
 from typing import Any, cast
@@ -1855,11 +1856,13 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
     prompt = store.get_object(trace.prompt_object_id)
     assert prompt is not None
     kwargs = cast(dict[str, Any], captured["kwargs"])
-    assert prompt.data["payload"] == zeta_model.chat_completion_request_body(
-        cast(list[dict[str, Any]], captured["messages"]),
-        tools=cast(list[dict[str, Any]], kwargs["tools"]),
-        tool_choice=cast(str, kwargs["tool_choice"]),
-        selected_model="unit-model",
+    assert prompt.data["payload_sha256"] == zeta_prompt.builder.payload_sha256(
+        zeta_model.chat_completion_request_body(
+            cast(list[dict[str, Any]], captured["messages"]),
+            tools=cast(list[dict[str, Any]], kwargs["tools"]),
+            tool_choice=cast(str, kwargs["tool_choice"]),
+            selected_model="unit-model",
+        )
     )
     assistant = store.get_object(cast(str, trace.assistant_message_object_id))
     assert assistant is not None
@@ -2031,8 +2034,14 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     )
     second_prompt = store.get_object(result.prompt_traces[1].prompt_object_id)
     assert second_prompt is not None
-    second_payload = cast(dict[str, Any], second_prompt.data["payload"])
-    assert [message["role"] for message in second_payload["messages"]][-2:] == [
+    second_messages = [
+        obj.data["message"]
+        for obj in (
+            store.get_object(component_id) for component_id in second_prompt.links
+        )
+        if obj is not None and "message" in obj.data
+    ]
+    assert [message["role"] for message in second_messages][-2:] == [
         "assistant",
         "tool",
     ]
@@ -6625,3 +6634,75 @@ def test_zeta_project_context_caps_total_size(
     assert "global rules" in context
     assert "parent rules" in context
     assert "local rules" not in context
+
+
+def test_zeta_sqlite_store_batch_defers_commit(tmp_path: Path) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    reader = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+
+    with store.batch():
+        object_id = store.put_object(
+            zeta_trace.Object(kind="value", schema="v1", data={"n": 1})
+        )
+        assert reader.get_object(object_id) is None
+
+    assert reader.get_object(object_id) is not None
+
+
+class BatchSpyStore(zeta_trace.InMemoryStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.batches = 0
+
+    @contextmanager
+    def batch(self) -> Iterator[None]:
+        self.batches += 1
+        yield
+
+
+def test_zeta_prompt_build_writes_in_a_single_batch() -> None:
+    store = BatchSpyStore()
+
+    zeta_prompt.PromptBuilder(store=store).build(
+        "question",
+        [{"role": "user", "content": "prior"}],
+        allowed_tools=(),
+        tools=[],
+    )
+
+    assert store.batches == 1
+
+
+def test_zeta_record_event_writes_in_a_single_batch(monkeypatch) -> None:
+    store = BatchSpyStore()
+    monkeypatch.setattr(zeta_timeline, "default_store", lambda: store)
+
+    zeta_timeline.record_event({"type": "user_message", "content": "hello"})
+
+    assert store.batches == 1
+
+
+def test_zeta_prompt_object_stores_payload_hash_not_payload() -> None:
+    store = zeta_trace.InMemoryStore()
+
+    prepared = zeta_prompt.PromptBuilder(store=store).build(
+        "question",
+        [{"role": "user", "content": "prior"}],
+        allowed_tools=(),
+        tools=[],
+    )
+
+    assert prepared.prompt_object_id is not None
+    prompt = store.get_object(prepared.prompt_object_id)
+    assert prompt is not None
+    assert "payload" not in prompt.data
+    assert prompt.data["payload_sha256"] == zeta_prompt.builder.payload_sha256(
+        prepared.payload
+    )
+    linked = [store.get_object(component_id) for component_id in prompt.links]
+    linked_messages = [
+        obj.data["message"]
+        for obj in linked
+        if obj is not None and "message" in obj.data
+    ]
+    assert linked_messages == prepared.messages
