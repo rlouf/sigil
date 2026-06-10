@@ -1262,3 +1262,17 @@ def test_session_is_a_group_with_show_as_default() -> None:
     assert bare.output.startswith("session test")
     assert explicit.exit_code == 0
     assert explicit.output == bare.output
+
+
+def test_run_cli_passes_trailing_flags_to_the_command() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            result = CliRunner().invoke(cli, ["run", "echo", "hello", "--shell"])
+
+        assert result.exit_code == 0
+        assert result.stdout == "hello --shell\n"
+        rows = read_recent_turns(tmp)
+        assert rows[-1]["command"] == "echo hello --shell"

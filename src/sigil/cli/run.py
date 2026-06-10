@@ -44,7 +44,11 @@ class TailBuffer:
 
 @cli.command(
     "run",
-    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+    context_settings={
+        "ignore_unknown_options": True,
+        "allow_extra_args": True,
+        "allow_interspersed_args": False,
+    },
 )
 @click.pass_context
 @click.option(
@@ -55,7 +59,11 @@ class TailBuffer:
 )
 @click.argument("argv", nargs=-1, type=click.UNPROCESSED)
 def cmd_run(ctx: click.Context, use_shell: bool, argv: tuple[str, ...]) -> int:
-    """Run a command, stream output live, and record clean output snippets."""
+    """Run a command, stream output live, and record clean output snippets.
+
+    Sigil flags must come before the command; everything after the first
+    command word (or after `--`) belongs to the command itself.
+    """
     if not argv:
         raise click.UsageError("missing command to run")
 
