@@ -772,3 +772,15 @@ def test_zeta_chat_completion_messages_reports_model_telemetry(
             "model_context_tokens": 262_144,
         }
     ]
+
+
+def test_zeta_ensure_server_banner_respects_non_tty(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        zeta_model, "model_endpoint_open", lambda selected_url=None: False
+    )
+
+    assert zeta_model.ensure_server() is False
+
+    err = capsys.readouterr().err
+    assert "no OpenAI-compatible endpoint reachable" in err
+    assert "\x1b[" not in err

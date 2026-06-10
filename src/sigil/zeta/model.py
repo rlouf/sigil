@@ -16,7 +16,7 @@ from urllib.parse import urlparse, urlunparse
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from ..tty import LOVE, MUTED, RESET
+from ..tty import LOVE, RESET, muted, should_color
 
 DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
 DEFAULT_MODEL_NAME = "local-model"
@@ -714,19 +714,21 @@ def ensure_server(
     url = model_url(selected_url)
     if model_endpoint_open(selected_url):
         return True
-    print("", file=sys.stderr)
-    print(
-        f"{LOVE}✗ model: no OpenAI-compatible endpoint reachable at {url}{RESET}",
-        file=sys.stderr,
-    )
-    print("", file=sys.stderr)
-    print(f"{MUTED}  Start a local OpenAI-compatible server:", file=sys.stderr)
-    print("      llama-server \\", file=sys.stderr)
-    print(f"        -m {local_model_path()} \\", file=sys.stderr)
-    print(
+    color = should_color(sys.stderr)
+    error_line = f"✗ model: no OpenAI-compatible endpoint reachable at {url}"
+    if color:
+        error_line = f"{LOVE}{error_line}{RESET}"
+    hint_lines = [
+        "  Start a local OpenAI-compatible server:",
+        "      llama-server \\",
+        f"        -m {local_model_path()} \\",
         f"        --alias {model_name(selected_model)} --host 127.0.0.1 --port 8080 \\",
-        file=sys.stderr,
-    )
-    print(f"        -ngl 99 -c 262144 -fa on --reasoning auto{RESET}", file=sys.stderr)
+        "        -ngl 99 -c 262144 -fa on --reasoning auto",
+    ]
+    print("", file=sys.stderr)
+    print(error_line, file=sys.stderr)
+    print("", file=sys.stderr)
+    for hint_line in hint_lines:
+        print(muted(hint_line, enabled=color), file=sys.stderr)
     print("", file=sys.stderr)
     return False

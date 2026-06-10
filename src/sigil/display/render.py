@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 import time
 from typing import Any, Callable, Protocol, TextIO
@@ -15,7 +14,7 @@ from rich.markdown import Markdown
 from rich.padding import Padding
 
 from .summarize import summarize, text_content, tool_result_summary
-from ..tty import MUTED, RESET
+from ..tty import is_interactive, muted, should_color
 from ..zeta.prompt.budget import estimated_tokens_for_text
 
 TRACE_LABEL_WIDTH = 5
@@ -595,20 +594,3 @@ def thinking_status_factory(
         before_start=before_start,
         detail=detail,
     )
-
-
-def is_interactive(stream: TextIO) -> bool:
-    """Return whether a stream is attached to an interactive terminal."""
-    return bool(getattr(stream, "isatty", lambda: False)())
-
-
-def should_color(stream: TextIO) -> bool:
-    """Return whether terminal color should be emitted to a stream."""
-    return is_interactive(stream) and "NO_COLOR" not in os.environ
-
-
-def muted(text: str, *, enabled: bool) -> str:
-    """Apply muted terminal styling when color is enabled."""
-    if not enabled:
-        return text
-    return f"{MUTED}{text}{RESET}"
