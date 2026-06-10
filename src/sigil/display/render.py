@@ -604,26 +604,64 @@ TRANSCRIPT_PROMPT_ID_CHARS = 8
 
 
 def render_transcript(events: list[dict[str, Any]], *, console: Console) -> None:
-    """Render a session timeline as a conversation transcript."""
+    """Render a session timeline as a conversation transcript.
+
+    Consecutive tool exchanges stay contiguous; a blank line separates
+    everything else.
+    """
     seen_call_ids: set[str] = set()
+    pending_results = transcript_results_index(events)
+    previous_kind: str | None = None
     for event in events:
-        renderables = transcript_event_renderables(event, seen_call_ids)
+        renderables = transcript_event_renderables(
+            event,
+            seen_call_ids,
+            pending_results,
+        )
         if not renderables:
             continue
+        kind = transcript_block_kind(event)
+        if previous_kind is not None and (kind, previous_kind) != ("tool", "tool"):
+            console.print()
         for renderable in renderables:
             console.print(renderable)
-        console.print()
+        previous_kind = kind
+
+
+def transcript_block_kind(event: dict[str, Any]) -> str:
+    event_type = str(event.get("type") or "")
+    if event_type in {"tool_call", "tool_result"}:
+        return "tool"
+    if event_type == "assistant_message" and not str(event.get("content") or ""):
+        return "tool"
+    return "message"
+
+
+def transcript_results_index(
+    events: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Index tool results by call id so each renders joined to its call."""
+    index: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if str(event.get("type") or "") != "tool_result":
+            continue
+        call_id = str(event.get("tool_call_id") or "")
+        if call_id:
+            index.setdefault(call_id, event)
+    return index
 
 
 def transcript_event_renderables(
     event: dict[str, Any],
     seen_call_ids: set[str],
+    pending_results: dict[str, dict[str, Any]],
 ) -> list[Any]:
     """Map one timeline event to its transcript renderables, if any.
 
     Tool calls appear both embedded in assistant messages and as separate
     events depending on the projection path; ``seen_call_ids`` keeps each
-    call rendered once.
+    call rendered once. ``pending_results`` joins each result to its call;
+    a consumed result event renders nothing at its own position.
     """
     event_type = str(event.get("type") or "")
     if event_type in TRANSCRIPT_SKIP_EVENT_TYPES:
@@ -631,15 +669,16 @@ def transcript_event_renderables(
     if event_type == "user_message":
         return transcript_message_panel("you", "cyan", event)
     if event_type == "assistant_message":
-        return transcript_assistant_block(event, seen_call_ids)
+        return transcript_assistant_block(event, seen_call_ids, pending_results)
     if event_type == "tool_call":
         call_id = str(event.get("id") or event.get("tool_call_id") or "")
         if call_id and call_id in seen_call_ids:
             return []
+        result_event = pending_results.pop(call_id, None) if call_id else None
         name = str(event.get("name") or "")
-        return [transcript_tool_call_line(name, event.get("input"))]
+        return [transcript_tool_exchange(name, event.get("input"), result_event)]
     if event_type == "tool_result":
-        return transcript_tool_result_lines(event)
+        return transcript_unmatched_result(event, pending_results)
     if event_type == "turn_aborted":
         content = str(event.get("content") or "(turn aborted)")
         return [Text(content, style="yellow")]
@@ -649,6 +688,21 @@ def transcript_event_renderables(
         style = "cyan" if role == "user" else "white"
         return transcript_message_panel(label, style, event)
     return []
+
+
+def transcript_unmatched_result(
+    event: dict[str, Any],
+    pending_results: dict[str, dict[str, Any]],
+) -> list[Any]:
+    """Render a result only when no call consumed it from the index."""
+    call_id = str(event.get("tool_call_id") or "")
+    if call_id:
+        indexed = pending_results.get(call_id)
+        if indexed is None:
+            return []
+        if indexed is event:
+            pending_results.pop(call_id, None)
+    return transcript_tool_result_lines(event)
 
 
 def transcript_message_panel(
@@ -672,6 +726,7 @@ def transcript_message_panel(
 def transcript_assistant_block(
     event: dict[str, Any],
     seen_call_ids: set[str],
+    pending_results: dict[str, dict[str, Any]],
 ) -> list[Any]:
     renderables: list[Any] = []
     content = str(event.get("content") or "")
@@ -687,13 +742,16 @@ def transcript_assistant_block(
                 border_style="magenta",
             )
         )
-    renderables.extend(transcript_embedded_tool_calls(event, seen_call_ids))
+    renderables.extend(
+        transcript_embedded_tool_calls(event, seen_call_ids, pending_results)
+    )
     return renderables
 
 
 def transcript_embedded_tool_calls(
     event: dict[str, Any],
     seen_call_ids: set[str],
+    pending_results: dict[str, dict[str, Any]],
 ) -> list[Any]:
     tool_calls = event.get("tool_calls")
     if not isinstance(tool_calls, list):
@@ -708,9 +766,14 @@ def transcript_embedded_tool_calls(
         call_id = str(call.get("id") or "")
         if call_id:
             seen_call_ids.add(call_id)
+        result_event = pending_results.pop(call_id, None) if call_id else None
         name = str(function.get("name") or "")
         lines.append(
-            transcript_tool_call_line(name, parse_arguments(function.get("arguments")))
+            transcript_tool_exchange(
+                name,
+                parse_arguments(function.get("arguments")),
+                result_event,
+            )
         )
     return lines
 
@@ -725,8 +788,40 @@ def parse_arguments(arguments: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def transcript_tool_call_line(name: str, args: Any) -> Text:
-    return Text(f"→ {name} {summarize(name, args)}".rstrip(), style="dim")
+def transcript_tool_exchange(
+    name: str,
+    args: Any,
+    result_event: dict[str, Any] | None,
+) -> Text:
+    """Render one call joined with its result: inline when it fits one line."""
+    call_text = f"→ {name} {summarize(name, args)}".rstrip()
+    lines, failed = transcript_result_lines(name, result_event)
+    if not lines:
+        return Text(call_text, style="dim")
+    if len(lines) == 1 and not failed:
+        return Text(f"{call_text} — {lines[0]}", style="dim")
+    exchange = Text(call_text, style="dim")
+    for index, line in enumerate(lines):
+        prefix = "  ✗ " if failed and index == 0 else "    " if failed else "  "
+        exchange.append(f"\n{prefix}{line}", style="yellow" if failed else "dim")
+    return exchange
+
+
+def transcript_result_lines(
+    name: str,
+    result_event: dict[str, Any] | None,
+) -> tuple[list[str], bool]:
+    if result_event is None:
+        return [], False
+    result = result_event.get("result")
+    if not isinstance(result, dict):
+        return [], False
+    lines = tool_result_summary(name or str(result_event.get("name") or ""), result)
+    failed = result.get("ok") is False
+    if failed and lines and name:
+        # The call line above names the tool and the ✗ marks the failure.
+        lines = [lines[0].removeprefix(f"{name}-failed: "), *lines[1:]]
+    return lines, failed
 
 
 def transcript_tool_result_lines(event: dict[str, Any]) -> list[Any]:

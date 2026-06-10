@@ -402,6 +402,148 @@ def test_transcript_renders_conversation_blocks() -> None:
     assert "╭" in text
 
 
+def test_transcript_joins_results_to_their_calls() -> None:
+    output, console = transcript_console()
+    events = [
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "grep",
+            "input": {"pattern": "todo"},
+        },
+        {
+            "type": "tool_call",
+            "id": "call-2",
+            "name": "ls",
+            "input": {"path": "src"},
+        },
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-2",
+            "result": {"ok": True, "metadata": {"entries": 4}},
+        },
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "result": {"ok": True, "metadata": {"matches": 0}},
+        },
+    ]
+
+    display_render.render_transcript(events, console=console)
+    text = output.getvalue()
+
+    assert "grep todo — 0 matches" in text
+    assert "ls src — 4 entries" in text
+    assert text.count("0 matches") == 1
+    assert text.count("4 entries") == 1
+
+
+def test_transcript_drops_failed_results_to_marked_lines() -> None:
+    output, console = transcript_console()
+    events = [
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "read",
+            "input": {"path": "skills/voice"},
+        },
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "result": {"ok": False, "message": "[Errno 21] Is a directory"},
+        },
+    ]
+
+    display_render.render_transcript(events, console=console)
+    text = output.getvalue()
+
+    assert "→ read skills/voice" in text
+    assert "✗ [Errno 21] Is a directory" in text
+    assert "—" not in text
+
+
+def test_transcript_strips_redundant_failure_prefix_when_joined() -> None:
+    output, console = transcript_console()
+    events = [
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "read",
+            "input": {"path": "skills/voice"},
+        },
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "result": {
+                "ok": False,
+                "error": {
+                    "code": "read-failed",
+                    "message": "[Errno 21] Is a directory",
+                },
+            },
+        },
+    ]
+
+    display_render.render_transcript(events, console=console)
+    text = output.getvalue()
+
+    assert "✗ [Errno 21] Is a directory" in text
+    assert "read-failed" not in text
+
+
+def test_transcript_keeps_tool_exchanges_contiguous() -> None:
+    output, console = transcript_console()
+    events = [
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "name": "grep",
+            "input": {"pattern": "todo"},
+        },
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "result": {"ok": True, "metadata": {"matches": 0}},
+        },
+        {
+            "type": "tool_call",
+            "id": "call-2",
+            "name": "ls",
+            "input": {"path": "src"},
+        },
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-2",
+            "result": {"ok": True, "metadata": {"entries": 4}},
+        },
+        {"type": "assistant_message", "content": "done"},
+    ]
+
+    display_render.render_transcript(events, console=console)
+    text = output.getvalue()
+
+    assert "→ grep todo — 0 matches\n→ ls src — 4 entries\n\n" in text
+
+
+def test_transcript_renders_unmatched_results_standalone() -> None:
+    output, console = transcript_console()
+    events = [
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-9",
+            "name": "read",
+            "result": {
+                "ok": True,
+                "content": [{"type": "text", "text": "line one\nline two"}],
+            },
+        },
+    ]
+
+    display_render.render_transcript(events, console=console)
+
+    assert "2 lines" in output.getvalue()
+
+
 def test_transcript_renders_tool_calls_embedded_in_assistant_messages() -> None:
     output, console = transcript_console()
     events = [
