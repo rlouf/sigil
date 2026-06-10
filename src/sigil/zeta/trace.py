@@ -83,20 +83,67 @@ def latest_prompt_trace_fields(
     return {"prompt_trace": prompt_trace_payload(trace)}
 
 
+class UnknownIdError(LookupError):
+    """A trace id token matched no ref, object id, or prefix."""
+
+    def __init__(self, token: str) -> None:
+        super().__init__(token)
+        self.token = token
+
+
+class AmbiguousIdError(LookupError):
+    """A trace id prefix matched more than one object."""
+
+    def __init__(self, token: str, candidates: list[ObjectId]) -> None:
+        super().__init__(token)
+        self.token = token
+        self.candidates = candidates
+
+
 class Store(Protocol):
     """Storage API shared by in-memory and SQLite stores."""
 
     def put_object(self, obj: Object) -> ObjectId: ...
     def get_object(self, object_id: ObjectId) -> Object | None: ...
+    def object_ids_with_prefix(
+        self, prefix: str, limit: int = 16
+    ) -> list[ObjectId]: ...
     def set_ref(self, name: str, object_id: ObjectId) -> None: ...
     def get_ref(self, name: str) -> ObjectId | None: ...
     def batch(self) -> AbstractContextManager[None]: ...
     def record_derivation(self, derivation: Derivation) -> str: ...
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]: ...
+    def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]: ...
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]: ...
     def refs(self) -> dict[str, ObjectId]: ...
+    def objects(
+        self, kind: str | None = None, limit: int | None = None
+    ) -> list[tuple[ObjectId, Object]]: ...
     def prompt_object_ids(self) -> list[ObjectId]: ...
     def stats(self) -> TraceStats: ...
+
+
+def resolve_object_id(store: Store, token: str) -> ObjectId:
+    """Resolve a ref name, full object id, or unique id prefix to an object id.
+
+    A bare hex token matches the digest part, so `sha256:` never needs
+    typing. Refs win over prefixes; an ambiguous prefix raises with the
+    candidate ids.
+    """
+    if not token:
+        raise UnknownIdError(token)
+    ref_target = store.get_ref(token)
+    if ref_target is not None:
+        return ref_target
+    if store.get_object(token) is not None:
+        return token
+    prefix = token if token.startswith("sha256:") else f"sha256:{token}"
+    candidates = store.object_ids_with_prefix(prefix)
+    if len(candidates) == 1:
+        return candidates[0]
+    if candidates:
+        raise AmbiguousIdError(token, candidates)
+    raise UnknownIdError(token)
 
 
 def default_sqlite_path() -> Path:
@@ -198,6 +245,10 @@ def normalize_json(value: Any) -> Any:
 class StoreBase:
     """Shared graph helpers for concrete stores."""
 
+    def prompt_object_ids(self) -> list[ObjectId]:
+        store = cast(Store, self)
+        return [object_id_value for object_id_value, _ in store.objects(kind="prompt")]
+
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]:
         store = cast(Store, self)
         closure: dict[ObjectId, Object] = {}
@@ -218,18 +269,36 @@ class InMemoryStore(StoreBase):
     """Process-local trace store for tests and short-lived traces."""
 
     def __init__(self) -> None:
-        self.objects: dict[ObjectId, Object] = {}
+        self._objects: dict[ObjectId, Object] = {}
         self._refs: dict[str, ObjectId] = {}
         self.derivations: dict[str, Derivation] = {}
 
     def put_object(self, obj: Object) -> ObjectId:
         stored = normalize_object(obj)
         object_id_value = object_id(stored)
-        self.objects.setdefault(object_id_value, stored)
+        self._objects.setdefault(object_id_value, stored)
         return object_id_value
 
     def get_object(self, object_id: ObjectId) -> Object | None:
-        return self.objects.get(object_id)
+        return self._objects.get(object_id)
+
+    def object_ids_with_prefix(self, prefix: str, limit: int = 16) -> list[ObjectId]:
+        matches = sorted(
+            object_id_value
+            for object_id_value in self._objects
+            if object_id_value.startswith(prefix)
+        )
+        return matches[:limit]
+
+    def objects(
+        self, kind: str | None = None, limit: int | None = None
+    ) -> list[tuple[ObjectId, Object]]:
+        listed = [
+            (object_id_value, obj)
+            for object_id_value, obj in reversed(self._objects.items())
+            if kind is None or obj.kind == kind
+        ]
+        return listed if limit is None else listed[:limit]
 
     def set_ref(self, name: str, object_id: ObjectId) -> None:
         self._refs[name] = object_id
@@ -254,22 +323,22 @@ class InMemoryStore(StoreBase):
             if derivation.output_id == output_id
         ]
 
+    def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]:
+        return [
+            derivation
+            for derivation in self.derivations.values()
+            if input_id in derivation.input_ids
+        ]
+
     def refs(self) -> dict[str, ObjectId]:
         return dict(sorted(self._refs.items()))
 
-    def prompt_object_ids(self) -> list[ObjectId]:
-        return [
-            object_id_value
-            for object_id_value, obj in reversed(self.objects.items())
-            if obj.kind == "prompt"
-        ]
-
     def stats(self) -> TraceStats:
         return TraceStats(
-            object_count=len(self.objects),
+            object_count=len(self._objects),
             total_bytes=sum(
                 len(canonical_json(object_payload(obj)).encode("utf-8"))
-                for obj in self.objects.values()
+                for obj in self._objects.values()
             ),
         )
 
@@ -332,9 +401,53 @@ class SqliteStore(StoreBase):
                 );
                 CREATE INDEX IF NOT EXISTS derivations_output_id_idx
                   ON derivations(output_id, created_at);
+                CREATE TABLE IF NOT EXISTS derivation_inputs (
+                  derivation_id TEXT NOT NULL,
+                  input_id TEXT NOT NULL,
+                  position INTEGER NOT NULL,
+                  PRIMARY KEY (derivation_id, position)
+                );
+                CREATE INDEX IF NOT EXISTS derivation_inputs_input_id_idx
+                  ON derivation_inputs(input_id);
                 """
             )
             self.connection.commit()
+            self._backfill_derivation_inputs()
+
+    def _backfill_derivation_inputs(self) -> None:
+        """Index pre-existing derivations whose inputs predate the table."""
+        with self._write_lock:
+            indexed = self.connection.execute(
+                "SELECT COUNT(*) AS n FROM derivation_inputs"
+            ).fetchone()
+            if int(indexed["n"]):
+                return
+            rows = self.connection.execute(
+                "SELECT id, input_ids_json FROM derivations"
+            ).fetchall()
+            for row in rows:
+                self._index_derivation_inputs(
+                    str(row["id"]),
+                    tuple(json.loads(str(row["input_ids_json"]))),
+                )
+            self.connection.commit()
+
+    def _index_derivation_inputs(
+        self,
+        derivation_id_value: str,
+        input_ids: tuple[ObjectId, ...],
+    ) -> None:
+        self.connection.executemany(
+            """
+            INSERT OR IGNORE INTO derivation_inputs
+              (derivation_id, input_id, position)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (derivation_id_value, input_id, position)
+                for position, input_id in enumerate(input_ids)
+            ],
+        )
 
     def put_object(self, obj: Object) -> ObjectId:
         stored = normalize_object(obj)
@@ -370,6 +483,14 @@ class SqliteStore(StoreBase):
             data=json.loads(str(row["data_json"])),
             links=tuple(json.loads(str(row["links_json"]))),
         )
+
+    def object_ids_with_prefix(self, prefix: str, limit: int = 16) -> list[ObjectId]:
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = self.connection.execute(
+            r"SELECT id FROM objects WHERE id LIKE ? ESCAPE '\' ORDER BY id LIMIT ?",
+            (f"{escaped}%", limit),
+        ).fetchall()
+        return [str(row["id"]) for row in rows]
 
     def set_ref(self, name: str, object_id: ObjectId) -> None:
         with self._write_lock:
@@ -410,6 +531,7 @@ class SqliteStore(StoreBase):
                     time.time(),
                 ),
             )
+            self._index_derivation_inputs(id_value, stored.input_ids)
             self._commit()
         return id_value
 
@@ -433,24 +555,67 @@ class SqliteStore(StoreBase):
             for row in rows
         ]
 
+    def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]:
+        rows = self.connection.execute(
+            """
+            SELECT derivations.producer, derivations.output_id,
+                   derivations.input_ids_json, derivations.params_json
+            FROM derivations
+            JOIN derivation_inputs
+              ON derivation_inputs.derivation_id = derivations.id
+            WHERE derivation_inputs.input_id = ?
+            GROUP BY derivations.id
+            ORDER BY derivations.created_at, derivations.id
+            """,
+            (input_id,),
+        ).fetchall()
+        return [
+            Derivation(
+                producer=str(row["producer"]),
+                output_id=str(row["output_id"]),
+                input_ids=tuple(json.loads(str(row["input_ids_json"]))),
+                params=json.loads(str(row["params_json"])),
+            )
+            for row in rows
+        ]
+
     def refs(self) -> dict[str, ObjectId]:
         rows = self.connection.execute(
             "SELECT name, object_id FROM refs ORDER BY name"
         ).fetchall()
         return {str(row["name"]): str(row["object_id"]) for row in rows}
 
-    def prompt_object_ids(self) -> list[ObjectId]:
+    def objects(
+        self, kind: str | None = None, limit: int | None = None
+    ) -> list[tuple[ObjectId, Object]]:
+        kind_filter = "WHERE objects.kind = ?" if kind is not None else ""
+        limit_clause = "LIMIT ?" if limit is not None else ""
+        params: list[Any] = [value for value in (kind, limit) if value is not None]
         rows = self.connection.execute(
-            """
-            SELECT objects.id
+            f"""
+            SELECT objects.id, objects.kind, objects.schema,
+                   objects.data_json, objects.links_json
             FROM objects
             LEFT JOIN derivations ON derivations.output_id = objects.id
-            WHERE objects.kind = 'prompt'
+            {kind_filter}
             GROUP BY objects.id
             ORDER BY COALESCE(MAX(derivations.created_at), 0) DESC, objects.id DESC
-            """
+            {limit_clause}
+            """,
+            params,
         ).fetchall()
-        return [str(row["id"]) for row in rows]
+        return [
+            (
+                str(row["id"]),
+                Object(
+                    kind=str(row["kind"]),
+                    schema=str(row["schema"]),
+                    data=json.loads(str(row["data_json"])),
+                    links=tuple(json.loads(str(row["links_json"]))),
+                ),
+            )
+            for row in rows
+        ]
 
     def stats(self) -> TraceStats:
         row = self.connection.execute(

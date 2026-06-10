@@ -428,3 +428,249 @@ def test_zeta_record_event_writes_in_a_single_batch(monkeypatch) -> None:
     zeta_timeline.record_event({"type": "user_message", "content": "hello"})
 
     assert store.batches == 1
+
+
+def test_zeta_trace_sqlite_answers_forward_derivation_queries(
+    tmp_path: Path,
+) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    first_input = store.put_object(
+        zeta_trace.Object(kind="component", schema="v1", data={"text": "a"})
+    )
+    second_input = store.put_object(
+        zeta_trace.Object(kind="component", schema="v1", data={"text": "b"})
+    )
+    output = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "out"})
+    )
+    store.record_derivation(
+        zeta_trace.Derivation(
+            producer="test:v1",
+            output_id=output,
+            input_ids=(first_input, second_input),
+        )
+    )
+
+    (derivation,) = store.derivations_for_input(first_input)
+
+    assert derivation.output_id == output
+    assert derivation.input_ids == (first_input, second_input)
+    assert store.derivations_for_input(output) == []
+    store.close()
+
+
+def test_zeta_inmemory_store_answers_forward_derivation_queries() -> None:
+    store = zeta_trace.InMemoryStore()
+    store.record_derivation(
+        zeta_trace.Derivation(
+            producer="test:v1",
+            output_id="sha256:out",
+            input_ids=("sha256:in",),
+        )
+    )
+
+    (derivation,) = store.derivations_for_input("sha256:in")
+
+    assert derivation.output_id == "sha256:out"
+    assert store.derivations_for_input("sha256:out") == []
+
+
+def test_zeta_trace_dedupes_forward_rows_for_repeated_derivations(
+    tmp_path: Path,
+) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    derivation = zeta_trace.Derivation(
+        producer="test:v1",
+        output_id="sha256:out",
+        input_ids=("sha256:in", "sha256:in"),
+    )
+
+    store.record_derivation(derivation)
+    store.record_derivation(derivation)
+
+    assert len(store.derivations_for_input("sha256:in")) == 1
+    store.close()
+
+
+def test_zeta_trace_backfills_derivation_inputs_on_open(tmp_path: Path) -> None:
+    path = tmp_path / "trace.sqlite3"
+    store = zeta_trace.SqliteStore(path)
+    derivation = zeta_trace.Derivation(
+        producer="legacy:v1",
+        output_id="sha256:out",
+        input_ids=("sha256:in",),
+    )
+    store.connection.execute(
+        """
+        INSERT INTO derivations
+          (id, producer, output_id, input_ids_json, params_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            zeta_trace.derivation_id(derivation),
+            derivation.producer,
+            derivation.output_id,
+            json.dumps(list(derivation.input_ids)),
+            "{}",
+            1.0,
+        ),
+    )
+    store.connection.commit()
+    assert store.derivations_for_input("sha256:in") == []
+    store.close()
+
+    reopened = zeta_trace.SqliteStore(path)
+
+    (recovered,) = reopened.derivations_for_input("sha256:in")
+    assert recovered.producer == "legacy:v1"
+    assert recovered.output_id == "sha256:out"
+    reopened.close()
+
+
+def test_zeta_trace_resolves_refs_full_ids_and_prefixes(tmp_path: Path) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    object_id = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "target"})
+    )
+    store.set_ref("prompt/current", object_id)
+    digest = object_id.removeprefix("sha256:")
+
+    assert zeta_trace.resolve_object_id(store, "prompt/current") == object_id
+    assert zeta_trace.resolve_object_id(store, object_id) == object_id
+    assert zeta_trace.resolve_object_id(store, object_id[:15]) == object_id
+    assert zeta_trace.resolve_object_id(store, digest[:8]) == object_id
+    store.close()
+
+
+def test_zeta_trace_resolver_prefers_refs_over_prefixes() -> None:
+    store = zeta_trace.InMemoryStore()
+    obj = zeta_trace.Object(kind="prompt", schema="v1", data={"text": "x"})
+    store._objects["sha256:aaaa1111"] = obj
+    store._objects["sha256:bbbb2222"] = obj
+    store.set_ref("aaaa", "sha256:bbbb2222")
+
+    assert zeta_trace.resolve_object_id(store, "aaaa") == "sha256:bbbb2222"
+
+
+def test_zeta_trace_resolver_rejects_ambiguous_prefixes() -> None:
+    store = zeta_trace.InMemoryStore()
+    obj = zeta_trace.Object(kind="prompt", schema="v1", data={"text": "x"})
+    store._objects["sha256:aaaa1111"] = obj
+    store._objects["sha256:aaaa2222"] = obj
+
+    with pytest.raises(zeta_trace.AmbiguousIdError) as excinfo:
+        zeta_trace.resolve_object_id(store, "aaaa")
+
+    assert set(excinfo.value.candidates) == {"sha256:aaaa1111", "sha256:aaaa2222"}
+
+
+def test_zeta_trace_resolver_raises_for_unknown_tokens() -> None:
+    store = zeta_trace.InMemoryStore()
+
+    with pytest.raises(zeta_trace.UnknownIdError):
+        zeta_trace.resolve_object_id(store, "missing")
+    with pytest.raises(zeta_trace.UnknownIdError):
+        zeta_trace.resolve_object_id(store, "")
+
+
+def test_zeta_trace_prefix_matching_treats_like_wildcards_literally(
+    tmp_path: Path,
+) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store.put_object(zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1}))
+
+    assert store.object_ids_with_prefix("sha256:%") == []
+    assert store.object_ids_with_prefix("sha256:_") == []
+    store.close()
+
+
+def test_zeta_trace_lists_objects_by_derivation_recency(tmp_path: Path) -> None:
+    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    old = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "old"})
+    )
+    new = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"text": "new"})
+    )
+    underived = store.put_object(
+        zeta_trace.Object(kind="component", schema="v1", data={"text": "loose"})
+    )
+    for output_id, created_at in ((old, 1.0), (new, 2.0)):
+        derivation = zeta_trace.Derivation(producer="test:v1", output_id=output_id)
+        store.connection.execute(
+            """
+            INSERT INTO derivations
+              (id, producer, output_id, input_ids_json, params_json, created_at)
+            VALUES (?, ?, ?, '[]', '{}', ?)
+            """,
+            (zeta_trace.derivation_id(derivation), "test:v1", output_id, created_at),
+        )
+    store.connection.commit()
+
+    listed = [object_id for object_id, _ in store.objects()]
+
+    assert listed == [new, old, underived]
+    assert [object_id for object_id, _ in store.objects(kind="prompt")] == [new, old]
+    assert [object_id for object_id, _ in store.objects(limit=1)] == [new]
+    assert store.prompt_object_ids() == [new, old]
+    store.close()
+
+
+def test_zeta_inmemory_store_lists_objects_newest_first() -> None:
+    store = zeta_trace.InMemoryStore()
+    first = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
+    )
+    second = store.put_object(
+        zeta_trace.Object(kind="component", schema="v1", data={"n": 2})
+    )
+    third = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="v1", data={"n": 3})
+    )
+
+    assert [object_id for object_id, _ in store.objects()] == [third, second, first]
+    assert [object_id for object_id, _ in store.objects(kind="prompt", limit=1)] == [
+        third
+    ]
+    assert store.prompt_object_ids() == [third, first]
+
+
+def test_sigil_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
+    store = zeta_trace.InMemoryStore()
+    prompt_id = store.put_object(
+        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={"n": 1})
+    )
+    store.set_ref("prompt/current", prompt_id)
+    digest_prefix = prompt_id.removeprefix("sha256:")[:8]
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+
+    runner = CliRunner()
+    by_ref = runner.invoke(sigil_cli, ["zeta", "trace", "show", "prompt/current"])
+    by_prefix = runner.invoke(sigil_cli, ["zeta", "trace", "show", digest_prefix])
+    closure = runner.invoke(sigil_cli, ["zeta", "trace", "closure", digest_prefix])
+
+    assert by_ref.exit_code == 0
+    assert json.loads(by_ref.output)["id"] == prompt_id
+    assert by_prefix.exit_code == 0
+    assert json.loads(by_prefix.output)["id"] == prompt_id
+    assert closure.exit_code == 0
+
+
+def test_sigil_zeta_trace_cli_reports_ambiguous_and_unknown_ids(
+    monkeypatch,
+) -> None:
+    store = zeta_trace.InMemoryStore()
+    obj = zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
+    store._objects["sha256:aaaa1111"] = obj
+    store._objects["sha256:aaaa2222"] = obj
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+
+    runner = CliRunner()
+    ambiguous = runner.invoke(sigil_cli, ["zeta", "trace", "show", "aaaa"])
+    unknown = runner.invoke(sigil_cli, ["zeta", "trace", "show", "ffff"])
+
+    assert ambiguous.exit_code != 0
+    assert "sha256:aaaa1111" in ambiguous.output
+    assert "sha256:aaaa2222" in ambiguous.output
+    assert unknown.exit_code != 0
+    assert "ffff" in unknown.output

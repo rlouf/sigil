@@ -9,11 +9,14 @@ import click
 
 from ..zeta.prompt import estimated_tokens_for_text
 from ..zeta.trace import (
+    AmbiguousIdError,
     ObjectId,
     Store,
+    UnknownIdError,
     default_store,
     derivation_payload,
     object_payload,
+    resolve_object_id,
 )
 from ._base import cli
 from ._shared import pretty_print_json
@@ -32,8 +35,12 @@ def trace_group() -> None:
 @trace_group.command("show")
 @click.argument("object_id")
 def trace_show(object_id: str) -> int:
-    """Show one trace object with its derivations."""
-    data = get_trace_object(object_id)
+    """Show one trace object with its derivations.
+
+    OBJECT_ID may be a ref name, a full id, or a unique id prefix.
+    """
+    resolved = resolve_cli_object_id(object_id)
+    data = get_trace_object(resolved)
     if data is None:
         raise click.ClickException(f"trace object not found: {object_id}")
     pretty_print_json(data)
@@ -43,9 +50,25 @@ def trace_show(object_id: str) -> int:
 @trace_group.command("closure")
 @click.argument("object_id")
 def trace_closure(object_id: str) -> int:
-    """List every object reachable from a trace object."""
-    pretty_print_json({"objects": list_trace_closure(object_id)})
+    """List every object reachable from a trace object.
+
+    OBJECT_ID may be a ref name, a full id, or a unique id prefix.
+    """
+    pretty_print_json({"objects": list_trace_closure(resolve_cli_object_id(object_id))})
     return 0
+
+
+def resolve_cli_object_id(token: str, *, store: Store | None = None) -> ObjectId:
+    """Resolve a CLI id token, mapping resolver errors onto CLI errors."""
+    try:
+        return resolve_object_id(store or default_store(), token)
+    except AmbiguousIdError as error:
+        candidates = "\n  ".join(error.candidates)
+        raise click.ClickException(
+            f"ambiguous trace id '{token}' matches:\n  {candidates}"
+        ) from error
+    except UnknownIdError as error:
+        raise click.ClickException(f"trace object not found: {token}") from error
 
 
 @trace_group.command("refs")

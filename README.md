@@ -297,7 +297,7 @@ sigil status [--json]
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear|transcript] [--json]
 sigil model [list|use|show|clear]
-sigil zeta trace [show|closure|refs|prompts]
+sigil zeta trace [show|closure|refs|prompts]  # ids accept ref names and unique prefixes
 sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
