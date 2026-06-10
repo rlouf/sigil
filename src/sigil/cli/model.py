@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import click
 
 from ..zeta import model as zeta_model
@@ -56,6 +58,11 @@ def cmd_model_use(name: str) -> int:
         raise click.ClickException(f"unknown model profile: {name}")
     set_active_model_profile(selection.profile)
     click.echo(f"model: {selection.profile} -> {selection.model} @ {selection.url}")
+    if not os.environ.get("SIGIL_SESSION_ID"):
+        click.echo(
+            'no shell session detected; the selection applies to session "default"',
+            err=True,
+        )
     return 0
 
 

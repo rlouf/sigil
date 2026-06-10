@@ -784,3 +784,33 @@ def test_zeta_ensure_server_banner_respects_non_tty(monkeypatch, capsys) -> None
     err = capsys.readouterr().err
     assert "no OpenAI-compatible endpoint reachable" in err
     assert "\x1b[" not in err
+
+
+def test_zeta_model_use_without_shell_session_notes_default_scope(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "fast"
+model = "fast-model"
+url = "http://127.0.0.1:8081/v1/chat/completions"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("SIGIL_SESSION_ID", raising=False)
+
+    result = CliRunner().invoke(sigil_cli, ["model", "use", "fast"])
+
+    assert result.exit_code == 0, result.output
+    assert "model: fast -> fast-model" in result.stdout
+    assert 'applies to session "default"' in result.stderr
+
+    monkeypatch.setenv("SIGIL_SESSION_ID", "bound")
+    bound = CliRunner().invoke(sigil_cli, ["model", "use", "fast"])
+    assert bound.exit_code == 0, bound.output
+    assert "default" not in bound.stderr

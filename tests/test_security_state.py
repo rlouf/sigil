@@ -1311,3 +1311,13 @@ def test_unsafe_session_id_maps_deterministically(
     assert first != other
     assert "/" not in first
     assert first not in {".", ".."}
+
+
+def test_session_list_reports_when_no_sessions_exist() -> None:
+    text = CliRunner().invoke(cli, ["session", "list"])
+    listed = CliRunner().invoke(cli, ["session", "list", "--json"])
+
+    assert text.exit_code == 0
+    assert "no sessions recorded" in text.output
+    assert listed.exit_code == 0
+    assert json.loads(listed.stdout) == []

@@ -69,6 +69,9 @@ def print_session_list(json_output: bool) -> int:
     if json_output:
         pretty_print_json(sessions)
         return 0
+    if not sessions:
+        print("no sessions recorded")
+        return 0
     for session in sessions:
         parts = [
             str(session["session_id"]),
