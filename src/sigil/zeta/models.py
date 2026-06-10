@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import os
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ..state import read_json, remove_json, write_json
-from .model import model_name, model_url
 
 ACTIVE_MODEL_STATE = "active-model.json"
 MODEL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
+DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
+DEFAULT_MODEL_NAME = "local-model"
+
+ModelSource = Literal["session", "env"]
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,31 @@ class ModelSelection:
     profile: str
     model: str
     url: str
+
+
+@dataclass(frozen=True)
+class ModelResolution:
+    selection: ModelSelection
+    source: ModelSource
+
+
+def model_url(selected_url: str | None = None) -> str:
+    """Return the OpenAI-compatible chat completions endpoint."""
+    if selected_url:
+        return selected_url
+    return model_url_from_env(os.environ)
+
+
+def model_name(selected_model: str | None = None) -> str:
+    """Return the model name sent to the configured endpoint."""
+    if selected_model:
+        return selected_model
+    return os.environ.get("ZETA_MODEL_NAME") or DEFAULT_MODEL_NAME
+
+
+def model_url_from_env(env: Mapping[str, str]) -> str:
+    """Return the configured model URL from explicit environment values."""
+    return env.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
 
 
 def user_models_config_path() -> Path:
@@ -123,6 +153,14 @@ def clear_active_model_profile() -> bool:
 def default_model_selection() -> ModelSelection:
     """Return a display-friendly selection for the default environment model."""
     return ModelSelection(profile="default", model=model_name(), url=model_url())
+
+
+def resolve_active_model() -> ModelResolution:
+    """Resolve the model the next request will use, and where it came from."""
+    selection = active_model_selection()
+    if selection is not None:
+        return ModelResolution(selection=selection, source="session")
+    return ModelResolution(selection=default_model_selection(), source="env")
 
 
 def model_selection_event(selection: ModelSelection | None) -> dict[str, str]:

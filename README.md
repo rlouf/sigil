@@ -137,6 +137,15 @@ The selected profile is scoped to the current `SIGIL_SESSION_ID`, so another
 terminal keeps its own model selection. Clearing the profile returns the session
 to `ZETA_MODEL_NAME` and `ZETA_MODEL_URL`.
 
+`?` always shows the model the next request will use and where the selection
+comes from — `(session)` for a profile selected with `sigil model use`,
+`(env)` for the `ZETA_MODEL_*` defaults:
+
+```text
+clean
+model: fast -> qwen2.5-coder @ http://127.0.0.1:8080/v1/chat/completions (session)
+```
+
 ## Quick Start
 
 Once the shell binding is installed, use the glyphs directly:
@@ -207,7 +216,7 @@ Installed zsh bindings expose these shortcuts:
 | `,,` | propose | Run until Sigil can stage reviewed shell work or return an answer. |
 | `,,,` | do | Run auto-approved tool calls until no more are needed. |
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
-| `?` | status | Show the current session status. |
+| `?` | status | Show the current session status and the active model. |
 
 Examples:
 

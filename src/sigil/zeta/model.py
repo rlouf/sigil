@@ -17,9 +17,8 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
 from ..display.tty import LOVE, RESET, muted, should_color
+from .models import model_name, model_url
 
-DEFAULT_MODEL_URL = "http://127.0.0.1:8080/v1/chat/completions"
-DEFAULT_MODEL_NAME = "local-model"
 DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS = 120.0
 DEFAULT_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS = 600.0
 MODEL_METADATA_TIMEOUT_SECONDS = 0.5
@@ -36,25 +35,6 @@ class ChatCompletionStreamSink(Protocol):
     def content_delta(self, text: str) -> None:
         """Handle one visible assistant text delta."""
         ...
-
-
-def model_url(selected_url: str | None = None) -> str:
-    """Return the OpenAI-compatible chat completions endpoint."""
-    if selected_url:
-        return selected_url
-    return model_url_from_env(os.environ)
-
-
-def model_name(selected_model: str | None = None) -> str:
-    """Return the model name sent to the configured endpoint."""
-    if selected_model:
-        return selected_model
-    return os.environ.get("ZETA_MODEL_NAME") or DEFAULT_MODEL_NAME
-
-
-def model_url_from_env(env: Mapping[str, str]) -> str:
-    """Return the configured model URL from explicit environment values."""
-    return env.get("ZETA_MODEL_URL") or DEFAULT_MODEL_URL
 
 
 def stream_timeout_from_env(

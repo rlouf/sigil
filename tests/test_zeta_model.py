@@ -31,8 +31,8 @@ def test_zeta_model_config_uses_zeta_env(monkeypatch) -> None:
     monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
     monkeypatch.delenv("ZETA_MODEL_IDLE_TIMEOUT_SECONDS", raising=False)
 
-    assert zeta_model.model_url() == zeta_model.DEFAULT_MODEL_URL
-    assert zeta_model.model_name() == zeta_model.DEFAULT_MODEL_NAME
+    assert zeta_model.model_url() == zeta_models.DEFAULT_MODEL_URL
+    assert zeta_model.model_name() == zeta_models.DEFAULT_MODEL_NAME
     assert (
         zeta_model.model_idle_timeout() == zeta_model.DEFAULT_MODEL_IDLE_TIMEOUT_SECONDS
     )
@@ -628,6 +628,66 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     clear = CliRunner().invoke(sigil_cli, ["model", "clear"])
     assert clear.exit_code == 0, clear.output
     assert zeta_models.active_model_profile() is None
+
+
+def test_zeta_models_resolve_active_model_reports_session_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "fast"
+model = "fast-model"
+url = "http://127.0.0.1:8081/v1/chat/completions"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "resolution-session")
+    zeta_models.set_active_model_profile("fast")
+
+    resolution = zeta_models.resolve_active_model()
+
+    assert resolution.source == "session"
+    assert resolution.selection == zeta_models.ModelSelection(
+        profile="fast",
+        model="fast-model",
+        url="http://127.0.0.1:8081/v1/chat/completions",
+    )
+
+
+def test_zeta_models_resolve_active_model_defaults_to_env(monkeypatch) -> None:
+    monkeypatch.setenv("ZETA_MODEL_NAME", "env-model")
+    monkeypatch.setenv("ZETA_MODEL_URL", "http://env.invalid/v1/chat/completions")
+
+    resolution = zeta_models.resolve_active_model()
+
+    assert resolution.source == "env"
+    assert resolution.selection == zeta_models.ModelSelection(
+        profile="default",
+        model="env-model",
+        url="http://env.invalid/v1/chat/completions",
+    )
+
+
+def test_zeta_models_resolve_active_model_survives_vanished_profile(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(home, "")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "stale-session")
+    monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
+    monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
+    zeta_models.set_active_model_profile("gone")
+
+    resolution = zeta_models.resolve_active_model()
+
+    assert resolution.source == "env"
+    assert resolution.selection.profile == "default"
 
 
 def test_sigil_model_cli_rejects_unknown_profile(

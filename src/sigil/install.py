@@ -16,10 +16,9 @@ from .state import state_dir
 from .zeta.model import (
     endpoint_reachable,
     model_endpoint_valid,
-    model_url,
-    model_url_from_env,
     request_model_metadata,
 )
+from .zeta.models import model_url, model_url_from_env
 
 BINDING_NAME = "sigil.zsh"
 
