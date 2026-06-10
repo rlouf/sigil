@@ -205,9 +205,7 @@ Examples:
 ?
 ```
 
-`,` prints a read-only answer. It does not stage commands or write to the
-shell history file; the prompt stays recallable with up-arrow for the rest of
-the session.
+`,` prints a read-only answer. It does not stage commands.
 
 `,,` proposes the next reviewed step. The loop may call local
 tools such as `read`, `ls`, `grep`, `bash`, `edit`, and `write` until the model
@@ -230,6 +228,11 @@ can be written naturally:
 + cargo test --all | tee test.log
 + git status --short > status.txt
 ```
+
+The capture happens in the line editor (a zle widget), and the command runs
+inside it: job control does not apply, so Ctrl-Z cannot suspend a `+` command
+and it never appears in `jobs`. The widget is also the only `+` path — in
+scripts and non-interactive shells, `+` does not dispatch.
 
 From Bash or scripts, `sigil run COMMAND [ARGS...]` keeps argv-style execution.
 Use `sigil run --shell 'COMMAND | WITH SHELL GRAMMAR'` when you need shell

@@ -204,6 +204,13 @@ sigil_status() {
 
 # ── zsh Raw Plus Capture ─────────────────────────────────────────────────
 
+# The accept-line widget is the only `+` path. It captures the raw buffer
+# before zsh parses it and hands the whole line to `sigil run --shell`, so
+# pipes, redirections, and multiline buffers stay part of the captured
+# command. The command runs inside the line editor, which means no job
+# control: Ctrl-Z cannot suspend it and it never appears in `jobs`. Outside
+# zle (scripts, non-interactive shells) `+` does not dispatch; call
+# `sigil_run` or the CLI directly there.
 typeset -g __sigil_plus_capture_widget_installed="${__sigil_plus_capture_widget_installed:-0}"
 
 __sigil_plus_capture_command() {
@@ -263,19 +270,19 @@ __sigil_install_plus_capture_widget() {
 
 if __sigil_glyphs_enabled; then
   # Function definitions make the punctuation usable in non-alias contexts.
+  # `+` deliberately has neither a function nor an alias: the accept-line
+  # widget is its only path, so a `+ ...` line always keeps shell grammar
+  # intact instead of being parsed by zsh when the widget would not run.
   function ',' { sigil_command "$@" }
   function ',,' { sigil_agent_step "$@" }
   function ',,,' { sigil_agent_step_auto "$@" }
-  function '+' { sigil_run "$@" }
   function '?' { sigil_status "$@" }
 
   # Aliases keep zsh from treating user prompts as glob patterns before our
-  # functions receive them. `alias --` is required for `+` because zsh otherwise
-  # parses the alias name as an option.
+  # functions receive them.
   alias ','='noglob sigil_command'
   alias ',,'='noglob sigil_agent_step'
   alias ',,,'='noglob sigil_agent_step_auto'
-  alias -- '+'='noglob sigil_run'
   alias '?'='noglob sigil_status'
 
   __sigil_install_plus_capture_widget

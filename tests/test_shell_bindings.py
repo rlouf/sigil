@@ -164,8 +164,9 @@ def run_shell_pty(
         os.chdir(ROOT)
         os.environ.clear()
         os.environ.update(env)
-        os.execlp(shell, shell, "-c", script)
+        os.execlp(shell, shell, "-f", "-i")
 
+    os.write(fd, script.encode())
     chunks: list[bytes] = []
     while True:
         try:
@@ -368,7 +369,33 @@ def test_zsh_does_not_record_sigil_wrapper_commands() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
-def test_zsh_run_glyph_dispatches_to_sigil_run() -> None:
+def test_zsh_plus_line_routes_through_capture_widget() -> None:
+    # End to end through zle: the accept-line widget captures the raw line and
+    # hands it to `sigil run --shell` before zsh parses it.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell_pty(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                + echo captured
+                exit
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert "ran:--shell echo captured" in result.stdout
+        assert read_log(tmp) == ["run --shell echo captured"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_plus_glyph_is_widget_only() -> None:
+    # No alias or function fallback: outside zle the + glyph does not dispatch
+    # at all instead of silently switching to argv parsing, where zsh would
+    # split pipes and redirections itself.
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
         stub = make_stub(tmp)
@@ -380,9 +407,8 @@ def test_zsh_run_glyph_dispatches_to_sigil_run() -> None:
             tmp,
             stub,
         )
-        assert_success(result)
-        assert result.stdout == "ran:echo captured\n"
-        assert read_log(tmp) == ["run echo captured"]
+        assert result.returncode != 0
+        assert read_log(tmp) == []
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -401,6 +427,30 @@ def test_zsh_raw_plus_capture_dispatches_shell_command_to_sigil_run() -> None:
         assert_success(result)
         assert result.stdout == "ran:--shell echo captured | cat\n"
         assert read_log(tmp) == ["run --shell echo captured | cat"]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_raw_plus_capture_handles_multiline_buffers() -> None:
+    # A staged multiline command arrives in the buffer as one accept-line
+    # event; the whole buffer must reach sigil run instead of falling through
+    # to zsh, which would execute the tail lines as plain commands.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                source src/sigil/bindings/sigil.zsh
+                __sigil_run_plus_capture_line "+ echo one
+                echo two"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert read_log(tmp) == ["run --shell echo one", "echo two"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
