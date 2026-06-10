@@ -6192,3 +6192,18 @@ def test_session_clear_removes_zeta_continuity(
     assert "zeta-trace.sqlite3" in result.output
     assert not session_root.exists()
     assert zeta_timeline.current_timeline() == []
+
+
+def test_zeta_inmemory_store_dedupes_repeated_derivations() -> None:
+    store = zeta_trace.InMemoryStore()
+    derivation = zeta_trace.Derivation(
+        producer="Producer:v1",
+        output_id="sha256:out",
+        input_ids=("sha256:in",),
+    )
+
+    first = store.record_derivation(derivation)
+    second = store.record_derivation(derivation)
+
+    assert first == second
+    assert len(store.derivations_for_output("sha256:out")) == 1

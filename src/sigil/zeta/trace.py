@@ -205,7 +205,7 @@ class InMemoryStore(StoreBase):
     def __init__(self) -> None:
         self.objects: dict[ObjectId, Object] = {}
         self._refs: dict[str, ObjectId] = {}
-        self.derivations: list[Derivation] = []
+        self.derivations: dict[str, Derivation] = {}
 
     def put_object(self, obj: Object) -> ObjectId:
         stored = normalize_object(obj)
@@ -235,13 +235,15 @@ class InMemoryStore(StoreBase):
         return True
 
     def record_derivation(self, derivation: Derivation) -> str:
-        self.derivations.append(normalize_derivation(derivation))
-        return derivation_id(derivation)
+        stored = normalize_derivation(derivation)
+        id_value = derivation_id(stored)
+        self.derivations.setdefault(id_value, stored)
+        return id_value
 
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]:
         return [
             derivation
-            for derivation in self.derivations
+            for derivation in self.derivations.values()
             if derivation.output_id == output_id
         ]
 
