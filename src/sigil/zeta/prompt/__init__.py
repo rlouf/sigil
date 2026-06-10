@@ -26,6 +26,7 @@ from .compaction import (
     task_state_message,
 )
 from .components import (
+    TIMELINE_TAIL_LIMIT,
     PromptComponent,
     Representation,
     component_messages,
@@ -116,6 +117,7 @@ __all__ = [
     "StructuralTrimPromptTransform",
     "TASK_STATE_SCHEMA",
     "TOOL_PROTOCOL_PROMPT",
+    "TIMELINE_TAIL_LIMIT",
     "TaskStateExtractionPromptTransform",
     "TaskStateExtractor",
     "can_read_skill_files",

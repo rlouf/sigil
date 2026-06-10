@@ -181,13 +181,34 @@ def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
     assert "current-24" in contents
 
 
-def test_zeta_timeline_record_and_tail(tmp_path: Path, monkeypatch) -> None:
+def test_zeta_prompt_components_keep_only_the_timeline_tail() -> None:
+    over_limit = zeta_prompt.TIMELINE_TAIL_LIMIT + 10
+    transcript = [
+        {"role": "user", "content": f"prior-{index}"} for index in range(over_limit)
+    ]
+
+    messages = zeta_prompt.component_messages(
+        zeta_prompt.prompt_components(
+            "inspect",
+            transcript,
+            allowed_tools=(),
+            include_non_message_components=False,
+        )
+    )
+    contents = [str(message.get("content") or "") for message in messages]
+
+    assert "prior-9" not in contents
+    assert "prior-10" in contents
+    assert f"prior-{over_limit - 1}" in contents
+
+
+def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
 
     zeta_timeline.record_event({"type": "tool_call", "name": "read"})
 
-    events = zeta_timeline.current_timeline(1)
+    events = zeta_timeline.current_timeline()
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
     refs = zeta_trace.default_store().refs()
@@ -224,12 +245,6 @@ def test_zeta_timeline_projects_from_ref_and_object(
         for event in zeta_timeline.timeline_from_object(first_head, store=store)
     ] == ["first"]
     assert zeta_timeline.timeline_from_ref("run/missing/head") == []
-    assert (
-        zeta_timeline.timeline_from_ref(
-            zeta_timeline.run_head_ref("zeta-test"), limit=1
-        )[0]["content"]
-        == "second"
-    )
 
 
 def test_zeta_inmemory_store_dedupes_repeated_derivations() -> None:

@@ -20,7 +20,6 @@ from .trace import (
     warn_trace_failure_once,
 )
 
-DEFAULT_TAIL_LIMIT = 50
 RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"assistant_message", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage", "tool_analysis"}
@@ -73,18 +72,12 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def current_timeline(limit: int = DEFAULT_TAIL_LIMIT) -> list[dict[str, Any]]:
-    if limit <= 0:
-        return []
+def current_timeline() -> list[dict[str, Any]]:
     try:
         store = default_store()
-        events = timeline_from_ref(run_head_ref(), store=store, limit=limit)
+        events = timeline_from_ref(run_head_ref(), store=store)
         if not events:
-            events = timeline_from_ref(
-                event_head_ref(),
-                store=store,
-                limit=limit,
-            )
+            events = timeline_from_ref(event_head_ref(), store=store)
     except Exception as exc:
         warn_trace_failure_once("current_timeline", exc)
         return []
@@ -95,17 +88,14 @@ def timeline_from_ref(
     ref_name: str,
     *,
     store: Store | None = None,
-    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Project a timeline from the object named by a trace ref."""
-    if limit is not None and limit <= 0:
-        return []
     try:
         active_store = store or default_store()
         object_id = active_store.get_ref(ref_name)
         if object_id is None:
             return []
-        return timeline_from_object(object_id, store=active_store, limit=limit)
+        return timeline_from_object(object_id, store=active_store)
     except Exception as exc:
         warn_trace_failure_once("timeline_from_ref", exc)
         return []
@@ -115,13 +105,14 @@ def timeline_from_object(
     object_id: ObjectId,
     *,
     store: Store | None = None,
-    limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Project a timeline by walking backward from a trace object."""
-    if limit is not None and limit <= 0:
-        return []
+    """Project the full timeline by walking backward from a trace object.
+
+    The projection is unbounded; model-facing truncation lives in the
+    prompt layer next to `from_message_boundary`.
+    """
     try:
-        events = timeline_events_from_head(
+        return timeline_events_from_head(
             store or default_store(),
             object_id,
             seen=set(),
@@ -129,9 +120,6 @@ def timeline_from_object(
     except Exception as exc:
         warn_trace_failure_once("timeline_from_object", exc)
         return []
-    if limit is None:
-        return events
-    return events[-limit:]
 
 
 def from_message_boundary(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

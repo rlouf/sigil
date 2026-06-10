@@ -16,6 +16,9 @@ from .system import can_read_skill_files, system_prompt
 
 Representation = Literal["full", "summary", "stub"]
 
+# How much of the (unbounded) timeline projection the prompt carries.
+TIMELINE_TAIL_LIMIT = 50
+
 
 @dataclass(frozen=True)
 class PromptComponent:
@@ -89,7 +92,7 @@ def prompt_components(
         )
     components.extend(
         timeline_message_components(
-            from_message_boundary(timeline),
+            from_message_boundary(timeline[-TIMELINE_TAIL_LIMIT:]),
             default_kind="transcript_message",
         )
     )
