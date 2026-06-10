@@ -16,6 +16,7 @@ from rich.padding import Padding
 
 from .summarize import summarize, text_content, tool_result_summary
 from ..tty import MUTED, RESET
+from ..zeta.prompt.budget import estimated_tokens_for_text
 
 TRACE_LABEL_WIDTH = 5
 THINKING_STATUS_INTERVAL_SECONDS = 1.0
@@ -25,7 +26,6 @@ THINKING_STATUS_LEFT_PADDING = RICH_STREAM_LEFT_PADDING
 CONTEXT_USAGE_BAR_WIDTH = 20
 CONTEXT_USAGE_BAR_FILLED = "█"
 CONTEXT_USAGE_BAR_EMPTY = "░"
-ESTIMATED_TOKEN_CHARS = 4
 
 
 class StreamRenderer(Protocol):
@@ -473,13 +473,7 @@ def estimated_tool_result_context_tokens(result: dict[str, Any]) -> int:
         text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError):
         text = text_content(result)
-    return estimated_text_tokens(text)
-
-
-def estimated_text_tokens(text: str) -> int:
-    if not text:
-        return 0
-    return max(1, (len(text) + ESTIMATED_TOKEN_CHARS - 1) // ESTIMATED_TOKEN_CHARS)
+    return estimated_tokens_for_text(text)
 
 
 class ThinkingStatus:
