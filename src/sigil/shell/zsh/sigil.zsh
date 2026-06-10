@@ -37,6 +37,7 @@ fi
 # ── Prompt And History Helpers ───────────────────────────────────────────
 
 __sigil_history_insert() {
+  emulate -L zsh
   # Add a command to zsh history without executing it. Used when Sigil proposes
   # a command so normal history search can find it later.
   [[ -n "${1:-}" ]] || return 0
@@ -44,6 +45,7 @@ __sigil_history_insert() {
 }
 
 __sigil_prompt_insert() {
+  emulate -L zsh
   # zsh can preload editable text into the prompt buffer with print -z. This is
   # what makes comma recommendations inspectable instead of immediately run.
   [[ -n "${1:-}" ]] || return 0
@@ -52,16 +54,19 @@ __sigil_prompt_insert() {
 }
 
 __sigil_zeta_prompt_command() {
+  emulate -L zsh
   local command="${1:-}"
   [[ -n "$command" ]] || return 0
   print -r -- "+ $command"
 }
 
 __sigil_json_string() {
+  emulate -L zsh
   python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"
 }
 
 __sigil_json_get() {
+  emulate -L zsh
   python3 -c '
 import json, sys
 data = json.load(sys.stdin)
@@ -79,6 +84,7 @@ elif value is not None:
 }
 
 __sigil_glyphs_enabled() {
+  emulate -L zsh
   # `sigil install --no-glyphs` writes SIGIL_ENABLE_GLYPHS=0 before sourcing this
   # file. The named shell functions remain available either way.
   [[ "${SIGIL_ENABLE_GLYPHS:-1}" != "0" && "${SIGIL_ENABLE_GLYPHS:-1}" != "false" ]]
@@ -90,15 +96,18 @@ typeset -g __sigil_zeta_capture_active="${__sigil_zeta_capture_active:-0}"
 typeset -g __sigil_zeta_current_command=""
 
 __sigil_zeta_enable_capture() {
+  emulate -L zsh
   __sigil_zeta_capture_active=1
 }
 
 __sigil_zeta_consume_capture() {
+  emulate -L zsh
   __sigil_zeta_capture_active=0
   __sigil_zeta_current_command=""
 }
 
 __sigil_zeta_recordable_command() {
+  emulate -L zsh
   local command="${1:-}"
   [[ -n "$command" ]] || return 1
   [[ -n "${command//[[:space:]]/}" ]] || return 1
@@ -111,6 +120,7 @@ __sigil_zeta_recordable_command() {
 }
 
 __sigil_zeta_record_shell_turn() {
+  emulate -L zsh
   local command="$1"
   local exit_status="$2"
   local payload stdout_snippet stderr_snippet
@@ -127,11 +137,13 @@ __sigil_zeta_record_shell_turn() {
 }
 
 __sigil_zeta_before_command() {
+  emulate -L zsh
   __sigil_zeta_current_command="${1:-}"
 }
 
 __sigil_zeta_after_command_before_prompt() {
   local exit_status=$?
+  emulate -L zsh
   local command="$__sigil_zeta_current_command"
   __sigil_zeta_current_command=""
   if [[ "$__sigil_zeta_capture_active" == "1" ]] && __sigil_zeta_recordable_command "$command"; then
@@ -143,6 +155,7 @@ __sigil_zeta_after_command_before_prompt() {
 # ── Command Wrappers ─────────────────────────────────────────────────────
 
 sigil_command() {
+  emulate -L zsh
   # `, prompt`: read-only assistant answer. It does not stage commands or mutate
   # history; `,,` and `,,,` are the routes that can hand a command back to zsh.
   if [[ "$#" == "0" ]]; then
@@ -153,6 +166,7 @@ sigil_command() {
 }
 
 __sigil_zeta_turn() {
+  emulate -L zsh
   local glyph="$1"
   shift || true
   local objective handoff_file step_status command
@@ -178,20 +192,24 @@ __sigil_zeta_turn() {
 }
 
 sigil_agent_step() {
+  emulate -L zsh
   __sigil_zeta_turn ",," "$@"
 }
 
 sigil_agent_step_auto() {
+  emulate -L zsh
   __sigil_zeta_turn ",,," "$@"
 }
 
 sigil_run() {
+  emulate -L zsh
   # Explicit capture path: run exactly the argv the user provided, stream output
   # live, and let the CLI persist bounded stdout/stderr snippets.
   "$__sigil_bin" run "$@"
 }
 
 sigil_status() {
+  emulate -L zsh
   "$__sigil_bin" status "$@"
 }
 
@@ -200,6 +218,7 @@ sigil_status() {
 typeset -g __sigil_plus_capture_widget_installed="${__sigil_plus_capture_widget_installed:-0}"
 
 __sigil_plus_capture_command() {
+  emulate -L zsh
   local line="${1:-}"
   if [[ "$line" =~ '^\+[[:space:]]+(.+)$' ]]; then
     local command="${match[1]}"
@@ -211,18 +230,21 @@ __sigil_plus_capture_command() {
 }
 
 __sigil_run_plus_capture_command() {
+  emulate -L zsh
   local command="${1:-}"
   [[ -n "$command" ]] || return 1
   SIGIL_RUN_SHELL="${SIGIL_RUN_SHELL:-${SHELL:-zsh}}" "$__sigil_bin" run --shell "$command"
 }
 
 __sigil_run_plus_capture_line() {
+  emulate -L zsh
   local command
   command="$(__sigil_plus_capture_command "${1:-}")" || return 1
   __sigil_run_plus_capture_command "$command"
 }
 
 __sigil_accept_line_with_plus_capture() {
+  emulate -L zsh
   local command exit_status
   command="$(__sigil_plus_capture_command "$BUFFER")" || {
     zle __sigil_accept_line_without_plus_capture
@@ -240,6 +262,7 @@ __sigil_accept_line_with_plus_capture() {
 }
 
 __sigil_install_plus_capture_widget() {
+  emulate -L zsh
   [[ $- == *i* ]] || return 0
   [[ "$__sigil_plus_capture_widget_installed" == "1" ]] && return 0
   zle -A accept-line __sigil_accept_line_without_plus_capture 2>/dev/null || return 0

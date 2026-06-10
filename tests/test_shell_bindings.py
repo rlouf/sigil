@@ -517,6 +517,34 @@ def test_zsh_records_turns_only_after_zeta_handoff() -> None:
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_zsh_binding_functions_survive_hostile_user_options() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        result = run_shell(
+            "zsh",
+            textwrap.dedent(
+                """\
+                setopt ksh_arrays sh_word_split
+                source src/sigil/shell/zsh/sigil.zsh
+                __sigil_run_plus_capture_line "+ echo captured | cat"
+                sigil_agent_step hello >/dev/null
+                print -- "history=${history[$HISTCMD]}"
+                """
+            ),
+            tmp,
+            stub,
+        )
+        assert_success(result)
+        assert "ran:--shell echo captured | cat" in result.stdout
+        assert "history=+ echo zeta" in result.stdout
+        assert read_log(tmp) == [
+            "run --shell echo captured | cat",
+            *zeta_step_calls(),
+        ]
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
 def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
