@@ -21,7 +21,7 @@ from ..session import (
     default="show",
     type=click.Choice(["show", "path", "list", "clear"]),
 )
-@click.option("--json", "json_output", is_flag=True)
+@click.option("--json", "json_output", is_flag=True, help="Emit session state as JSON.")
 def cmd_session(session_command: str, json_output: bool) -> int:
     """Inspect or clear the current shell session state."""
     if session_command == "path":

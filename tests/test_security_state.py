@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from io import BytesIO, StringIO
 from pathlib import Path
 
@@ -1178,3 +1178,67 @@ def test_no_color_disables_tty_color() -> None:
             os.environ.pop("NO_COLOR", None)
         else:
             os.environ["NO_COLOR"] = saved
+
+
+def iter_cli_commands(
+    group: click.Group,
+    context: click.Context,
+) -> list[tuple[str, click.Command]]:
+    commands = []
+    for name in group.list_commands(context):
+        command = group.get_command(context, name)
+        assert command is not None, name
+        commands.append((name, command))
+        if isinstance(command, click.Group):
+            commands.extend(
+                (f"{name} {subname}", subcommand)
+                for subname, subcommand in iter_cli_commands(command, context)
+            )
+    return commands
+
+
+def test_every_cli_command_and_option_documents_itself() -> None:
+    context = click.Context(cli)
+    for path, command in iter_cli_commands(cli, context):
+        assert command.help or command.short_help, f"{path} has no help text"
+        for param in command.params:
+            if not isinstance(param, click.Option):
+                continue
+            assert param.help, f"{path} {param.opts[0]} has no help text"
+
+
+def test_events_raw_requires_json() -> None:
+    result = CliRunner().invoke(cli, ["events", "--raw"])
+
+    assert result.exit_code == 2
+    assert "--raw requires --json" in result.output
+
+
+def test_ask_json_uses_the_shared_indented_shape() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch_dict(
+            os.environ,
+            {"SIGIL_STATE_DIR": tmp, "SIGIL_SESSION_ID": "test"},
+        ):
+            from sigil.routes import ask as answers_runner
+            from sigil.zeta.agent import AgentTurnResult
+
+            def fake_run_agent_turn(*args: object, **kwargs: object) -> AgentTurnResult:
+                del args, kwargs
+                return AgentTurnResult(final_text="indented answer")
+
+            with patch("sigil.routes._turn.ensure_server", return_value=True):
+                with patch(
+                    "sigil.routes.ask.run_agent_turn",
+                    side_effect=fake_run_agent_turn,
+                ):
+                    stdout = StringIO()
+                    with redirect_stdout(stdout):
+                        code = answers_runner.run_tool_answer(
+                            "system", "question", json_output=True
+                        )
+
+        assert code == 0
+        payload = json.loads(stdout.getvalue())
+        assert payload["answer"] == "indented answer"
+        assert stdout.getvalue().startswith("{\n")

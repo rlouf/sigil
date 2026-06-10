@@ -26,12 +26,20 @@ CONTINUE_OBJECTIVE = (
 
 
 @cli.command("zeta-step", hidden=True)
-@click.option("--glyph", default=",,", show_default=True)
+@click.option(
+    "--glyph", default=",,", show_default=True, help="Glyph route the step runs as."
+)
 @click.option(
     "--handoff-file",
     type=click.Path(path_type=Path, dir_okay=False),
+    help="File that receives the staged shell handoff as JSON.",
 )
-@click.option("--continue", "continue_step", is_flag=True)
+@click.option(
+    "--continue",
+    "continue_step",
+    is_flag=True,
+    help="Resume the pending handoff with recorded shell results.",
+)
 @click.argument("objective_parts", nargs=-1)
 def cmd_zeta_step(
     glyph: str,

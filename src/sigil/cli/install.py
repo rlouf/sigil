@@ -37,7 +37,9 @@ from ..install import (
     show_default=True,
     help="Enable punctuation aliases in the shell rc snippet.",
 )
-@click.option("--json", "json_output", is_flag=True)
+@click.option(
+    "--json", "json_output", is_flag=True, help="Emit the install result as JSON."
+)
 def cmd_install_zsh_binding(
     install_dir: Path | None,
     rc_path: Path | None,
@@ -72,7 +74,7 @@ def cmd_install_zsh_binding(
 
 
 @cli.command("doctor")
-@click.option("--json", "json_output", is_flag=True)
+@click.option("--json", "json_output", is_flag=True, help="Emit doctor checks as JSON.")
 def cmd_doctor(json_output: bool) -> int:
     """Check whether Sigil is installed and ready to use."""
     checks = doctor_checks()

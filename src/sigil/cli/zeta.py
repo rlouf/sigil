@@ -32,6 +32,7 @@ def trace_group() -> None:
 @trace_group.command("show")
 @click.argument("object_id")
 def trace_show(object_id: str) -> int:
+    """Show one trace object with its derivations."""
     data = get_trace_object(object_id)
     if data is None:
         raise click.ClickException(f"trace object not found: {object_id}")
@@ -42,18 +43,21 @@ def trace_show(object_id: str) -> int:
 @trace_group.command("closure")
 @click.argument("object_id")
 def trace_closure(object_id: str) -> int:
+    """List every object reachable from a trace object."""
     pretty_print_json({"objects": list_trace_closure(object_id)})
     return 0
 
 
 @trace_group.command("refs")
 def trace_refs() -> int:
+    """List the mutable refs and the objects they point at."""
     pretty_print_json({"refs": list_trace_refs()})
     return 0
 
 
 @trace_group.command("prompts")
 def trace_prompts() -> int:
+    """List recorded prompts with store size statistics."""
     stats = default_store().stats()
     pretty_print_json(
         {

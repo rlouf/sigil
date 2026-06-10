@@ -10,7 +10,7 @@ from ..status import current_status, format_status
 
 
 @cli.command("status")
-@click.option("--json", "json_output", is_flag=True)
+@click.option("--json", "json_output", is_flag=True, help="Emit status as JSON.")
 def cmd_status(json_output: bool) -> int:
     """Show the current session's shortest useful status."""
     status = current_status()

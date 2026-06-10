@@ -17,8 +17,8 @@ DEFAULT_QUESTION = "Inspect and summarize the current shell context."
 
 @cli.command("ask")
 @click.argument("question", required=False)
-@click.option("--follow-up", is_flag=True)
-@click.option("--json", "json_output", is_flag=True)
+@click.option("--follow-up", is_flag=True, help="Continue the previous answer thread.")
+@click.option("--json", "json_output", is_flag=True, help="Emit the answer as JSON.")
 def cmd_ask(question: str | None, follow_up: bool, json_output: bool) -> int:
     """Answer a shell question, optionally continuing the prior answer."""
     stdin_text = piped_stdin_text()

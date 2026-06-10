@@ -573,7 +573,7 @@ def record_answer(
                     **({"model": model} if model is not None else {}),
                 },
                 ensure_ascii=False,
-                separators=(",", ":"),
+                indent=2,
             )
         )
         return
