@@ -15,6 +15,11 @@ def _context_directories(current: Path) -> list[Path]:
 
 
 def _agents_file(directory: Path) -> Path | None:
+    """Return the exact-case AGENTS.md in a directory, if present.
+
+    Matching against directory entries (rather than probing the path) keeps
+    lookups exact-case on case-insensitive filesystems.
+    """
     try:
         for entry in directory.iterdir():
             if entry.name == "AGENTS.md" and entry.is_file():
