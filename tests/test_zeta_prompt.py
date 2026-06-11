@@ -731,9 +731,9 @@ def test_system_prompt_is_product_neutral_and_dynamic() -> None:
     grep_prompt = zeta_prompt.system_prompt(allowed_tools=("read", "grep", "ls"))
 
     assert "Sigil" not in prompt
-    assert "Preserve user changes." in prompt
-    assert "Do not commit unless asked." in prompt
-    assert "more local instructions\noverride earlier ones" in prompt
+    assert "You are Zeta" not in prompt
+    assert "Preserve user changes." not in prompt
+    assert "Tool protocol:" in prompt
     assert "Available tools:" in prompt
     assert "- read(path, offset?, limit?): Read a UTF-8 text file." in prompt
     assert "- ls(path?, limit?, recursive?, min_size_bytes?, exclude?):" in prompt

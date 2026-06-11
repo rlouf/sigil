@@ -394,6 +394,39 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
     assert config.max_turns is None
 
 
+def test_zeta_agent_step_supplies_the_workflow_persona(
+    monkeypatch,
+    capsys,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_agent_turn(
+        objective: str,
+        transcript: list[dict[str, Any]],
+        config: zeta_agent.AgentConfig,
+        **kwargs: object,
+    ) -> zeta_agent.AgentTurnResult:
+        del objective, transcript, kwargs
+        captured["config"] = config
+        return zeta_agent.AgentTurnResult(final_text="done")
+
+    monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
+    monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
+
+    code = zeta_runner.run_agent_step("review", glyph=",,")
+
+    assert code == 0
+    config = cast(zeta_agent.AgentConfig, captured["config"])
+    assert config.system_prompt == zeta_runner.STEP_SYSTEM_PROMPT
+    assert (
+        "You are Zeta, a shell-native coding agent." in zeta_runner.STEP_SYSTEM_PROMPT
+    )
+    assert SHELL_HANDOFF_RESULT_SCHEMA in zeta_runner.STEP_SYSTEM_PROMPT
+    user_event = zeta_timeline.current_timeline()[-1]
+    assert user_event["type"] == "user_message"
+    assert "You are Zeta, a shell-native coding agent." in user_event["system"]
+
+
 def test_zeta_ask_workflow_has_no_default_step_budget(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

@@ -8,7 +8,6 @@ from typing import Any
 
 from jinja2 import Environment, StrictUndefined
 
-from ...protocols import SHELL_HANDOFF_RESULT_SCHEMA
 from ..skills import Skill, available_skills
 from ..tools import allowed_tool_names, model_tool_descriptors
 
@@ -18,32 +17,6 @@ PROMPT_TEMPLATE_ENV = Environment(
     trim_blocks=False,
     undefined=StrictUndefined,
 )
-
-BASE_SYSTEM_PROMPT = f"""You are Zeta, a shell-native coding agent.
-
-You participate in the user's live shell session. The shell owns control flow,
-current working directory, environment, history, job control, and command
-handoff. You choose the next small action and then stop.
-
-Work concretely from the available context. Prefer inspection before edits. Use
-read-only tools for local context. Follow the active workflow instructions for
-whether commands and mutations are staged for review or run directly. Keep
-answers concise and do not invent command output, file contents, or tool
-results.
-
-Preserve user changes. Do not overwrite files you did not inspect. Avoid
-destructive commands unless explicitly requested. Do not commit unless asked.
-After direct mutations, run focused verification when practical; if verification
-is skipped, say so.
-
-Project context is ordered from broad to local; later, more local instructions
-override earlier ones when they conflict.
-
-When the run timeline contains a {SHELL_HANDOFF_RESULT_SCHEMA} result, treat it
-as the source of truth for what happened after a shell handoff. If the outcome is
-cancelled, do not assume the proposed command ran; use the recorded shell_turns
-as user-chosen context and explain the cancellation plainly if it matters.
-"""
 
 TOOL_PROTOCOL_PROMPT = """Tool protocol:
 
@@ -103,7 +76,12 @@ def system_prompt(
     allowed_tools: Iterable[str] | None = None,
     skills: Iterable[Skill] | None = None,
 ) -> str:
-    """Build the Zeta system prompt from the active tools and available skills."""
+    """Assemble the system prompt around the caller's base prompt.
+
+    The base prompt is workflow content and belongs to the caller; this
+    module only adds the runtime scaffolding: date line, tool protocol,
+    skills, and tool descriptors.
+    """
     active_tools = tuple(allowed_tool_names(allowed_tools))
     active_skills = (
         tuple(skills)
@@ -123,11 +101,11 @@ def render_system_prompt(
     allowed_tools: Iterable[str] | None = None,
     skills: Iterable[Skill] = (),
 ) -> str:
-    """Render the Zeta system prompt from already-resolved prompt inputs."""
+    """Render the system prompt from already-resolved prompt inputs."""
     active_tools = tuple(allowed_tools) if allowed_tools is not None else None
     return render_prompt_template(
         SYSTEM_PROMPT_TEMPLATE,
-        base_prompt=clean_prompt(base_prompt) or BASE_SYSTEM_PROMPT.strip(),
+        base_prompt=clean_prompt(base_prompt),
         date_line=current_date_line(),
         tool_protocol=TOOL_PROTOCOL_PROMPT.strip(),
         grep_tool_policy=GREP_TOOL_POLICY

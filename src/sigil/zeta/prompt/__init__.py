@@ -35,7 +35,6 @@ from .components import (
     zeta_context_message,
 )
 from .system import (
-    BASE_SYSTEM_PROMPT,
     GREP_TOOL_POLICY,
     TOOL_PROTOCOL_PROMPT,
     can_read_skill_files,
@@ -100,7 +99,6 @@ def trim_threshold_tokens(env: Mapping[str, str]) -> int:
 
 
 __all__ = [
-    "BASE_SYSTEM_PROMPT",
     "BudgetThresholdPromptTransform",
     "ComponentUsage",
     "ContextUsage",
