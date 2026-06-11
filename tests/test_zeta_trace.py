@@ -13,6 +13,7 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
+from sigil.zeta import models as zeta_models
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import timeline as zeta_timeline
 from sigil.zeta import trace as zeta_trace
@@ -840,6 +841,181 @@ def narrative_log_store() -> tuple[zeta_trace.InMemoryStore, str, str, str]:
         )
     )
     return store, component_id, prompt_id, answer_id
+
+
+def prompt_diff_store() -> tuple[zeta_trace.InMemoryStore, dict[str, str]]:
+    store = zeta_trace.InMemoryStore()
+
+    def component(kind: str, role: str, content: str) -> str:
+        return store.put_object(
+            zeta_trace.Object(
+                kind=kind,
+                schema="zeta.prompt_component.v1",
+                data={"message": {"role": role, "content": content}},
+            )
+        )
+
+    ids = {
+        "system": component("system_prompt", "system", "system text"),
+        "old_objective": component("user_objective", "user", "old objective line"),
+        "new_objective": component("user_objective", "user", "new objective line"),
+        "transcript": component("transcript_message", "user", "shared transcript"),
+    }
+    ids["prompt_a"] = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "sha256:a"},
+            links=(ids["system"], ids["transcript"], ids["old_objective"]),
+        )
+    )
+    ids["prompt_b"] = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "sha256:b"},
+            links=(ids["system"], ids["new_objective"]),
+        )
+    )
+    return store, ids
+
+
+def test_sigil_zeta_trace_diff_reports_component_changes(monkeypatch) -> None:
+    store, ids = prompt_diff_store()
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+
+    result = CliRunner().invoke(
+        sigil_cli, ["zeta", "trace", "diff", ids["prompt_a"], ids["prompt_b"]]
+    )
+
+    assert result.exit_code == 0
+    output = result.output
+    changed_line = next(
+        line for line in output.splitlines() if line.startswith("~ user_objective")
+    )
+    assert zeta_trace_short(ids["old_objective"]) in changed_line
+    assert zeta_trace_short(ids["new_objective"]) in changed_line
+    assert "-old objective line" in output
+    assert "+new objective line" in output
+    removed_line = next(
+        line for line in output.splitlines() if line.startswith("- transcript_message")
+    )
+    assert zeta_trace_short(ids["transcript"]) in removed_line
+    assert "= 1 unchanged" in output
+    assert zeta_trace_short(ids["system"]) not in output
+
+
+def test_sigil_zeta_trace_diff_stat_keeps_one_line_per_change(monkeypatch) -> None:
+    store, ids = prompt_diff_store()
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+
+    result = CliRunner().invoke(
+        sigil_cli,
+        ["zeta", "trace", "diff", "--stat", ids["prompt_a"], ids["prompt_b"]],
+    )
+
+    assert result.exit_code == 0
+    assert "~ user_objective" in result.output
+    assert "- transcript_message" in result.output
+    assert "+new objective line" not in result.output
+
+
+def test_sigil_zeta_trace_diff_requires_prompt_objects(monkeypatch) -> None:
+    store, ids = prompt_diff_store()
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+
+    result = CliRunner().invoke(
+        sigil_cli, ["zeta", "trace", "diff", ids["prompt_a"], ids["system"]]
+    )
+
+    assert result.exit_code != 0
+    assert "not a prompt" in result.output
+
+
+def test_sigil_zeta_trace_replay_records_a_traced_answer(monkeypatch) -> None:
+    store, component_id, prompt_id, answer_id = narrative_log_store()
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+    captured: dict[str, object] = {}
+
+    def fake_chat(messages, **kwargs):
+        captured["messages"] = messages
+        captured.update(kwargs)
+        return {"role": "assistant", "content": "a fresh answer"}
+
+    monkeypatch.setattr("sigil.cli.zeta.chat_completion_messages", fake_chat)
+
+    result = CliRunner().invoke(sigil_cli, ["zeta", "trace", "replay", prompt_id])
+
+    assert result.exit_code == 0
+    assert "the test imports a stale fixture" in result.output
+    assert "a fresh answer" in result.output
+    assert captured["messages"] == [{"role": "user", "content": "why did it fail?"}]
+    replays = [
+        derivation
+        for derivation in store.derivations_for_input(prompt_id)
+        if derivation.producer == "SigilModelReplay:v1"
+    ]
+    assert len(replays) == 1
+    replay_object = store.get_object(replays[0].output_id)
+    assert replay_object is not None
+    assert replay_object.kind == "assistant_message"
+    assert replay_object.data["message"]["content"] == "a fresh answer"
+    assert replay_object.links == (prompt_id,)
+    assert replays[0].output_id != answer_id
+
+
+def test_sigil_zeta_trace_replay_diffs_old_and_new(monkeypatch) -> None:
+    store, _, prompt_id, _ = narrative_log_store()
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+    monkeypatch.setattr(
+        "sigil.cli.zeta.chat_completion_messages",
+        lambda messages, **kwargs: {"role": "assistant", "content": "a fresh answer"},
+    )
+
+    result = CliRunner().invoke(
+        sigil_cli, ["zeta", "trace", "replay", "--diff", prompt_id]
+    )
+
+    assert result.exit_code == 0
+    assert "-the test imports a stale fixture" in result.output
+    assert "+a fresh answer" in result.output
+
+
+def test_sigil_zeta_trace_replay_honors_a_named_profile(monkeypatch) -> None:
+    store, _, prompt_id, _ = narrative_log_store()
+    monkeypatch.setattr("sigil.cli.zeta.default_store", lambda: store)
+    captured: dict[str, object] = {}
+
+    def fake_chat(messages, **kwargs):
+        captured.update(kwargs)
+        return {"role": "assistant", "content": "a fresh answer"}
+
+    monkeypatch.setattr("sigil.cli.zeta.chat_completion_messages", fake_chat)
+    monkeypatch.setattr(
+        "sigil.cli.zeta.resolve_model_profile",
+        lambda name: (
+            zeta_models.ModelSelection(
+                profile=name,
+                model="fast-model",
+                url="http://127.0.0.1:8081/v1/chat/completions",
+            )
+            if name == "fast"
+            else None
+        ),
+    )
+
+    ok = CliRunner().invoke(
+        sigil_cli, ["zeta", "trace", "replay", "--model", "fast", prompt_id]
+    )
+    unknown = CliRunner().invoke(
+        sigil_cli, ["zeta", "trace", "replay", "--model", "nope", prompt_id]
+    )
+
+    assert ok.exit_code == 0
+    assert captured["selected_model"] == "fast-model"
+    assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
+    assert unknown.exit_code != 0
+    assert "unknown model profile" in unknown.output
 
 
 def test_sigil_zeta_trace_log_defaults_to_the_narrative_kinds(monkeypatch) -> None:
