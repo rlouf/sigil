@@ -12,7 +12,12 @@ from .budget import (
     measure,
     render_stub,
 )
-from .builder import PreparedPrompt, PromptBuilder
+from .builder import (
+    PreparedPrompt,
+    PromptBuilder,
+    ReconstructedPrompt,
+    reconstructed_prompt_request,
+)
 from .compaction import (
     TASK_STATE_SCHEMA,
     DropOldestPromptTransform,
@@ -111,6 +116,7 @@ __all__ = [
     "PromptBuilder",
     "PromptComponent",
     "PromptTransform",
+    "ReconstructedPrompt",
     "Representation",
     "StructuralTrimPromptTransform",
     "TASK_STATE_SCHEMA",
@@ -127,6 +133,7 @@ __all__ = [
     "prompt_component_object",
     "prompt_transform_from_env",
     "prompt_components",
+    "reconstructed_prompt_request",
     "render_system_prompt",
     "render_stub",
     "skills_prompt",

@@ -89,6 +89,69 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
     assert "tool_result" in kinds
 
 
+def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
+    store = zeta_trace.InMemoryStore()
+    tools = zeta_tools.model_tool_descriptors(("read",))
+    prepared = zeta_prompt.PromptBuilder(store=store).build(
+        "inspect",
+        [{"role": "user", "content": "prior"}],
+        allowed_tools=("read",),
+        context="Project context",
+        tools=tools,
+        selected_model="unit-model",
+    )
+    assert prepared.prompt_object_id is not None
+
+    reconstructed = zeta_prompt.reconstructed_prompt_request(
+        store, prepared.prompt_object_id
+    )
+
+    assert reconstructed is not None
+    assert reconstructed.messages == prepared.messages
+    assert reconstructed.tools == prepared.tools
+    assert reconstructed.selected_model == "unit-model"
+    assert reconstructed.payload_verified
+
+
+def test_zeta_prompt_request_reconstruction_flags_a_changed_component() -> None:
+    store = zeta_trace.InMemoryStore()
+    component_id = store.put_object(
+        zeta_trace.Object(
+            kind="user_objective",
+            schema="zeta.prompt_component.v1",
+            data={"message": {"role": "user", "content": "objective"}},
+        )
+    )
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload_sha256": "sha256:not-the-payload"},
+            links=(component_id,),
+        )
+    )
+
+    reconstructed = zeta_prompt.reconstructed_prompt_request(store, prompt_id)
+
+    assert reconstructed is not None
+    assert reconstructed.messages == [{"role": "user", "content": "objective"}]
+    assert not reconstructed.payload_verified
+
+
+def test_zeta_prompt_request_reconstruction_requires_a_prompt() -> None:
+    store = zeta_trace.InMemoryStore()
+    other_id = store.put_object(
+        zeta_trace.Object(
+            kind="assistant_message",
+            schema="zeta.assistant_output.v1",
+            data={"message": {"role": "assistant", "content": "hi"}},
+        )
+    )
+
+    assert zeta_prompt.reconstructed_prompt_request(store, other_id) is None
+    assert zeta_prompt.reconstructed_prompt_request(store, "sha256:missing") is None
+
+
 def test_zeta_prompt_components_have_representation_and_token_cost() -> None:
     component = zeta_prompt.PromptComponent(
         kind="example",

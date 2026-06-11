@@ -382,6 +382,81 @@ def payload_sha256(payload: dict[str, Any]) -> str:
     return content_hash(canonical_json(payload))
 
 
+@dataclass(frozen=True)
+class ReconstructedPrompt:
+    """A model request rebuilt from a prompt object's component closure."""
+
+    messages: list[dict[str, Any]]
+    tools: list[dict[str, Any]]
+    max_tokens: int
+    selected_model: str | None
+    payload_verified: bool
+
+
+def reconstructed_prompt_request(
+    store: Store,
+    prompt_id: ObjectId,
+) -> ReconstructedPrompt | None:
+    """Rebuild the exact request a prompt object hashed, and verify it.
+
+    Messages come from the linked components in order, tool descriptors
+    from the `tool_descriptor_set` component, and `max_tokens`/model from
+    the prompt's builder derivation. `payload_verified` says whether the
+    rebuilt payload hashes to the stored `payload_sha256`.
+    """
+    prompt = store.get_object(prompt_id)
+    if prompt is None or prompt.kind != "prompt":
+        return None
+    messages: list[dict[str, Any]] = []
+    tools: list[dict[str, Any]] = []
+    for component_id in prompt.links:
+        component = store.get_object(component_id)
+        if component is None:
+            continue
+        message = component.data.get("message")
+        if isinstance(message, dict):
+            messages.append(message)
+        if component.kind == "tool_descriptor_set":
+            raw_tools = component.data.get("tools")
+            if isinstance(raw_tools, list):
+                tools = raw_tools
+    max_tokens, selected_model = prompt_builder_params(store, prompt_id)
+    payload = chat_completion_request_body(
+        messages,
+        tools=tools,
+        tool_choice="auto",
+        max_tokens=max_tokens,
+        selected_model=selected_model,
+    )
+    expected = str(prompt.data.get("payload_sha256") or "")
+    return ReconstructedPrompt(
+        messages=messages,
+        tools=tools,
+        max_tokens=max_tokens,
+        selected_model=selected_model,
+        payload_verified=bool(expected) and payload_sha256(payload) == expected,
+    )
+
+
+def prompt_builder_params(
+    store: Store,
+    prompt_id: ObjectId,
+) -> tuple[int, str | None]:
+    """Return the max_tokens and model the builder recorded for a prompt."""
+    for derivation in store.derivations_for_output(prompt_id):
+        if derivation.producer != "SigilPromptBuilder:v1":
+            continue
+        max_tokens = derivation.params.get("max_tokens")
+        selected_model = derivation.params.get("selected_model")
+        return (
+            max_tokens
+            if isinstance(max_tokens, int) and not isinstance(max_tokens, bool)
+            else DEFAULT_MAX_COMPLETION_TOKENS,
+            selected_model if isinstance(selected_model, str) else None,
+        )
+    return DEFAULT_MAX_COMPLETION_TOKENS, None
+
+
 def tool_call_object_data(event: dict[str, Any]) -> dict[str, Any]:
     data: dict[str, Any] = {
         "tool_call_id": str(event.get("tool_call_id") or event.get("id") or ""),
