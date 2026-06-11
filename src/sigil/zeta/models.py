@@ -50,6 +50,7 @@ class ModelSelection:
 class ModelResolution:
     selection: ModelSelection
     source: ModelSource
+    stale_profile: str | None = None
 
 
 def model_url(selected_url: str | None = None) -> str:
@@ -156,11 +157,23 @@ def default_model_selection() -> ModelSelection:
 
 
 def resolve_active_model() -> ModelResolution:
-    """Resolve the model the next request will use, and where it came from."""
-    selection = active_model_selection()
+    """Resolve the model the next request will use, and where it came from.
+
+    A session selection naming a profile that no longer resolves falls back
+    to the env default but carries the stale name, so status surfaces can
+    say the selection went stale instead of pretending none was made.
+    """
+    profile = active_model_profile()
+    if profile is None:
+        return ModelResolution(selection=default_model_selection(), source="env")
+    selection = resolve_model_profile(profile)
     if selection is not None:
         return ModelResolution(selection=selection, source="session")
-    return ModelResolution(selection=default_model_selection(), source="env")
+    return ModelResolution(
+        selection=default_model_selection(),
+        source="env",
+        stale_profile=profile,
+    )
 
 
 def model_selection_event(selection: ModelSelection | None) -> dict[str, str]:

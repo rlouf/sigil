@@ -146,6 +146,10 @@ clean
 model: fast -> qwen2.5-coder @ http://127.0.0.1:8080/v1/chat/completions (session)
 ```
 
+If the selected profile has since been removed from `models.toml`, the line
+says so — `(env; profile 'fast' missing from models.toml)` — instead of
+pretending no selection was made.
+
 ## Quick Start
 
 Once the shell binding is installed, use the glyphs directly:

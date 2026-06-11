@@ -651,6 +651,7 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     resolution = zeta_models.resolve_active_model()
 
     assert resolution.source == "session"
+    assert resolution.stale_profile is None
     assert resolution.selection == zeta_models.ModelSelection(
         profile="fast",
         model="fast-model",
@@ -665,6 +666,7 @@ def test_zeta_models_resolve_active_model_defaults_to_env(monkeypatch) -> None:
     resolution = zeta_models.resolve_active_model()
 
     assert resolution.source == "env"
+    assert resolution.stale_profile is None
     assert resolution.selection == zeta_models.ModelSelection(
         profile="default",
         model="env-model",
@@ -688,6 +690,7 @@ def test_zeta_models_resolve_active_model_survives_vanished_profile(
 
     assert resolution.source == "env"
     assert resolution.selection.profile == "default"
+    assert resolution.stale_profile == "gone"
 
 
 def test_sigil_model_cli_rejects_unknown_profile(

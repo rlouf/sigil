@@ -108,12 +108,15 @@ def active_model_fields() -> dict[str, str]:
     """Return the resolved model the next request will use, with its source."""
     resolution = resolve_active_model()
     selection = resolution.selection
-    return {
+    fields = {
         "profile": selection.profile,
         "model": selection.model,
         "url": selection.url,
         "source": resolution.source,
     }
+    if resolution.stale_profile is not None:
+        fields["stale_profile"] = resolution.stale_profile
+    return fields
 
 
 def ledger_status_fields(
@@ -211,7 +214,8 @@ def text_head(value: object, limit: int = 60) -> str:
 
 def format_model_line(model: dict[str, str]) -> str:
     """Render the resolved model selection as one status line."""
-    return (
-        f"model: {model['profile']} -> {model['model']} "
-        f"@ {model['url']} ({model['source']})"
-    )
+    source = model["source"]
+    stale_profile = model.get("stale_profile")
+    if stale_profile:
+        source = f"{source}; profile {stale_profile!r} missing from models.toml"
+    return f"model: {model['profile']} -> {model['model']} @ {model['url']} ({source})"

@@ -65,10 +65,30 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
 
     assert status.model["profile"] == "fast"
     assert status.model["source"] == "session"
+    assert "stale_profile" not in status.model
     assert (
         "model: fast -> fast-model @ http://127.0.0.1:8081/v1/chat/completions "
         "(session)" in format_status(status)
     )
+
+
+def test_status_model_line_reports_stale_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(home, "")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "status-stale-model")
+    monkeypatch.delenv("ZETA_MODEL_NAME", raising=False)
+    monkeypatch.delenv("ZETA_MODEL_URL", raising=False)
+    set_active_model_profile("gone")
+
+    status = current_status()
+
+    assert status.model["source"] == "env"
+    assert status.model["stale_profile"] == "gone"
+    assert "(env; profile 'gone' missing from models.toml)" in format_status(status)
 
 
 def test_status_reports_last_failure() -> None:
