@@ -5,10 +5,11 @@ ledger Stages 1–3 are landed, the trace explorer has its plumbing,
 porcelain, and diff/replay (Stages A–C, graduated live), ask is folded
 into step, the zsh binding is owned end to end (pty harness, zero-fork
 spool, session-per-pty, raw glyph dispatch, `+` completion), and the
-public CLI exit codes are named constants. What remains: web tools
-(proposal below, open questions pending), the tool-contract CLI surface
-(proposal below), ledger Stage 4 (durable/global/portable), and explorer
-Stage D (cross-session scope, search).
+public CLI exit codes are named constants. Explorer Stage D
+(cross-session scope, `trace grep`) and ledger Stage 4 (cross-session
+`sigil log`, export/import bundles) are landed; the redaction/privacy
+item was dropped. What remains: web tools (proposal below, open
+questions pending) and the tool-contract CLI surface (proposal below).
 
 ## Decisions in force
 
@@ -438,13 +439,16 @@ answers with checkable citations.
    the Stage 2 bridge; makes every explorer query work on an imported
    bundle for free. The hinge to the trace-portability bet — the ledger
    is the natural unit of exchange, not raw transcripts.
-3. Privacy policy as config, not accident: what is retained verbatim
-   (objectives? answers?) vs hash-only; a `redact` operation that holds
-   under the content-addressed model (replace blob, keep hash +
-   tombstone).
+3. ~~Privacy policy as config; a `redact` operation~~ **Dropped (Remi,
+   2026-06-12): really hard to get right.** A redaction pass was
+   implemented (tombstone replace keeping hash/links, `trace redact`,
+   `[privacy] objectives = "hash"`) and reverted before commit. If it
+   ever returns, the open problems are the verdict semantics around
+   `payload_verified`, what counts as the redactable unit, and where
+   the policy config lives.
 
 Graduation: a bundle exported from one machine answers blame/show/saw
-queries on another, with redaction honored.
+queries on another.
 
 ---
 
@@ -519,10 +523,10 @@ export/import bundle (4.2) consumes the cross-session store opens (D.1).
   the column orders every listing. Export must carry it and import must
   restore it, or recency ordering breaks on the importing machine — so
   import cannot go through plain `record_derivation` (which stamps now).
-- `put_object` recomputes the content address. A redacted object's
-  stored id no longer matches its (tombstoned) data, so import must
-  insert by the *exported* id, not recompute — one more reason import
-  needs dedicated store methods rather than the public write API.
+- `put_object` recomputes the content address. Import inserts by the
+  *exported* id instead, keeping links and refs exact even if hashing
+  rules ever differ between versions — so import needs dedicated store
+  methods rather than the public write API.
 - Turn/effect records in `events.jsonl` carry their envelope (id, time,
   session) already; `append_event` would re-stamp it. Import appends
   the records verbatim with `append_jsonl_line` and indexes them;
@@ -530,10 +534,6 @@ export/import bundle (4.2) consumes the cross-session store opens (D.1).
   index-existence check skips already-imported records so repeat
   imports do not bloat the log. Reindex replays them like native
   records — imports survive `log reindex` by construction.
-- Config precedent: models live in `~/.zeta/models.toml`. There is no
-  sigil config file yet; the privacy policy (4.3) needs one. Proposal:
-  `state_dir()/config.toml` — it sits with the data it governs and
-  inherits `SIGIL_STATE_DIR` isolation in tests. Flag if wrong.
 
 ## Decisions (mine, flag if wrong)
 
@@ -577,20 +577,9 @@ export/import bundle (4.2) consumes the cross-session store opens (D.1).
    appends ledger records verbatim, and indexes them. CLI:
    `sigil log export --since DATE [--session ID] [--output FILE]`
    (stdout default) and `sigil log import FILE`.
-5. **4.3 — redact + policy.** `SqliteStore.redact_object(object_id,
-   reason)` replaces `data_json` with the tombstone `{"redacted":
-   true, "reason": ...}` in place — id (the original hash) and links
-   survive, derivations stay honest, content is gone. CLI
-   `sigil trace redact ID [--reason TEXT]` (honors `--session`,
-   opening that store read-write for this one command). Renderers show
-   `(redacted)`; `reconstructed_prompt_request` over a redacted
-   component reports `payload_verified` false, which is the honest
-   answer. Export/import carry tombstones as ordinary data — redaction
-   honored across machines by construction. Policy knob:
-   `state_dir()/config.toml` with `[privacy] objectives = "verbatim" |
-   "hash"`; `hash` stores `sha256:` digests in turn records at the
-   `turn_record` chokepoint (`protocols.py`). Default `verbatim`
-   (today's behavior).
+5. **4.3 — dropped (Remi, 2026-06-12).** Redaction and the privacy
+   policy config were implemented and reverted before commit: really
+   hard to get right.
 
 ## Work items (each: tests → impl → docs → pre-commit)
 
@@ -603,9 +592,7 @@ export/import bundle (4.2) consumes the cross-session store opens (D.1).
    column on machine-wide listings.
 4. 4.2: `bundle.py` export/import + store import methods +
    `log export`/`log import` CLI.
-5. 4.3: `redact_object` + `trace redact` + `(redacted)` rendering +
-   `[privacy]` config at the `turn_record` chokepoint.
-6. Graduation checks as tests: (a) export → fresh `SIGIL_STATE_DIR` →
+5. Graduation checks as tests: (a) export → fresh `SIGIL_STATE_DIR` →
    import → `log`, `log show`, `blame`, `trace --session … show`
-   answer, redacted component shows tombstone; (b) `trace grep` +
-   `--all-sessions` finds which session asked about X.
+   answer; (b) `trace grep` + `--all-sessions` finds which session
+   asked about X.

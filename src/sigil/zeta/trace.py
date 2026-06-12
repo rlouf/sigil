@@ -653,8 +653,9 @@ class SqliteStore(StoreBase):
     def import_object(self, object_id_value: ObjectId, obj: Object) -> None:
         """Insert an object under an exported id instead of recomputing it.
 
-        Redacted objects keep their original content address, so an
-        import must trust the exported id.
+        Trusting the exported id keeps links and refs exact even if
+        hashing rules ever differ between the exporting and importing
+        versions.
         """
         stored = normalize_object(obj)
         with self._write_lock:
