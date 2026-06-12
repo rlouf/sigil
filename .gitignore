@@ -12,3 +12,5 @@ src/sigil_sh.egg-info/
 node_modules/
 package-lock.json
 .claude/
+notes.md
+import-graph.md
