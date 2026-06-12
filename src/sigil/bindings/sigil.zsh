@@ -232,14 +232,18 @@ __sigil_run_plus_capture_command() {
 
 __sigil_glyph_split() {
   emulate -L zsh
-  # Set reply=(glyph text suffix) for a glyph line; fail for anything else.
-  # The glyph must stand alone or be followed by whitespace, so words like
-  # `,x` stay ordinary commands. `+` additionally needs a command.
+  # Set reply=(glyph text suffix) for a dispatchable glyph line. Returns 1
+  # for anything that is not a glyph line — the glyph must stand alone or
+  # be followed by whitespace, so words like `,x` stay ordinary commands,
+  # and `+` additionally needs a command.
   #
-  # A prompt that starts with a complete quoted span ends there: the
-  # remainder is trailing shell grammar (redirects, pipes) carried onto the
-  # dispatch line. Unquoted prompts, unbalanced quotes, and quotes glued to
-  # more text stay raw. `+` text is already shell grammar and never splits.
+  # Prompts are mandatory-quoted: the prompt is one complete quoted span,
+  # captured raw and never re-parsed, and the remainder of the line is
+  # shell grammar (redirects, pipes) carried onto the dispatch line.
+  # Returns 2 for a glyph line whose prompt is missing quotes — the widget
+  # refuses it with a hint instead of executing or guessing. Bare glyphs
+  # (`,`, `,,`, `?`) carry no prompt and stay valid. `+` text is already
+  # shell grammar and never needs quotes.
   local buffer="${1:-}" glyph text suffix=""
   case "$buffer" in
     '+'[[:space:]]*) glyph='+' ;;
@@ -254,18 +258,23 @@ __sigil_glyph_split() {
   if [[ "$glyph" == '+' && -z "${text//[[:space:]]/}" ]]; then
     return 1
   fi
-  if [[ "$glyph" != '+' && "$text" == [\'\"]* ]]; then
+  if [[ "$glyph" != '+' && -n "$text" ]]; then
+    if [[ "$text" != [\'\"]* ]]; then
+      return 2
+    fi
     local -a tokens
     tokens=(${(z)text})
     local first="${tokens[1]:-}"
     local quote="${text[1]}"
-    if (( ${#first} >= 2 )) && [[ "$first" == *"$quote" ]]; then
-      local rest="${text#"$first"}"
-      if [[ -z "$rest" || "$rest" == [[:space:]]* ]]; then
-        text="${(Q)first}"
-        suffix="${rest#"${rest%%[![:space:]]*}"}"
-      fi
+    if (( ${#first} < 2 )) || [[ "$first" != *"$quote" ]]; then
+      return 2
     fi
+    local rest="${text#"$first"}"
+    if [[ -n "$rest" && "$rest" != [[:space:]]* ]]; then
+      return 2
+    fi
+    text="${(Q)first}"
+    suffix="${rest#"${rest%%[![:space:]]*}"}"
   fi
   reply=("$glyph" "$text" "$suffix")
   return 0
@@ -292,10 +301,19 @@ __sigil_accept_line_with_glyph_dispatch() {
   emulate -L zsh
   # Everything here runs inside the shell: a plain Enter press must not fork.
   local reply
-  if ! __sigil_glyph_split "$BUFFER"; then
-    zle __sigil_accept_line_without_glyph_dispatch
-    return $?
-  fi
+  __sigil_glyph_split "$BUFFER"
+  case $? in
+    1)
+      zle __sigil_accept_line_without_glyph_dispatch
+      return $?
+      ;;
+    2)
+      # Unquoted prompt: refuse without executing and keep the line in the
+      # buffer, so adding quotes is one edit away.
+      zle -M 'sigil: quote the prompt — , "…"  (text after the quotes is shell grammar)'
+      return 0
+      ;;
+  esac
   typeset -g __sigil_dispatch_glyph="${reply[1]}"
   typeset -g __sigil_dispatch_text="${reply[2]}"
   local suffix="${reply[3]}"

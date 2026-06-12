@@ -71,15 +71,19 @@ behavior:
 - The glyph aliases stayed: alias expansion runs before globbing, which
   is what lets a bare `?` reach the function in eval/script contexts.
   Interactive lines never reach them (widget first).
-- Quoted prompts opt into shell composition: when the glyph text starts
-  with a complete quoted span, the span is the prompt and the remainder
-  rides the dispatch buffer as real grammar — `, "summarize" >
-  summary.txt` redirects, `, "x" | wc -l` pipes. Unquoted prompts stay
-  fully raw, so `, what does > mean` is never a redirect; `+` text is
-  already shell grammar and never splits. Pipeline consequence: the
-  dispatch function runs in a subshell as the first segment, so history
-  insertion and stash clearing happen at the next `zle-line-init` in
-  the parent shell, not in the dispatch function.
+- **Prompts are mandatory-quoted (Remi, 2026-06-12: "more honest, less
+  magical").** The prompt is one complete quoted span — captured raw,
+  never re-parsed, so nothing inside is expanded (`!`, `$`, apostrophes
+  in double quotes are all literal) — and the rest of the line is real
+  shell grammar: `, "summarize" > summary.txt` redirects, `, "x" |
+  wc -l` pipes. An unquoted prompt is refused by the widget with a
+  `zle -M` hint and stays in the buffer for editing; it never executes
+  and never reaches the model. Bare `,`/`,,`/`?` carry no prompt; `+`
+  text is shell grammar and needs no quotes. Scripts and mid-pipeline
+  use go through the functions/aliases as before. Pipeline consequence:
+  the dispatch function runs in a subshell as the first segment, so
+  history insertion and stash clearing happen at the next
+  `zle-line-init` in the parent shell, not in the dispatch function.
 - The accepted glyph line keeps showing what was typed: PREDISPLAY
   survives the final zle render (verified empirically) and is never
   parsed, so the widget sets it to the original buffer and dims the

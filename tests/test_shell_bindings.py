@@ -581,11 +581,12 @@ def test_zsh_plus_glyph_is_widget_only() -> None:
 GLYPH_SPLIT_PROBE = """\
 source src/sigil/bindings/sigil.zsh
 probe() {
-  if __sigil_glyph_split "$1"; then
-    print -r -- "glyph=${reply[1]}:text=${reply[2]}:suffix=${reply[3]}:"
-  else
-    print -r -- "nomatch"
-  fi
+  __sigil_glyph_split "$1"
+  case $? in
+    0) print -r -- "glyph=${reply[1]}:text=${reply[2]}:suffix=${reply[3]}:" ;;
+    2) print -r -- "needquotes" ;;
+    *) print -r -- "nomatch" ;;
+  esac
 }
 """
 
@@ -616,10 +617,10 @@ def test_zsh_glyph_split_parses_each_glyph_and_keeps_text_raw() -> None:
         )
         assert_success(result)
         assert result.stdout.splitlines() == [
-            "glyph=,:text=what's (the) deal!:suffix=:",
-            "glyph=,,:text=run it:suffix=:",
+            "needquotes",
+            "needquotes",
             "glyph=,,,:text=:suffix=:",
-            "glyph=?:text=hello:suffix=:",
+            "needquotes",
             "glyph=+:text=echo one | cat:suffix=:",
             "nomatch",
             "nomatch",
@@ -661,9 +662,9 @@ def test_zsh_glyph_split_quoted_prompt_carries_trailing_shell_grammar() -> None:
             "glyph=,:text=summarize the log:suffix=| wc -l:",
             "glyph=,:text=single quoted:suffix=>> out.txt:",
             "glyph=,:text=what's up:suffix=:",
-            'glyph=,:text="unclosed > f:suffix=:',
-            'glyph=,:text="abc"def > f:suffix=:',
-            "glyph=,:text=what does > mean:suffix=:",
+            "needquotes",
+            "needquotes",
+            "needquotes",
             'glyph=+:text="quoted bin" > f:suffix=:',
         ]
 
@@ -1329,7 +1330,7 @@ def test_interactive_comma_glyph_dispatches_to_ask() -> None:
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", hello")
+            shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
             shell.exit()
@@ -1365,7 +1366,7 @@ def test_interactive_glyph_line_recallable_with_up_arrow() -> None:
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", hello")
+            shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
             shell.send("\x1b[A")
@@ -1388,7 +1389,7 @@ def test_interactive_accepted_glyph_line_keeps_typed_text_with_dim_trailer() -> 
         shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", what's the deal")
+            shell.sendline(', "what\'s the deal"')
             shell.expect("\x1b[90m__sigil_dispatch")
             shell.expect("answer")
             shell.expect_prompt()
@@ -1412,7 +1413,7 @@ def test_interactive_dispatch_word_is_an_ellipsis_under_utf8_locale() -> None:
         )
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", what's the deal")
+            shell.sendline(', "what\'s the deal"')
             shell.expect("\x1b[90m…")
             shell.expect("answer")
             shell.expect_prompt()
@@ -1446,6 +1447,28 @@ def test_zsh_dispatch_word_falls_back_without_utf8_locale() -> None:
         assert_success(result)
         assert "word=__sigil_dispatch" in result.stdout
         assert "utf8word=…" in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
+def test_interactive_unquoted_prompt_is_refused_with_hint() -> None:
+    # Prompts are mandatory-quoted: an unquoted prompt never executes and
+    # never reaches the model — the widget shows a hint and keeps the line
+    # in the buffer for editing.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        stub = make_stub(tmp)
+        shell = InteractiveZsh(tmp, stub)
+        try:
+            shell.run("source src/sigil/bindings/sigil.zsh")
+            shell.sendline(", summarize this > summary.txt")
+            shell.expect("quote the prompt")
+            shell.send_control("c")
+            shell.expect_prompt()
+            shell.run(', "summarize this" > /dev/null')
+            shell.exit()
+        finally:
+            shell.kill()
+        assert read_log(tmp) == ["ask summarize this"]
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1518,7 +1541,7 @@ def test_interactive_glyph_display_decoration_does_not_leak_to_next_line() -> No
         shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", hello")
+            shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
             start = len(shell.output)
@@ -1528,7 +1551,7 @@ def test_interactive_glyph_display_decoration_does_not_leak_to_next_line() -> No
         finally:
             shell.kill()
         assert "marker-clean" in segment
-        assert ", hello" not in segment
+        assert '"hello"' not in segment
 
 
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh is not installed")
@@ -1668,7 +1691,7 @@ def test_interactive_comma_with_apostrophe_dispatches_without_quote_prompt() -> 
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", what's the deal")
+            shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
             shell.expect_prompt()
             shell.exit()
@@ -1688,7 +1711,7 @@ def test_interactive_comma_with_parens_and_bang_dispatches_verbatim() -> None:
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", why (really) fix it!")
+            shell.sendline(', "why (really) fix it!"')
             shell.expect("answer")
             shell.expect_prompt()
             shell.exit()
@@ -1848,7 +1871,7 @@ def test_interactive_dispatch_chains_with_accept_line_wrappers(
             else:
                 shell.run("source src/sigil/bindings/sigil.zsh")
                 shell.run(f"source {plugin}")
-            shell.sendline(", hello")
+            shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
             shell.exit()
@@ -1878,7 +1901,7 @@ def test_interactive_dispatch_survives_real_autosuggestions() -> None:
         try:
             shell.run(f"source {AUTOSUGGESTIONS}")
             shell.run("source src/sigil/bindings/sigil.zsh")
-            shell.sendline(", what's the deal")
+            shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
             shell.expect_prompt()
             shell.exit()
@@ -1900,7 +1923,7 @@ def test_interactive_dispatch_survives_real_syntax_highlighting() -> None:
         try:
             shell.run("source src/sigil/bindings/sigil.zsh")
             shell.run(f"source {SYNTAX_HIGHLIGHTING}")
-            shell.sendline(", what's the deal")
+            shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
             shell.expect_prompt()
             shell.exit()

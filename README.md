@@ -14,9 +14,9 @@ Sigil is inspired by IRC-style bot commands: lightweight punctuation prefixes
 that let you address an assistant inline without leaving the conversation.
 
 ```sh
-, what changed in this repo?
-,, run the relevant tests
-,,, update the docs and run checks
+, "what changed in this repo?"
+,, "run the relevant tests"
+,,, "update the docs and run checks"
 + cargo test
 ?
 ```
@@ -134,10 +134,10 @@ Then select a profile for the active shell session:
 ```sh
 sigil model list
 sigil model use fast
-, why did the last command fail?
+, "why did the last command fail?"
 
 sigil model use deep
-,, refactor the failing path and run the focused tests
+,, "refactor the failing path and run the focused tests"
 
 sigil model show
 sigil model clear
@@ -166,10 +166,10 @@ Once the shell binding is installed, use the glyphs directly:
 
 ```sh
 # Ask from local context.
-, why did the last command fail?
+, "why did the last command fail?"
 
 # Propose one reviewed agent step.
-,, run the relevant tests
+,, "run the relevant tests"
 
 # Run one command through Sigil's explicit capture path.
 + cargo test
@@ -182,8 +182,8 @@ Once the shell binding is installed, use the glyphs directly:
 Use stdin as context:
 
 ```sh
-git diff | , review risky changes
-git diff --name-only | , what should I test?
+git diff | , "review risky changes"
+git diff --name-only | , "what should I test?"
 ```
 
 Read-only comma uses piped input directly because it has no execute path.
@@ -193,10 +193,10 @@ Agent-step workflows are driven by the prompt text and the current shell session
 
 ```sh
 # 1. Ask what changed.
-, summarize this repo state
+, "summarize this repo state"
 
 # 2. Ask Zeta to pick the next shell step.
-,, run the focused tests for this change
+,, "run the focused tests for this change"
 
 # 3. Edit or run the staged shell command normally.
 uv run pytest tests/test_shell_bindings.py
@@ -237,12 +237,14 @@ Installed zsh bindings expose these shortcuts:
 | `+` | run | Run one explicit command and capture stdout/stderr snippets. |
 | `?` | status | Session status: last failure, last delegation, staged work, today's cost, active model. |
 
+Prompts are always quoted; everything outside the quotes is ordinary shell.
+
 Examples:
 
 ```sh
-, summarize this repo state
-,, run the relevant tests
-,,, fix the failing parser test
+, "summarize this repo state"
+,, "run the relevant tests"
+,,, "fix the failing parser test"
 + cargo test
 ?
 ```
@@ -272,24 +274,29 @@ can be written naturally:
 + git status --short > status.txt
 ```
 
-The same raw capture covers every glyph: prompts are natural language, never
-shell grammar, so quotes, parentheses, `#`, and `!` in a `,` or `,,` line
-reach the model untouched instead of confusing the parser — and nothing in a
-prompt is expanded, so `, explain $PATH` asks about the literal `$PATH`.
-Quoting the prompt is the explicit opt-in for shell composition: when the
-prompt is a single quoted span, everything after it is real shell grammar,
-so the answer can be redirected or piped:
+For `,`, `,,`, `,,,`, and `?`, the prompt is the quoted span and the rest of
+the line is real shell grammar — one rule, no modes. The quoted prompt is
+captured before zsh parses it and is never expanded: apostrophes, `!`, `$`,
+parentheses, and `#` inside the quotes reach the model untouched, so
+`, "explain $PATH"` asks about the literal `$PATH`. Because everything after
+the quotes is ordinary shell, answers compose like any other command:
 
 ```sh
 , "summarize the failing tests" > summary.txt
 , "one-line answer: which port does the dev server use" | pbcopy
 ```
+
+An unquoted prompt never executes and never reaches the model: the binding
+refuses it with a one-line hint and leaves the line in the buffer, so adding
+quotes is one edit away. Bare `,`, `,,`, and `?` carry no prompt and need no
+quotes.
+
 Captured lines are handed back to the shell as ordinary foreground commands:
 Ctrl-Z suspends a `+` command, it shows up in `jobs`, `fg` resumes it, and
 `$?` carries its exit status. The accepted line keeps showing exactly what
-you typed, with a dim marker after it where the shell ran the handed-off
-dispatch. In scripts and non-interactive shells the named glyph functions
-dispatch instead; `+` is interactive-only.
+you typed, with a dim marker showing where the handed-off dispatch ran. In
+scripts and non-interactive shells the named glyph functions dispatch
+instead; `+` is interactive-only.
 
 To install the CLI without punctuation shortcuts:
 
