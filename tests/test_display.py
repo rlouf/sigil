@@ -791,7 +791,9 @@ def test_transcript_reasoning_is_plain_italic_blue_text() -> None:
 
     reasoning_text = blocks[0]
     assert not isinstance(reasoning_text, Panel)
-    assert reasoning_text.style == "italic blue"
+    # Named magenta lands on iris under a Rose Pine terminal, matching the
+    # live thinking tail: one color for sigil's thinking voice.
+    assert reasoning_text.style == "italic magenta"
 
 
 def test_transcript_dims_user_scaffolding_sections() -> None:

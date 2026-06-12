@@ -105,6 +105,18 @@ behavior:
   pty writes can block the shell mid-write and make signals appear
   lost. `InteractiveZsh.settle()` drains while waiting.
 
+## Display palette stance
+
+The display layer is unapologetically Rose Pine: `tty.py` hardcodes
+true-color MUTED, LOVE, and IRIS, and the Rich layer's named colors
+(magenta = sigil, cyan = you) assume a Rose Pine terminal mapping.
+Under another terminal theme the named colors follow that theme but the
+true-color lines do not. Owned as an opinionated-product stance, not
+debt. Reasoning is one voice in one color: italic iris live (true
+color) and italic magenta in the transcript (named, lands on iris
+under Rose Pine) — sigil speaks in magenta panels and thinks in iris
+italics. This supersedes "reasoning takes the unused blue".
+
 ## Done: live thinking trace, erased on answer
 
 Remi's idea (2026-06-12): show the model's chain of thought in the

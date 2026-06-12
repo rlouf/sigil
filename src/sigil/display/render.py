@@ -824,7 +824,7 @@ def transcript_assistant_block(
     renderables: list[Any] = []
     reasoning = str(event.get("reasoning") or "")
     if reasoning:
-        renderables.append(Text(reasoning, style="italic blue"))
+        renderables.append(Text(reasoning, style="italic magenta"))
     content = str(event.get("content") or "")
     if content:
         prompt_id = transcript_prompt_id(event)
