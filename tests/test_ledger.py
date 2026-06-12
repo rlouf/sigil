@@ -350,20 +350,20 @@ def seed_log_cli_index(monkeypatch) -> None:
     )
 
 
-def test_sigil_log_lists_current_session_newest_first(monkeypatch) -> None:
+def test_sigil_log_lists_every_session_newest_first(monkeypatch) -> None:
     seed_log_cli_index(monkeypatch)
 
     result = CliRunner().invoke(sigil_cli, ["log"])
 
     assert result.exit_code == 0
     lines = result.output.splitlines()
-    assert len(lines) == 2
-    assert lines[0].startswith("turn-ask")
-    assert "ask" in lines[0]
-    assert "failed" in lines[0]
-    assert "why did the test fail?" in lines[0]
-    assert lines[1].startswith("turn-do-")
-    assert "turn-elsewhere"[:8] not in result.output
+    assert len(lines) == 3
+    assert lines[0].startswith("turn-els")
+    assert "elsewhere" in lines[0]
+    assert lines[1].startswith("turn-ask")
+    assert "log-cli" in lines[1]
+    assert "why did the test fail?" in lines[1]
+    assert lines[2].startswith("turn-do-")
 
 
 def test_sigil_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
@@ -372,8 +372,8 @@ def test_sigil_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
 
     by_workflow = runner.invoke(sigil_cli, ["log", "--workflow", "do"])
     by_failed = runner.invoke(sigil_cli, ["log", "--failed"])
-    everywhere = runner.invoke(sigil_cli, ["log", "--all-sessions"])
     elsewhere = runner.invoke(sigil_cli, ["log", "--session", "elsewhere"])
+    legacy_flag = runner.invoke(sigil_cli, ["log", "--all-sessions"])
 
     assert by_workflow.exit_code == 0
     assert len(by_workflow.output.splitlines()) == 1
@@ -381,9 +381,21 @@ def test_sigil_log_filters_workflow_failed_and_sessions(monkeypatch) -> None:
     assert by_failed.exit_code == 0
     assert len(by_failed.output.splitlines()) == 1
     assert "why did the test fail?" in by_failed.output
-    assert len(everywhere.output.splitlines()) == 3
     assert len(elsewhere.output.splitlines()) == 1
     assert "ls" in elsewhere.output
+    assert "elsewhere" not in by_workflow.output
+    assert legacy_flag.exit_code != 0
+
+
+def test_sigil_log_session_filter_omits_the_session_column(monkeypatch) -> None:
+    seed_log_cli_index(monkeypatch)
+
+    result = CliRunner().invoke(sigil_cli, ["log", "--session", "log-cli"])
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert len(lines) == 2
+    assert all("log-cli" not in line for line in lines)
 
 
 def test_sigil_log_renders_cost_and_json(monkeypatch) -> None:
@@ -399,6 +411,7 @@ def test_sigil_log_renders_cost_and_json(monkeypatch) -> None:
     assert as_json.exit_code == 0
     payload = json.loads(as_json.output)
     assert [turn["turn_id"] for turn in payload["turns"]] == [
+        "turn-elsewhere",
         "turn-ask-222",
         "turn-do-1111",
     ]
@@ -425,7 +438,7 @@ def test_sigil_log_touched_filter_finds_writing_turn(monkeypatch) -> None:
     assert result.output.startswith("turn-do-")
 
 
-def test_sigil_log_empty_session_prints_friendly_line(monkeypatch) -> None:
+def test_sigil_log_empty_ledger_prints_friendly_line(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "empty-session")
 
     result = CliRunner().invoke(sigil_cli, ["log"])

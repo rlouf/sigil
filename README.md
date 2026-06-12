@@ -422,9 +422,11 @@ sigil events
 sigil log reindex
 ```
 
-The ledger is the query surface over that record. `sigil log` lists the
-session's turns newest first (`--all-sessions` widens, `--touched PATH`,
-`--workflow`, `--since 2d`, `--failed`, and `--cost` narrow or enrich);
+The ledger is the query surface over that record. `sigil log` lists
+your turns across every session newest first, each line carrying its
+session id (`--session ID` narrows to one shell and drops the column;
+`--touched PATH`, `--workflow`, `--since 2d`, `--failed`, and `--cost`
+narrow or enrich);
 `sigil log show TURN` renders one turn in full — objective, contract,
 model, cost, effects with content hashes, and the prompt ids that feed
 `sigil trace show`. `sigil blame FILE` lists every turn that wrote

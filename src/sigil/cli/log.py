@@ -24,7 +24,6 @@ DEFAULT_LOG_LIMIT = 20
 )
 @click.option("--failed", is_flag=True, help="Only failed or aborted turns.")
 @click.option("--session", "session_filter", help="Scope to one session id.")
-@click.option("--all-sessions", is_flag=True, help="Query every session.")
 @click.option(
     "--limit",
     default=DEFAULT_LOG_LIMIT,
@@ -42,26 +41,24 @@ def cmd_log(
     since: str | None,
     failed: bool,
     session_filter: str | None,
-    all_sessions: bool,
     limit: int,
     show_cost: bool,
     json_output: bool,
 ) -> int:
-    """List ledger turns for this session, newest first.
+    """List ledger turns across every session, newest first.
 
-    Every delegation and recorded shell command is one turn. Subcommands
-    query deeper; `sigil events` stays the raw event view.
+    Every delegation and recorded shell command is one turn; --session
+    narrows to one shell. Subcommands query deeper; `sigil events`
+    stays the raw event view.
     """
     if ctx.invoked_subcommand is not None:
         return 0
     # Imported lazily: `sigil.cli` must stay light at import time.
     from ..display.summarize import format_turn_line
     from ..ledger import default_ledger_index, touched_path_variants
-    from ..state import session_id
 
-    session = None if all_sessions else (session_filter or session_id())
     turns = default_ledger_index().query_turns(
-        session=session,
+        session=session_filter,
         workflow=workflow,
         since=since_epoch(since) if since else None,
         failed=failed,
@@ -75,7 +72,13 @@ def cmd_log(
         click.echo("no turns recorded", err=True)
         return 0
     for turn in turns:
-        click.echo(format_turn_line(turn, show_cost=show_cost))
+        click.echo(
+            format_turn_line(
+                turn,
+                show_cost=show_cost,
+                show_session=session_filter is None,
+            )
+        )
     return 0
 
 
