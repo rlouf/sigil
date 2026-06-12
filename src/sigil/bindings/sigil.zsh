@@ -105,7 +105,7 @@ __sigil_zeta_recordable_command() {
   [[ -n "$command" ]] || return 1
   [[ -n "${command//[[:space:]]/}" ]] || return 1
   case "$command" in
-    [[:space:]]*|,*|+*|…|sigil|sigil\ *|*/sigil|*/sigil\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*)
+    [[:space:]]*|,*|+*|…|…\ *|sigil|sigil\ *|*/sigil|*/sigil\ *|__sigil_*|sigil_*|noglob\ sigil_*|noglob\ ,*)
       return 1
       ;;
   esac
@@ -232,10 +232,15 @@ __sigil_run_plus_capture_command() {
 
 __sigil_glyph_split() {
   emulate -L zsh
-  # Set reply=(glyph text) for a glyph line; fail for anything else. The
-  # glyph must stand alone or be followed by whitespace, so words like
+  # Set reply=(glyph text suffix) for a glyph line; fail for anything else.
+  # The glyph must stand alone or be followed by whitespace, so words like
   # `,x` stay ordinary commands. `+` additionally needs a command.
-  local buffer="${1:-}" glyph text
+  #
+  # A prompt that starts with a complete quoted span ends there: the
+  # remainder is trailing shell grammar (redirects, pipes) carried onto the
+  # dispatch line. Unquoted prompts, unbalanced quotes, and quotes glued to
+  # more text stay raw. `+` text is already shell grammar and never splits.
+  local buffer="${1:-}" glyph text suffix=""
   case "$buffer" in
     '+'[[:space:]]*) glyph='+' ;;
     ',,,'|',,,'[[:space:]]*) glyph=',,,' ;;
@@ -249,7 +254,20 @@ __sigil_glyph_split() {
   if [[ "$glyph" == '+' && -z "${text//[[:space:]]/}" ]]; then
     return 1
   fi
-  reply=("$glyph" "$text")
+  if [[ "$glyph" != '+' && "$text" == [\'\"]* ]]; then
+    local -a tokens
+    tokens=(${(z)text})
+    local first="${tokens[1]:-}"
+    local quote="${text[1]}"
+    if (( ${#first} >= 2 )) && [[ "$first" == *"$quote" ]]; then
+      local rest="${text#"$first"}"
+      if [[ -z "$rest" || "$rest" == [[:space:]]* ]]; then
+        text="${(Q)first}"
+        suffix="${rest#"${rest%%[![:space:]]*}"}"
+      fi
+    fi
+  fi
+  reply=("$glyph" "$text" "$suffix")
   return 0
 }
 
@@ -257,14 +275,9 @@ __sigil_dispatch() {
   emulate -L zsh
   local glyph="$__sigil_dispatch_glyph"
   local text="$__sigil_dispatch_text"
-  local line="$__sigil_dispatch_line"
-  typeset -g __sigil_dispatch_glyph=""
-  typeset -g __sigil_dispatch_text=""
-  typeset -g __sigil_dispatch_line=""
-  # Inserting here, while the dispatch line itself is being executed,
-  # replaces the rejected dispatch entry that lingers at the top of history
-  # until the next command — up-arrow recalls the original immediately.
-  [[ -n "$line" ]] && __sigil_history_insert "$line"
+  # The stash is read here but cleared at the next line-init: with a
+  # trailing pipe this function runs as the first pipeline segment, in a
+  # subshell, where clearing globals or inserting history would be lost.
   case "$glyph" in
     '+') __sigil_run_plus_capture_command "$text" ;;
     ',') if [[ -n "$text" ]]; then sigil_command "$text"; else sigil_command; fi ;;
@@ -285,17 +298,24 @@ __sigil_accept_line_with_glyph_dispatch() {
   fi
   typeset -g __sigil_dispatch_glyph="${reply[1]}"
   typeset -g __sigil_dispatch_text="${reply[2]}"
+  local suffix="${reply[3]}"
   typeset -g __sigil_dispatch_line="$BUFFER"
   typeset -g __sigil_display_decorated=1
   # Display only: PREDISPLAY survives the final line render and is never
   # parsed, so the finalized line keeps showing what was typed while the
   # executed dispatch word renders as a dim trailer. region_highlight
   # offsets are buffer-relative; appending leaves other plugins' entries
-  # alone.
-  PREDISPLAY="$BUFFER "
-  BUFFER="$__sigil_dispatch_word"
+  # alone. Trailing shell grammar from a quoted prompt stays in the
+  # buffer, where it executes for real.
+  if [[ -n "$suffix" ]]; then
+    PREDISPLAY="${BUFFER%"$suffix"}"
+    BUFFER="$__sigil_dispatch_word $suffix"
+  else
+    PREDISPLAY="$BUFFER "
+    BUFFER="$__sigil_dispatch_word"
+  fi
   CURSOR=$#BUFFER
-  region_highlight+=("0 $#BUFFER fg=8")
+  region_highlight+=("0 $#__sigil_dispatch_word fg=8")
   zle __sigil_accept_line_without_glyph_dispatch
 }
 
@@ -309,10 +329,18 @@ fi
 
 __sigil_clear_glyph_display() {
   emulate -L zsh
-  # PREDISPLAY and region_highlight persist across zle sessions; without
-  # this, the next prompt repaints the previous glyph line.
+  # Runs at the next line-init, in the parent shell — the dispatch function
+  # may have executed in a pipeline subshell where history writes and
+  # global mutations are lost. Inserting the original line here keeps it
+  # ahead of the rejected dispatch line for up-arrow recall. PREDISPLAY and
+  # region_highlight persist across zle sessions; without clearing, the
+  # next prompt repaints the previous glyph line.
   [[ "${__sigil_display_decorated:-0}" == "1" ]] || return 0
   typeset -g __sigil_display_decorated=0
+  [[ -n "$__sigil_dispatch_line" ]] && __sigil_history_insert "$__sigil_dispatch_line"
+  typeset -g __sigil_dispatch_glyph=""
+  typeset -g __sigil_dispatch_text=""
+  typeset -g __sigil_dispatch_line=""
   PREDISPLAY=""
   region_highlight=()
 }
@@ -392,7 +420,7 @@ if __sigil_glyphs_enabled; then
     emulate -L zsh
     local line="${1%%$'\n'}"
     case "$line" in
-      __sigil_dispatch|…) return 1 ;;
+      __sigil_dispatch|__sigil_dispatch\ *|…|…\ *) return 1 ;;
       ,*|\?*|+*) return 2 ;;
     esac
     return 0

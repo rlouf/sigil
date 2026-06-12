@@ -276,6 +276,14 @@ The same raw capture covers every glyph: prompts are natural language, never
 shell grammar, so quotes, parentheses, `#`, and `!` in a `,` or `,,` line
 reach the model untouched instead of confusing the parser — and nothing in a
 prompt is expanded, so `, explain $PATH` asks about the literal `$PATH`.
+Quoting the prompt is the explicit opt-in for shell composition: when the
+prompt is a single quoted span, everything after it is real shell grammar,
+so the answer can be redirected or piped:
+
+```sh
+, "summarize the failing tests" > summary.txt
+, "one-line answer: which port does the dev server use" | pbcopy
+```
 Captured lines are handed back to the shell as ordinary foreground commands:
 Ctrl-Z suspends a `+` command, it shows up in `jobs`, `fg` resumes it, and
 `$?` carries its exit status. The accepted line keeps showing exactly what
