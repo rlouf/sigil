@@ -97,8 +97,11 @@ def test_doctor_reports_expected_checks() -> None:
     }
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(os.environ, fake_env, clear=True):
-            with patch("sigil.install.state_dir", return_value=Path(tmp)):
-                with patch("sigil.install.shutil.which", return_value="/bin/tool"):
+            with patch("sigil.install.shutil.which", return_value="/bin/tool"):
+                with patch(
+                    "sigil.install.check_state_writable",
+                    return_value=DoctorCheck("state:writable", "ok", tmp),
+                ):
                     with patch(
                         "sigil.install.check_endpoint",
                         return_value=DoctorCheck(

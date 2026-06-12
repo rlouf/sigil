@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from ..protocols import is_shell_prompt_handoff
 from .model import (
@@ -16,15 +16,11 @@ from .model import (
     model_endpoint_open,
 )
 from .prompt import PromptBuilder, prompt_transform_from_env
-from .tools import (
-    allowed_tool_names,
-    model_tool_descriptors,
-    run_tool,
-    validate_tool_args,
-)
+from .prompt.system import model_tool_descriptors
+from .tools.registry import ExecutionMode
+from .tools.registry import registry as tool_registry
 from .trace import PromptTrace, prompt_trace_payload
 
-ExecutionMode = Literal["handoff", "direct"]
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 
@@ -165,9 +161,24 @@ def agent_model_endpoint_open(config: AgentConfig) -> bool:
 
 
 def agent_allowed_tools(config: AgentConfig) -> tuple[str, ...]:
-    if config.allowed_tools is None:
-        return tuple(allowed_tool_names())
-    return tuple(config.allowed_tools)
+    return registered_tools(config.allowed_tools)
+
+
+def registered_tools(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
+    """Filter to registered tools, preserving the caller's order."""
+    if allowed_tools is None:
+        return tuple(tool_registry.list_tool_names())
+    available = set(tool_registry.list_tool_names())
+    return tuple(name for name in allowed_tools if name in available)
+
+
+def run_tool(
+    name: str,
+    params: dict[str, Any],
+    *,
+    execution_mode: ExecutionMode = "handoff",
+) -> dict[str, Any]:
+    return tool_registry.run_tool(name, params, execution_mode=execution_mode)
 
 
 def turn_indices(max_turns: int | None) -> Iterable[int]:
@@ -378,13 +389,13 @@ def handle_tool_call(
 
     if parse_error:
         return reject("invalid-json-args", parse_error)
-    if name not in allowed_tool_names():
+    if tool_registry.get(name) is None:
         return reject("unknown-tool", f"unknown tool: {name}")
     if name not in allowed_tools:
         return reject(
             "disallowed-tool", f"tool is not allowed in this workflow: {name}"
         )
-    schema_errors = validate_tool_args(name, params)
+    schema_errors = tool_registry.validate_tool_args(name, params)
     if schema_errors:
         return reject("schema-mismatch", "; ".join(schema_errors))
     events: list[dict[str, Any]] = []

@@ -15,10 +15,14 @@ from ..timeline import (
     from_message_boundary,
     trace_object_id,
 )
-from ..tools import allowed_tool_names
 from ..tools.base import content_hash
 from ..trace import Object, ObjectId
-from .system import can_read_skill_files, skill_prompt_items, system_prompt
+from .system import (
+    can_read_skill_files,
+    enabled_tool_names,
+    skill_prompt_items,
+    system_prompt,
+)
 
 Representation = Literal["full", "summary", "stub"]
 
@@ -71,7 +75,7 @@ def prompt_components(
     Public ordering contract: system_prompt, tool descriptors, project context,
     then volatile timeline/objective/current-turn components.
     """
-    enabled_tools = tuple(allowed_tool_names(allowed_tools))
+    enabled_tools = enabled_tool_names(allowed_tools)
     if skills is None:
         skills = available_skills() if can_read_skill_files(enabled_tools) else []
     system_content = system_prompt(system, allowed_tools=enabled_tools, skills=skills)

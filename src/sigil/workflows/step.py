@@ -33,17 +33,17 @@ from ..protocols import (
     TURN_OUTCOME_FAILED,
     TURN_OUTCOME_STAGED,
 )
-from ..zeta.agent import AgentConfig, run_agent_turn
+from ..zeta.agent import AgentConfig, registered_tools, run_agent_turn
 from ..zeta.context import load_project_context
 from ..zeta.models import active_model_selection, model_selection_event
 from ..zeta.prompt import system_prompt
 from ..zeta.skills import expand_skill_directive
 from ..zeta.timeline import current_timeline, record_event
-from ..zeta.tools import TOOL_SPECS, allowed_tool_names
+from ..zeta.tools.registry import ExecutionMode
+from ..zeta.tools.registry import registry as tool_registry
 from ..zeta.trace import latest_prompt_trace_fields
 
 HandoffOutput = Literal["detail", "summary", "none"]
-ExecutionMode = Literal["handoff", "direct"]
 Workflow = Literal["ask", "propose", "do"]
 
 STEP_SYSTEM_PROMPT = f"""You are Zeta, a shell-native coding agent.
@@ -102,7 +102,7 @@ def step(
         expand_skill_directive(objective),
         stdin_text=stdin_text,
     )
-    enabled_tools = enabled_tool_tuple(allowed_tools)
+    enabled_tools = registered_tools(allowed_tools)
     ledger = TurnLedger(
         workflow=workflow,
         objective=objective,
@@ -208,12 +208,6 @@ def step(
     return 1
 
 
-def enabled_tool_tuple(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
-    if allowed_tools is None:
-        return tuple(allowed_tool_names())
-    return tuple(allowed_tools)
-
-
 class AgentStepEventRecorder(TurnEventRecorder):
     """Persist and render agent-step events, staging shell handoffs."""
 
@@ -306,9 +300,9 @@ def stages_mutations(
     if execution_mode != "handoff":
         return False
     return any(
-        spec.mutates()
+        tool.spec.mutates()
         for name in enabled_tools
-        if (spec := TOOL_SPECS.get(name)) is not None
+        if (tool := tool_registry.get(name)) is not None
     )
 
 

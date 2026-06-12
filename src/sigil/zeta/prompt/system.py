@@ -9,7 +9,7 @@ from typing import Any
 from jinja2 import Environment, StrictUndefined
 
 from ..skills import Skill, available_skills
-from ..tools import allowed_tool_names, model_tool_descriptors
+from ..tools.registry import registry as tool_registry
 
 PROMPT_TEMPLATE_ENV = Environment(
     autoescape=False,
@@ -82,7 +82,7 @@ def system_prompt(
     module only adds the runtime scaffolding: date line, tool protocol,
     skills, and tool descriptors.
     """
-    active_tools = tuple(allowed_tool_names(allowed_tools))
+    active_tools = enabled_tool_names(allowed_tools)
     active_skills = (
         tuple(skills)
         if skills is not None
@@ -217,3 +217,33 @@ def clean_prompt(prompt: str | None) -> str:
 
 def render_prompt_template(template: str, **context: Any) -> str:
     return PROMPT_TEMPLATE_ENV.from_string(template).render(**context).strip()
+
+
+def enabled_tool_names(allowed_tools: Iterable[str] | None) -> tuple[str, ...]:
+    available = tool_registry.list_tool_names()
+    if allowed_tools is None:
+        return tuple(available)
+    allowed = set(allowed_tools)
+    return tuple(name for name in available if name in allowed)
+
+
+def model_tool_descriptors(
+    allowed_tools: Iterable[str] | None,
+) -> list[dict[str, Any]]:
+    """Return provider-facing tool descriptors for the model prompt."""
+    descriptors = []
+    for name in enabled_tool_names(allowed_tools):
+        tool = tool_registry.get(name)
+        if tool is None:
+            continue
+        descriptors.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.spec.name,
+                    "description": tool.spec.description,
+                    "parameters": tool.spec.schema,
+                },
+            }
+        )
+    return descriptors

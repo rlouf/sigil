@@ -24,13 +24,13 @@ from sigil.zeta import context as zeta_context
 from sigil.zeta import model as zeta_model
 from sigil.zeta import prompt as zeta_prompt
 from sigil.zeta import skills as zeta_skills
-from sigil.zeta import tools as zeta_tools
 from sigil.zeta import trace as zeta_trace
+from sigil.zeta.prompt.system import model_tool_descriptors
 
 
 def test_zeta_prompt_builder_noop_transform_matches_chat_messages() -> None:
     store = zeta_trace.InMemoryStore()
-    tools = zeta_tools.model_tool_descriptors(())
+    tools = model_tool_descriptors(())
     transcript = [{"role": "user", "content": "prior"}]
     current_events = [{"type": "assistant_message", "content": "current"}]
 
@@ -74,7 +74,7 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
             {"type": "assistant_message", "tool_calls": tool_call_fixture("call-1")},
             {"type": "tool_result", "tool_call_id": "call-1", "result": {"ok": True}},
         ],
-        tools=zeta_tools.model_tool_descriptors(("read",)),
+        tools=model_tool_descriptors(("read",)),
     )
 
     assert prepared.prompt_object_id is not None
@@ -91,7 +91,7 @@ def test_zeta_prompt_builder_links_prompt_components() -> None:
 
 def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
     store = zeta_trace.InMemoryStore()
-    tools = zeta_tools.model_tool_descriptors(("read",))
+    tools = model_tool_descriptors(("read",))
     prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
         [{"role": "user", "content": "prior"}],
@@ -115,7 +115,7 @@ def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
 
 def test_zeta_prompt_request_reconstructs_a_no_thinking_prompt() -> None:
     store = zeta_trace.InMemoryStore()
-    tools = zeta_tools.model_tool_descriptors(("read",))
+    tools = model_tool_descriptors(("read",))
     prepared = zeta_prompt.PromptBuilder(store=store).build(
         "inspect",
         [],
@@ -289,7 +289,7 @@ def test_zeta_prompt_components_prefix_order(
         allowed_tools=("read",),
         context="Project context",
         current_events=[{"type": "assistant_message", "content": "current"}],
-        tools=zeta_tools.model_tool_descriptors(("read",)),
+        tools=model_tool_descriptors(("read",)),
     )
 
     assert [component.kind for component in components[:4]] == [

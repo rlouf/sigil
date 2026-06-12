@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .base import ToolSpec, error_result
+from sigil.zeta.tools.base import ToolSpec, error_result
 
 MAX_TOOL_RESULT_CHARS = 12_000
 

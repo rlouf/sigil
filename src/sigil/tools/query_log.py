@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from .base import ToolSpec, error_result
+from sigil.zeta.tools.base import ToolSpec, error_result
 
 if TYPE_CHECKING:
-    from ...ledger import LedgerIndex
+    from ..ledger import LedgerIndex
 
 DEFAULT_TURNS = 20
 MAX_TURNS = 50
@@ -77,9 +77,9 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily: the registry imports every tool module, and the
     # display layer reaches back into zeta.prompt — a module-level import
     # here closes that loop into a cycle.
-    from ...display.summarize import format_turn_line
-    from ...ledger import default_ledger_index, parse_since, touched_path_variants
-    from ...state import session_id
+    from ..display.summarize import format_turn_line
+    from ..ledger import default_ledger_index, parse_since, touched_path_variants
+    from ..state import session_id
 
     index = default_ledger_index()
     turn_token = str(params.get("turn_id") or "")
@@ -126,8 +126,8 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_expand(index: LedgerIndex, token: str) -> dict[str, Any]:
-    from ...display.summarize import render_turn_record
-    from ...ledger import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
+    from ..display.summarize import render_turn_record
+    from ..ledger import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
 
     try:
         resolved = resolve_turn_id(index, token)

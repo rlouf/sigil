@@ -13,7 +13,6 @@ from typing import Any
 
 from ..model import DEFAULT_MAX_COMPLETION_TOKENS, chat_completion_request_body
 from ..skills import Skill, available_skills
-from ..tools import allowed_tool_names
 from ..tools.base import content_hash
 from ..trace import (
     Derivation,
@@ -31,7 +30,7 @@ from .components import (
     prompt_component_object,
     prompt_components,
 )
-from .system import can_read_skill_files
+from .system import can_read_skill_files, enabled_tool_names
 from .transforms import NoOpPromptTransform, PromptTransform
 
 
@@ -201,7 +200,7 @@ class PromptBuilder:
             return None
 
     def _skills_for(self, allowed_tools: Iterable[str] | None) -> list[Skill]:
-        enabled = tuple(allowed_tool_names(allowed_tools))
+        enabled = enabled_tool_names(allowed_tools)
         cached = self._skills.get(enabled)
         if cached is None:
             cached = available_skills() if can_read_skill_files(enabled) else []

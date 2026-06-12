@@ -8,7 +8,7 @@ import subprocess
 import time
 from typing import Any
 
-from .base import ToolSpec, error_result, handoff
+from sigil.zeta.tools.base import ToolSpec, error_result, handoff
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_OUTPUT_CHARS = 12_000
