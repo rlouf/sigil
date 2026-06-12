@@ -115,8 +115,8 @@ def session_transcript(limit: int | None, json_output: bool) -> int:
 
     Shows questions, answers, and compact tool traces. Each answer is
     tagged with the id of the exact prompt the model saw, usable with
-    `sigil trace show`; model reasoning appears in full as italic text
-    above the answer it led to.
+    `sigil trace show`; model reasoning appears in full as italic
+    markdown above the answer it led to.
     """
     return print_session_transcript(limit, json_output)
 

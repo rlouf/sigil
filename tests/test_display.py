@@ -11,6 +11,7 @@ from _zeta_helpers import (
     visible_terminal_text,
 )
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 
 import sigil.display.render as display_render
@@ -782,18 +783,23 @@ def test_transcript_renders_reasoning_before_answer() -> None:
     assert text.index("the user wants the short version") < text.index("Here it is.")
 
 
-def test_transcript_reasoning_is_plain_italic_blue_text() -> None:
+def test_transcript_reasoning_renders_markdown_in_italic_magenta() -> None:
     blocks = display_render.transcript_assistant_block(
-        {"type": "assistant_message", "reasoning": "weighing", "content": "done"},
+        {
+            "type": "assistant_message",
+            "reasoning": "weighing **options**",
+            "content": "done",
+        },
         set(),
         {},
     )
 
-    reasoning_text = blocks[0]
-    assert not isinstance(reasoning_text, Panel)
+    reasoning = blocks[0]
+    assert not isinstance(reasoning, Panel)
+    assert isinstance(reasoning, Markdown)
     # Named magenta lands on iris under a Rose Pine terminal, matching the
     # live thinking tail: one color for sigil's thinking voice.
-    assert reasoning_text.style == "italic magenta"
+    assert reasoning.style == "italic magenta"
 
 
 def test_transcript_dims_user_scaffolding_sections() -> None:

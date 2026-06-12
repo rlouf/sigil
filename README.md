@@ -255,7 +255,7 @@ ask turns, handoff timeline events, and command results recorded through `+`.
 `sigil session transcript` renders that conversation back as a transcript —
 questions, answers, and compact tool traces, with each answer tagged by the
 id of the exact prompt the model saw. When the model streams reasoning, the
-transcript shows it in full as italic text above the answer it led to; the
+transcript shows it in full as italic markdown above the answer it led to; the
 live loop shows only the ephemeral tail and the `thought for 12s` line.
 
 The zsh binding also records every interactive command: the command line,
