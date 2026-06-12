@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from ..state import session_dir
+from ..state import session_dir, state_dir
 
 ObjectId = str
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
@@ -98,6 +98,15 @@ class AmbiguousIdError(LookupError):
         self.candidates = candidates
 
 
+class UnknownSessionError(LookupError):
+    """A session id named no recorded trace store."""
+
+    def __init__(self, session_id: str, available: list[str]) -> None:
+        super().__init__(session_id)
+        self.session_id = session_id
+        self.available = available
+
+
 class Store(Protocol):
     """Storage API shared by in-memory and SQLite stores."""
 
@@ -149,11 +158,34 @@ def default_sqlite_path() -> Path:
     return session_dir() / DEFAULT_SQLITE_NAME
 
 
+def session_sqlite_path(session_id: str) -> Path:
+    """Return the trace SQLite path for a named session."""
+    return session_dir(session_id) / DEFAULT_SQLITE_NAME
+
+
+def available_session_ids() -> list[str]:
+    """Return the session ids that have a recorded trace store, sorted."""
+    sessions_root = state_dir() / "sessions"
+    return sorted(
+        path.parent.name for path in sessions_root.glob(f"*/{DEFAULT_SQLITE_NAME}")
+    )
+
+
 _DEFAULT_STORES: dict[Path, SqliteStore] = {}
 
 
-def default_store() -> SqliteStore:
-    """Return the process-wide store for the current session path."""
+def default_store(session_id: str | None = None) -> SqliteStore:
+    """Return the process-wide store for the current session path.
+
+    An explicit session id opens that session's store read-only and
+    uncached; a missing store raises UnknownSessionError with the
+    recorded session ids.
+    """
+    if session_id is not None:
+        path = session_sqlite_path(session_id)
+        if not path.exists():
+            raise UnknownSessionError(session_id, available_session_ids())
+        return SqliteStore(path, read_only=True)
     path = default_sqlite_path()
     store = _DEFAULT_STORES.get(path)
     if store is None:
@@ -363,16 +395,22 @@ def _derivation_from_row(row: sqlite3.Row) -> Derivation:
 class SqliteStore(StoreBase):
     """Synchronous SQLite trace store using the standard library."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, read_only: bool = False) -> None:
         self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(str(path))
+        self.read_only = read_only
+        if read_only:
+            self.connection = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.connection = sqlite3.connect(str(path))
         self.connection.row_factory = sqlite3.Row
         self._write_lock = threading.RLock()
         self._batch_depth = 0
-        self.connection.execute("PRAGMA journal_mode=WAL")
+        if not read_only:
+            self.connection.execute("PRAGMA journal_mode=WAL")
         self.connection.execute("PRAGMA busy_timeout=5000")
-        self._init_schema()
+        if not read_only:
+            self._init_schema()
 
     @contextmanager
     def batch(self) -> Iterator[None]:

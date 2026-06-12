@@ -71,28 +71,11 @@ behavior:
 - The glyph aliases stayed: alias expansion runs before globbing, which
   is what lets a bare `?` reach the function in eval/script contexts.
   Interactive lines never reach them (widget first).
-- **Prompts are mandatory-quoted (Remi, 2026-06-12: "more honest, less
-  magical").** The prompt is one complete quoted span — captured raw,
-  never re-parsed, so nothing inside is expanded (`!`, `$`, apostrophes
-  in double quotes are all literal) — and the rest of the line is real
-  shell grammar: `, "summarize" > summary.txt` redirects, `, "x" |
-  wc -l` pipes. An unquoted prompt is refused by the widget with a
-  `zle -M` hint and stays in the buffer for editing; it never executes
-  and never reaches the model. Bare `,`/`,,`/`?` carry no prompt; `+`
-  text is shell grammar and needs no quotes. Scripts and mid-pipeline
-  use go through the functions/aliases as before. Pipeline consequence:
-  the dispatch function runs in a subshell as the first segment, so
-  history insertion and stash clearing happen at the next
-  `zle-line-init` in the parent shell, not in the dispatch function.
 - The accepted glyph line keeps showing what was typed: PREDISPLAY
   survives the final zle render (verified empirically) and is never
   parsed, so the widget sets it to the original buffer and dims the
   rewritten dispatch word with a buffer-relative `region_highlight`
-  entry (character offsets, multibyte-safe). The dispatch word is a
-  single `…` in UTF-8 locales — a function delegating to
-  `__sigil_dispatch`, which stays the fallback word elsewhere — so the
-  trailer is one dim character. Both words are excluded from history
-  and from spool recording. Both persist across zle sessions, so a `zle-line-init` hook
+  entry. Both persist across zle sessions, so a `zle-line-init` hook
   (chained via `add-zle-hook-widget`) clears them. Two related facts:
   the executed line is read from BUFFER *after* the widget chain
   returns — display and execution cannot be made to differ by buffer
@@ -505,3 +488,124 @@ Structural facts to build on:
 
 Graduation: "which session was I in when I asked about X last week" is
 answerable from the CLI without opening sqlite3 by hand.
+
+---
+
+# Implementation plan: ledger Stage 4 + explorer Stage D (in worktree
+# `ledger-stage-4-explorer-stage-d`)
+
+Made concrete against the landed code. Ordered D-first because the
+export/import bundle (4.2) consumes the cross-session store opens (D.1).
+
+## Observations
+
+- `ledger.sqlite3` is already machine-wide with a `session` column and a
+  `(session, time)` index; `sigil log` already has `--session` and
+  `--all-sessions`, defaulting to the current session
+  (`cli/log.py:62`). Stage 4.1 is a default flip plus listing
+  presentation, not storage work. `log show`, `blame`, and the resolver
+  already query the whole index — they are cross-session today.
+- The trace store is per-session by path only
+  (`session_dir()/zeta-trace.sqlite3`); `default_store()` keys a
+  process-wide cache on that path. `SqliteStore.__init__` always opens
+  read-write and runs `_init_schema` + the derivation-inputs backfill —
+  both write, so cross-session opens need an explicit read-only mode
+  (`sqlite3.connect("file:...?mode=ro", uri=True)`, skip schema init).
+- The ledger→trace bridge is the `turn/<turn_id>` ref set by
+  `record_turn_trace_object` (`agent_io.py:221`); the turn object links
+  prompts and tool results, so `graph_closure([turn object])` is exactly
+  the bundle closure for one turn.
+- `Derivation` deliberately carries no `created_at` in the dataclass;
+  the column orders every listing. Export must carry it and import must
+  restore it, or recency ordering breaks on the importing machine — so
+  import cannot go through plain `record_derivation` (which stamps now).
+- `put_object` recomputes the content address. A redacted object's
+  stored id no longer matches its (tombstoned) data, so import must
+  insert by the *exported* id, not recompute — one more reason import
+  needs dedicated store methods rather than the public write API.
+- Turn/effect records in `events.jsonl` carry their envelope (id, time,
+  session) already; `append_event` would re-stamp it. Import appends
+  the records verbatim with `append_jsonl_line` and indexes them;
+  `INSERT OR REPLACE` by primary key makes re-import converge, and an
+  index-existence check skips already-imported records so repeat
+  imports do not bloat the log. Reindex replays them like native
+  records — imports survive `log reindex` by construction.
+- Config precedent: models live in `~/.zeta/models.toml`. There is no
+  sigil config file yet; the privacy policy (4.3) needs one. Proposal:
+  `state_dir()/config.toml` — it sits with the data it governs and
+  inherits `SIGIL_STATE_DIR` isolation in tests. Flag if wrong.
+
+## Decisions (mine, flag if wrong)
+
+1. **D.1 — scoping.** `state.session_dir(session_id=...)` and
+   `default_store(session_id=...)` gain explicit parameters; `None`
+   keeps today's ambient behavior. Foreign sessions open read-only and
+   uncached; a missing store is a ClickException listing available
+   session ids (`sessions/*/zeta-trace.sqlite3`). The trace group gains
+   `--session ID` (group-level, threaded via `ctx`); every trace
+   command honors it. `--all-sessions` only where merging makes sense:
+   `trace log` and `trace grep`, with a session column in the output.
+   `trace replay` against a foreign store still replays; recording the
+   replay derivation degrades fail-open (read-only write → existing
+   `warn_trace_failure_once` path).
+2. **D.2 — grep.** Store method `search_objects(pattern, kind=None,
+   limit=None)`: SQLite `LIKE %pattern% ESCAPE` over `data_json`
+   (escaped like the prefix queries), newest-first via the same
+   derivations join as `objects()`; substring scan on `InMemoryStore`.
+   CLI `trace grep PATTERN [--kind K] [--limit N]` renders the shared
+   one-line format. No FTS5.
+3. **4.1 — default flip.** `sigil log` defaults to machine-wide;
+   `--session ID` filters; `--all-sessions` is deleted (alpha, no
+   backcompat). Machine-wide listings append a short session column to
+   `format_turn_line` (new keyword, default off) so interleaved
+   sessions stay readable; `--session` listings keep today's format.
+   `?` and `query_log` stay session-scoped — they answer "what just
+   happened here."
+4. **4.2 — bundle.** New `src/sigil/bundle.py` owning
+   `export_bundle(since, session) -> dict` and `import_bundle(payload)`.
+   Format: `{"sigil_bundle": 1, "records": [turn and effect payloads,
+   verbatim], "sessions": {sid: {"objects": [{id, kind, schema, data,
+   links}], "derivations": [{id, producer, output_id, input_ids,
+   params, created_at}], "refs": {name: id}}}}`. Export walks ledger
+   turns (since/session filters), opens each turn's session store
+   read-only, takes `graph_closure` from the `turn/<id>` ref, and
+   collects each closure object's `derivations_for_output` (a new
+   store accessor exposes their `created_at`). Import writes
+   per-session stores via two new SqliteStore methods —
+   `import_object(object_id, obj)` and `import_derivation(id,
+   derivation, created_at)`, both `INSERT OR IGNORE` — restores refs,
+   appends ledger records verbatim, and indexes them. CLI:
+   `sigil log export --since DATE [--session ID] [--output FILE]`
+   (stdout default) and `sigil log import FILE`.
+5. **4.3 — redact + policy.** `SqliteStore.redact_object(object_id,
+   reason)` replaces `data_json` with the tombstone `{"redacted":
+   true, "reason": ...}` in place — id (the original hash) and links
+   survive, derivations stay honest, content is gone. CLI
+   `sigil trace redact ID [--reason TEXT]` (honors `--session`,
+   opening that store read-write for this one command). Renderers show
+   `(redacted)`; `reconstructed_prompt_request` over a redacted
+   component reports `payload_verified` false, which is the honest
+   answer. Export/import carry tombstones as ordinary data — redaction
+   honored across machines by construction. Policy knob:
+   `state_dir()/config.toml` with `[privacy] objectives = "verbatim" |
+   "hash"`; `hash` stores `sha256:` digests in turn records at the
+   `turn_record` chokepoint (`protocols.py`). Default `verbatim`
+   (today's behavior).
+
+## Work items (each: tests → impl → docs → pre-commit)
+
+1. D.1: explicit-session `session_dir`/`default_store`, read-only
+   SqliteStore mode, `trace --session`, `trace log --all-sessions`,
+   available-session listing + errors.
+2. D.2: `search_objects` on both stores + `trace grep`
+   (+ `--kind`, `--limit`, `--session`, `--all-sessions`).
+3. 4.1: flip `sigil log` default, delete `--all-sessions`, session
+   column on machine-wide listings.
+4. 4.2: `bundle.py` export/import + store import methods +
+   `log export`/`log import` CLI.
+5. 4.3: `redact_object` + `trace redact` + `(redacted)` rendering +
+   `[privacy]` config at the `turn_record` chokepoint.
+6. Graduation checks as tests: (a) export → fresh `SIGIL_STATE_DIR` →
+   import → `log`, `log show`, `blame`, `trace --session … show`
+   answer, redacted component shows tombstone; (b) `trace grep` +
+   `--all-sessions` finds which session asked about X.

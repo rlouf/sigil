@@ -481,6 +481,16 @@ sigil trace replay 4f9d01c2 --model fast --diff
 A worked walkthrough with real output lives in
 [docs/demos/trace-replay.md](docs/demos/trace-replay.md).
 
+None of this is locked to the current shell. `sigil trace --session ID
+…` reads another session's store (read-only — nothing you inspect can
+mutate it), and `trace log --all-sessions` lists every recorded
+session's objects, one session id per line prefix:
+
+```sh
+sigil trace --session ttys004-8812 show 4f9d01c2
+sigil trace log --all-sessions
+```
+
 ## Project Scope
 
 Sigil is:

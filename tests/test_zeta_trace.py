@@ -120,6 +120,115 @@ def test_zeta_default_store_follows_the_session_path(
     assert second.path != first.path
 
 
+def seed_session_store(session_id: str, text: str) -> str:
+    """Write one prompt object into a named session's trace store."""
+    path = zeta_trace.session_sqlite_path(session_id)
+    store = zeta_trace.SqliteStore(path)
+    prompt_id = store.put_object(
+        zeta_trace.Object(
+            kind="prompt",
+            schema="zeta.prompt.v1",
+            data={"payload": {"text": text}},
+        )
+    )
+    store.record_derivation(
+        zeta_trace.Derivation(producer="unit:test", output_id=prompt_id)
+    )
+    store.close()
+    return prompt_id
+
+
+def test_zeta_sqlite_store_read_only_rejects_writes(tmp_path: Path) -> None:
+    path = tmp_path / "trace.sqlite3"
+    writer = zeta_trace.SqliteStore(path)
+    stored_id = writer.put_object(
+        zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={})
+    )
+    writer.close()
+
+    reader = zeta_trace.SqliteStore(path, read_only=True)
+
+    assert reader.get_object(stored_id) is not None
+    with pytest.raises(sqlite3.OperationalError):
+        reader.put_object(
+            zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={"x": 1})
+        )
+    reader.close()
+
+
+def test_zeta_default_store_opens_other_sessions_read_only(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    prompt_id = seed_session_store("other", "from the other session")
+
+    store = zeta_trace.default_store(session_id="other")
+
+    assert store.read_only
+    assert store.get_object(prompt_id) is not None
+    with pytest.raises(sqlite3.OperationalError):
+        store.put_object(zeta_trace.Object(kind="prompt", schema="v1", data={}))
+    second = zeta_trace.default_store(session_id="other")
+    assert second is not store
+    second.close()
+    store.close()
+
+
+def test_zeta_default_store_raises_for_unknown_sessions(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    seed_session_store("known", "seed")
+
+    with pytest.raises(zeta_trace.UnknownSessionError) as excinfo:
+        zeta_trace.default_store(session_id="missing")
+
+    assert excinfo.value.session_id == "missing"
+    assert "known" in excinfo.value.available
+
+
+def test_zeta_available_session_ids_lists_stores_sorted(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    seed_session_store("beta", "b")
+    seed_session_store("alpha", "a")
+
+    assert zeta_trace.available_session_ids() == ["alpha", "beta"]
+
+
+def test_sigil_zeta_trace_cli_session_scope_reads_other_store(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    prompt_id = seed_session_store("other", "scoped read")
+
+    result = CliRunner().invoke(
+        sigil_cli, ["trace", "--session", "other", "show", "--json", prompt_id]
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["id"] == prompt_id
+
+
+def test_sigil_zeta_trace_cli_unknown_session_lists_available(monkeypatch) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    seed_session_store("known", "seed")
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "--session", "missing", "log"])
+
+    assert result.exit_code != 0
+    assert "missing" in result.output
+    assert "known" in result.output
+
+
+def test_sigil_zeta_trace_cli_log_all_sessions_prefixes_session_ids(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_SESSION_ID", "current")
+    seed_session_store("alpha", "alpha prompt")
+    seed_session_store("beta", "beta prompt")
+
+    result = CliRunner().invoke(sigil_cli, ["trace", "log", "--all-sessions"])
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert any(line.startswith("alpha") for line in lines)
+    assert any(line.startswith("beta") for line in lines)
+
+
 def test_zeta_close_default_stores_closes_connections_and_reopens() -> None:
     store = zeta_trace.default_store()
 
