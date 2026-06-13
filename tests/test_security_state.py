@@ -353,9 +353,9 @@ def test_sqlite_event_store_filters_and_cursors() -> None:
     ).event
     second = store.accept(
         DraftEvent(
-            event_type="zeta.run.tool_result",
+            event_type="zeta.run.tool_call",
             source="zeta",
-            payload={"content": "two"},
+            payload={"name": "read"},
             caused_by=first.id,
             session_id="s1",
         )

@@ -462,6 +462,66 @@ def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     assert durable_events[0].session_id == "zeta-test"
 
 
+def test_zeta_timeline_tool_result_stays_trace_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+
+    zeta_timeline.record_event(
+        {
+            "type": "tool_result",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "result": {"ok": True},
+        }
+    )
+
+    timeline = zeta_timeline.current_timeline()
+    assert timeline[0]["type"] == "tool_result"
+    assert timeline[0]["result"] == {"ok": True}
+    assert event_store().list_events(Filter(event_type="zeta.run.tool_result")) == []
+
+
+def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+
+    zeta_timeline.record_event(
+        {
+            "type": "assistant_message",
+            "id": "assistant-event-1",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        }
+    )
+    zeta_timeline.record_event(
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "name": "read",
+            "input": {},
+            "caused_by": "assistant-event-1",
+        }
+    )
+
+    assistant = event_store().get("assistant-event-1")
+    tool_calls = event_store().list_events(Filter(event_type="zeta.run.tool_call"))
+    assert assistant is not None
+    assert assistant.event_type == "zeta.run.assistant_message"
+    assert tool_calls[0].caused_by == "assistant-event-1"
+
+
 def test_zeta_timeline_projects_from_ref_and_object(
     tmp_path: Path,
     monkeypatch,

@@ -80,6 +80,48 @@ def test_zeta_agent_event_omits_empty_reasoning() -> None:
     assert "reasoning" not in event
 
 
+def test_zeta_agent_tool_call_is_caused_by_assistant_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "README.md"
+    target.write_text("hello\n", encoding="utf-8")
+
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        return {
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": json.dumps({"path": str(target)}),
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "read",
+        [],
+        zeta_agent.AgentConfig(allowed_tools=("read",), max_turns=1),
+    )
+
+    assistant = event_by_type(result.events, "assistant_message")
+    tool_call = event_by_type(result.events, "tool_call")
+    assert assistant["id"]
+    assert tool_call["caused_by"] == assistant["id"]
+
+
 def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 

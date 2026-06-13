@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
@@ -108,6 +109,7 @@ def run_agent_turn(
         message_event = assistant_message_event(assistant)
         if prompt_trace is not None:
             attach_prompt_trace(message_event, prompt_trace)
+        assistant_event_id = ensure_event_id(message_event) if message_event else None
         if message_event:
             emit_event(events, message_event, event_sink)
         tool_calls = assistant_tool_calls(assistant)
@@ -130,6 +132,7 @@ def run_agent_turn(
                 prompt_trace=prompt_trace,
                 prompt_builder=builder,
                 event_sink=event_sink,
+                caused_by=assistant_event_id,
             )
             events.extend(result_event.events)
             if result_event.handoff is not None and config.stop_on_handoff:
@@ -312,6 +315,15 @@ def assistant_message_event(assistant: dict[str, Any]) -> dict[str, Any]:
     return event
 
 
+def ensure_event_id(event: dict[str, Any]) -> str:
+    event_id = event.get("id")
+    if isinstance(event_id, str) and event_id:
+        return event_id
+    event_id = str(uuid.uuid4())
+    event["id"] = event_id
+    return event_id
+
+
 def assistant_tool_calls(assistant: dict[str, Any]) -> list[dict[str, Any]]:
     raw_tool_calls = assistant.get("tool_calls")
     if not isinstance(raw_tool_calls, list):
@@ -363,6 +375,7 @@ def handle_tool_call(
     prompt_trace: PromptTrace | None = None,
     prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
+    caused_by: str | None = None,
 ) -> ToolCallResult:
     call_id = str(tool_call.get("id") or f"call-{index}")
     function = tool_call.get("function")
@@ -377,6 +390,7 @@ def handle_tool_call(
             prompt_trace=prompt_trace,
             prompt_builder=prompt_builder,
             event_sink=event_sink,
+            caused_by=caused_by,
         )
     name = str(function.get("name") or "")
     arguments = function.get("arguments")
@@ -389,6 +403,8 @@ def handle_tool_call(
         "input": params,
         "arguments": arguments if isinstance(arguments, str) else json.dumps(params),
     }
+    if caused_by is not None:
+        call_event["caused_by"] = caused_by
 
     def reject(code: str, message: str) -> ToolCallResult:
         return invalid_tool_result(
@@ -480,6 +496,7 @@ def invalid_tool_result(
     prompt_trace: PromptTrace | None = None,
     prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
+    caused_by: str | None = None,
 ) -> ToolCallResult:
     event = call_event or {
         "type": "tool_call",
@@ -488,6 +505,8 @@ def invalid_tool_result(
         "name": name,
         "input": params,
     }
+    if caused_by is not None:
+        event["caused_by"] = caused_by
     events: list[dict[str, Any]] = []
     attach_tool_call_trace(
         event,

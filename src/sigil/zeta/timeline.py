@@ -24,6 +24,13 @@ from .trace import (
 RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"assistant_message", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage"}
+DURABLE_RUN_EVENT_TYPES = {
+    "assistant_message",
+    "model_usage",
+    "tool_call",
+    "turn_aborted",
+    "user_message",
+}
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,8 @@ def record_event(event: dict[str, Any]) -> dict[str, Any]:
 
 def record_durable_event(event: dict[str, Any]) -> None:
     event_type = str(event.get("type") or "event")
+    if event_type not in DURABLE_RUN_EVENT_TYPES:
+        return
     payload = {
         key: value
         for key, value in event.items()
@@ -94,10 +103,18 @@ def record_durable_event(event: dict[str, Any]) -> None:
                 ),
                 session_id=str(event.get("session") or session_id()),
                 timestamp_micros=timestamp_micros_from_time(event.get("time")),
+                event_id=durable_event_id(event_type, event),
             )
         )
     except Exception as exc:
         warn_trace_failure_once("record_durable_event", exc)
+
+
+def durable_event_id(event_type: str, event: dict[str, Any]) -> str | None:
+    if event_type == "tool_call":
+        return None
+    event_id = event.get("id")
+    return event_id if isinstance(event_id, str) and event_id else None
 
 
 def current_timeline() -> list[dict[str, Any]]:
