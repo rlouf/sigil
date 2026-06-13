@@ -6,7 +6,8 @@ from datetime import datetime
 
 import click
 
-from ..session import read_event_log
+from ..events import Event, Filter, event_store, time_from_timestamp_micros
+from ..session import read_events
 from ._base import cli, examples
 from ._shared import pretty_print_json
 
@@ -43,16 +44,35 @@ def cmd_events(json_output: bool, raw: bool, limit: int) -> int:
 
 def print_events_list(*, json_output: bool, raw: bool, limit: int) -> int:
     """Print a bounded recent view of the global event log."""
-    events = read_event_log()
+    if raw:
+        events = event_store().list_events(Filter())
+        pretty_print_json([normalized_event(event) for event in events[-limit:]])
+        return 0
+    events = read_events()
     recent = events[-limit:]
     if json_output:
-        pretty_print_json(recent if raw else [event_summary(event) for event in recent])
+        pretty_print_json([event_summary(event) for event in recent])
         return 0
     if not recent:
         print("no events recorded")
         return 0
     print_events_table([event_summary(event) for event in recent])
     return 0
+
+
+def normalized_event(event: Event) -> dict[str, object]:
+    """Return the durable event envelope for raw JSON output."""
+    return {
+        "id": event.id,
+        "type": event.event_type,
+        "source": event.source,
+        "payload": event.payload,
+        "idempotency_key": event.idempotency_key,
+        "caused_by": event.caused_by,
+        "session_id": event.session_id,
+        "timestamp_micros": event.timestamp_micros,
+        "time": time_from_timestamp_micros(event.timestamp_micros),
+    }
 
 
 def print_events_table(summaries: list[dict[str, object]]) -> None:

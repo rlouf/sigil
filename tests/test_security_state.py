@@ -455,7 +455,14 @@ def test_events_default_lists_recent_events() -> None:
     assert summaries[-1]["event"] == "failure recorded"
     assert summaries[-1]["detail"] == "git status --short -> 0"
     assert raw.exit_code == 0, raw.output
-    assert "short_id" not in json.loads(raw.output)[0]
+    raw_events = json.loads(raw.output)
+    assert raw_events[0]["type"] == "first"
+    assert raw_events[0]["source"] == "sigil"
+    assert raw_events[0]["session_id"] == "test"
+    assert raw_events[0]["payload"]["cwd"]
+    assert raw_events[1]["payload"]["command"] == "git status --short"
+    assert "short_id" not in raw_events[0]
+    assert "command" not in raw_events[1]
 
 
 def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:

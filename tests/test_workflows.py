@@ -22,7 +22,7 @@ import sigil.display.render as display_render
 from sigil import agent_io
 from sigil import handoff as sigil_handoff
 from sigil.cli import cli as sigil_cli
-from sigil.ledger import default_ledger_index
+from sigil.ledger import ledger_index
 from sigil.protocols import (
     EFFECT_KIND_COMMAND,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
@@ -42,7 +42,7 @@ from sigil.protocols import (
     turn_contract,
     turn_record,
 )
-from sigil.session import read_event_log, record_turn
+from sigil.session import read_events, record_turn
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from sigil.zeta import agent as zeta_agent
@@ -1908,11 +1908,11 @@ def test_effect_record_keeps_only_set_optionals() -> None:
 
 
 def ledger_turns() -> list[dict[str, Any]]:
-    return [event for event in read_event_log() if is_turn_record(event)]
+    return [event for event in read_events() if is_turn_record(event)]
 
 
 def ledger_effects() -> list[dict[str, Any]]:
-    return [event for event in read_event_log() if is_effect_record(event)]
+    return [event for event in read_events() if is_effect_record(event)]
 
 
 def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
@@ -1978,7 +1978,7 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
     assert effect["command"] == "uv run pytest"
     assert effect["tool_call_id"] == "call-1"
     assert "exit_status" not in effect
-    index = default_ledger_index()
+    index = ledger_index()
     assert index.turn(turn["turn_id"]) == turn
     assert index.effects_for_turn(turn["turn_id"]) == [effect]
 
@@ -2225,7 +2225,7 @@ def test_record_turn_emits_run_turn_and_command_effect() -> None:
     assert effect["exit_status"] == 1
     assert effect["duration_ms"] == 42
     assert effect["staged"] is False
-    index = default_ledger_index()
+    index = ledger_index()
     assert index.turn(turn["turn_id"]) == turn
     assert index.effects_for_turn(turn["turn_id"]) == [effect]
 
@@ -2277,7 +2277,7 @@ def test_shell_handoff_resolution_emits_handoff_effect() -> None:
     assert effect["command"] == "uv run pytest"
     assert effect["exit_status"] == 2
     assert effect["staged"] is True
-    assert default_ledger_index().effects_for_turn("turn-stage-1") == [effect]
+    assert ledger_index().effects_for_turn("turn-stage-1") == [effect]
 
 
 def test_cancelled_handoff_resolution_emits_cancelled_effect() -> None:

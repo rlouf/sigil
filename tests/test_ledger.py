@@ -20,7 +20,7 @@ from sigil.protocols import (
     turn_contract,
     turn_record,
 )
-from sigil.session import clear_current_session, read_event_log
+from sigil.session import clear_current_session, read_events
 from sigil.state import append_event, session_dir, state_dir
 
 
@@ -56,22 +56,22 @@ def sample_effect_record(
 def test_ledger_append_turn_record_writes_log_and_index() -> None:
     payload = sigil_ledger.append_turn_record(sample_turn_record())
 
-    (event,) = read_event_log()
+    (event,) = read_events()
     assert event == payload
-    assert sigil_ledger.default_ledger_index().turn("turn-1") == payload
+    assert sigil_ledger.ledger_index().turn("turn-1") == payload
 
 
 def test_ledger_append_effect_record_writes_log_and_index() -> None:
     payload = sigil_ledger.append_effect_record(sample_effect_record())
 
-    (event,) = read_event_log()
+    (event,) = read_events()
     assert event == payload
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     assert index.effects_for_turn("turn-1") == [payload]
 
 
 def test_ledger_index_upserts_converge_on_one_row_per_id() -> None:
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     first = append_event(sample_turn_record())
     index.index_record(first)
     index.index_record(first)
@@ -84,14 +84,14 @@ def test_ledger_index_upserts_converge_on_one_row_per_id() -> None:
 
 
 def test_ledger_index_ignores_non_ledger_events() -> None:
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
 
     assert index.index_record({"type": "user_message", "content": "hi"}) is False
     assert index.turns() == []
 
 
 def test_ledger_turns_lists_newest_first_and_honors_limit() -> None:
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(append_event(sample_turn_record("turn-old", time=100.0)))
     index.index_record(append_event(sample_turn_record("turn-new", time=200.0)))
 
@@ -101,7 +101,7 @@ def test_ledger_turns_lists_newest_first_and_honors_limit() -> None:
 
 
 def test_ledger_effects_touching_filters_by_exact_path() -> None:
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     touched = append_event(
         sample_effect_record(
             "effect-1",
@@ -125,14 +125,14 @@ def test_ledger_effects_touching_filters_by_exact_path() -> None:
 
 
 def test_ledger_default_index_is_cached_and_reopens_after_close() -> None:
-    first = sigil_ledger.default_ledger_index()
+    first = sigil_ledger.ledger_index()
 
-    assert sigil_ledger.default_ledger_index() is first
+    assert sigil_ledger.ledger_index() is first
 
     sigil_ledger.close_ledger_indexes()
     with pytest.raises(sqlite3.ProgrammingError):
         first.connection.execute("SELECT 1")
-    assert sigil_ledger.default_ledger_index() is not first
+    assert sigil_ledger.ledger_index() is not first
 
 
 def test_ledger_append_survives_index_failure(monkeypatch) -> None:
@@ -140,11 +140,11 @@ def test_ledger_append_survives_index_failure(monkeypatch) -> None:
         raise sqlite3.OperationalError("disk I/O error")
 
     monkeypatch.setattr(sigil_ledger, "_WARNED_FAILURES", set())
-    monkeypatch.setattr(sigil_ledger, "default_ledger_index", broken_index)
+    monkeypatch.setattr(sigil_ledger, "ledger_index", broken_index)
 
     payload = sigil_ledger.append_turn_record(sample_turn_record())
 
-    (event,) = read_event_log()
+    (event,) = read_events()
     assert event == payload
 
 
@@ -153,12 +153,14 @@ def test_ledger_reindex_reads_event_store() -> None:
     append_event(sample_effect_record("effect-old", turn_id="turn-old"))
     append_event(sample_turn_record("turn-new", time=200.0))
     append_event({"type": "user_message", "content": "not a ledger record"})
+    index = sigil_ledger.ledger_index()
+    index.index_record(sample_turn_record("stale-turn", time=300.0))
 
     counts = sigil_ledger.reindex()
 
     assert counts == (2, 1)
-    index = sigil_ledger.default_ledger_index()
     assert [row["turn_id"] for row in index.turns()] == ["turn-new", "turn-old"]
+    assert index.turn("stale-turn") is None
     assert index.effects_for_turn("turn-old")[0]["effect_id"] == "effect-old"
 
 
@@ -170,13 +172,13 @@ def test_ledger_reindex_is_idempotent() -> None:
     second = sigil_ledger.reindex()
 
     assert first == second == (1, 1)
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     assert len(index.turns()) == 1
     assert len(index.effects_for_turn("turn-1")) == 1
 
 
 def test_ledger_query_turns_filters_workflow_outcome_and_since() -> None:
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(
         append_event(sample_turn_record("turn-ask", workflow="ask", time=100.0))
     )
@@ -204,7 +206,7 @@ def test_ledger_query_turns_filters_workflow_outcome_and_since() -> None:
 
 
 def test_ledger_query_turns_scopes_by_session_and_touched_path() -> None:
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(
         append_event(sample_turn_record("turn-here", time=100.0)) | {"session": "here"}
     )
@@ -233,7 +235,7 @@ def test_ledger_query_turns_scopes_by_session_and_touched_path() -> None:
 
 
 def test_ledger_turn_ids_with_prefix_lists_matches_sorted() -> None:
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(append_event(sample_turn_record("aaaa-1111")))
     index.index_record(append_event(sample_turn_record("aaaa-2222")))
     index.index_record(append_event(sample_turn_record("bbbb-3333")))
@@ -245,7 +247,7 @@ def test_ledger_turn_ids_with_prefix_lists_matches_sorted() -> None:
 
 def test_ledger_pending_staged_command_clears_on_resolution(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "pending-test")
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(
         append_event(
             sample_effect_record(
@@ -278,7 +280,7 @@ def test_ledger_pending_staged_command_clears_on_resolution(monkeypatch) -> None
 
 def test_ledger_cost_since_sums_session_turns(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "cost-test")
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(
         append_event(
             sample_turn_record(
@@ -312,7 +314,7 @@ def test_ledger_cost_since_sums_session_turns(monkeypatch) -> None:
 
 def seed_log_cli_index(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "log-cli")
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(
         append_event(
             sample_turn_record(
@@ -417,7 +419,7 @@ def test_sigil_log_renders_cost_and_json(monkeypatch) -> None:
 
 def test_sigil_log_touched_filter_finds_writing_turn(monkeypatch) -> None:
     seed_log_cli_index(monkeypatch)
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(
         append_event(
             sample_effect_record(
@@ -447,7 +449,7 @@ def test_sigil_log_empty_ledger_prints_friendly_line(monkeypatch) -> None:
 
 def seed_show_and_blame_index(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "show-cli")
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     record = turn_record(
         "turn-do-1111",
         workflow="do",
@@ -557,7 +559,7 @@ def test_ledger_cli_log_reindex_reports_counts() -> None:
     assert result.exit_code == 0
     assert "1 turn record(s)" in result.output
     assert "1 effect record(s)" in result.output
-    assert sigil_ledger.default_ledger_index().turn("turn-1") is not None
+    assert sigil_ledger.ledger_index().turn("turn-1") is not None
 
 
 def seed_bundle_state(monkeypatch) -> dict[str, str]:
@@ -565,7 +567,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
     from sigil.zeta import trace as zeta_trace
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "bundle-src")
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     turn = append_event(
         sample_turn_record(
             "turn-bundle-1",
@@ -638,7 +640,7 @@ def test_bundle_export_honors_since_and_session_filters(monkeypatch) -> None:
     from sigil.bundle import export_bundle
 
     seed_bundle_state(monkeypatch)
-    index = sigil_ledger.default_ledger_index()
+    index = sigil_ledger.ledger_index()
     index.index_record(
         append_event(sample_turn_record("turn-late", time=900.0))
         | {"session": "late-session"}
@@ -658,7 +660,7 @@ def test_bundle_export_skips_sessions_without_trace_stores(monkeypatch) -> None:
     from sigil.bundle import export_bundle
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "no-trace")
-    sigil_ledger.default_ledger_index().index_record(
+    sigil_ledger.ledger_index().index_record(
         append_event(sample_turn_record("turn-no-trace"))
     )
 
@@ -716,7 +718,7 @@ def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
 
     assert first["records"] == 2
     assert second["records"] == 0
-    log_lines = read_event_log()
+    log_lines = read_events()
     assert len(log_lines) == 2
 
 
@@ -733,7 +735,7 @@ def test_bundle_import_survives_reindex(monkeypatch, tmp_path) -> None:
     result = CliRunner().invoke(sigil_cli, ["log", "reindex"])
 
     assert result.exit_code == 0
-    assert sigil_ledger.default_ledger_index().turn("turn-bundle-1") is not None
+    assert sigil_ledger.ledger_index().turn("turn-bundle-1") is not None
 
 
 def test_sigil_log_export_and_import_round_trip_via_cli(
@@ -765,4 +767,4 @@ def test_ledger_survives_session_clear() -> None:
     assert not root.exists()
     assert (state_dir() / "ledger.sqlite3").exists()
     assert (state_dir() / "events.sqlite3").exists()
-    assert sigil_ledger.default_ledger_index().turn("turn-1") is not None
+    assert sigil_ledger.ledger_index().turn("turn-1") is not None

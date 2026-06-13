@@ -9,7 +9,7 @@ from _zeta_helpers import write_models_config
 from click.testing import CliRunner
 
 from sigil.cli import cli
-from sigil.ledger import default_ledger_index
+from sigil.ledger import ledger_index
 from sigil.protocols import effect_record, turn_contract, turn_record
 from sigil.session import record_turn
 from sigil.state import append_event
@@ -125,7 +125,7 @@ def test_status_reports_last_delegation_and_today_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-ledger")
-    index = default_ledger_index()
+    index = ledger_index()
     index.index_record(
         append_event(
             turn_record(
@@ -164,7 +164,7 @@ def test_status_reports_pending_staged_handoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-pending")
-    index = default_ledger_index()
+    index = ledger_index()
     index.index_record(
         append_event(
             effect_record(
@@ -202,7 +202,7 @@ def test_status_omits_ledger_lines_for_quiet_sessions(
 
 def test_status_json_carries_ledger_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-json")
-    index = default_ledger_index()
+    index = ledger_index()
     index.index_record(
         append_event(
             turn_record(

@@ -78,10 +78,10 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     # display layer reaches back into zeta.prompt — a module-level import
     # here closes that loop into a cycle.
     from ..display.summarize import format_turn_line
-    from ..ledger import default_ledger_index, parse_since, touched_path_variants
+    from ..ledger import ledger_index, parse_since, touched_path_variants
     from ..state import session_id
 
-    index = default_ledger_index()
+    index = ledger_index()
     turn_token = str(params.get("turn_id") or "")
     if turn_token:
         return run_expand(index, turn_token)

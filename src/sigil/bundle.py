@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .ledger import LedgerIndex, default_ledger_index
+from .ledger import LedgerIndex, ledger_index
 from .protocols import is_effect_record, is_turn_record
 from .state import append_event
 from .zeta.trace import (
@@ -25,7 +25,7 @@ def export_bundle(
     session: str | None = None,
 ) -> dict[str, Any]:
     """Collect matching turns, their effects, and their trace closures."""
-    index = default_ledger_index()
+    index = ledger_index()
     records: list[dict[str, Any]] = []
     turn_ids_by_session: dict[str, list[str]] = {}
     for turn in index.query_turns(session=session, since=since):
@@ -94,9 +94,7 @@ def import_bundle(payload: dict[str, Any]) -> dict[str, int]:
     """
     if payload.get("sigil_bundle") != BUNDLE_VERSION:
         raise ValueError(f"not a sigil bundle (expected version {BUNDLE_VERSION})")
-    records = import_ledger_records(
-        default_ledger_index(), payload.get("records") or []
-    )
+    records = import_ledger_records(ledger_index(), payload.get("records") or [])
     objects = 0
     sessions = payload.get("sessions") or {}
     for session_id, graph in sessions.items():

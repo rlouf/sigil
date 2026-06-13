@@ -141,6 +141,16 @@ class LedgerIndex:
         )
         self.connection.commit()
 
+    def clear(self) -> None:
+        """Delete derived projection rows before a full rebuild."""
+        self.connection.executescript(
+            """
+            DELETE FROM effects;
+            DELETE FROM turns;
+            """
+        )
+        self.connection.commit()
+
     def index_record(self, payload: dict[str, Any]) -> bool:
         """Index one event payload; non-ledger events return False."""
         if is_turn_record(payload):
@@ -373,14 +383,14 @@ def record_json(payload: dict[str, Any]) -> str:
 
 
 def default_ledger_path() -> Path:
-    """Return the global ledger index path next to the event log."""
+    """Return the global ledger index path next to the event store."""
     return state_dir() / DEFAULT_LEDGER_NAME
 
 
 _DEFAULT_INDEXES: dict[Path, LedgerIndex] = {}
 
 
-def default_ledger_index() -> LedgerIndex:
+def ledger_index() -> LedgerIndex:
     """Return the process-wide ledger index for the current state dir."""
     path = default_ledger_path()
     index = _DEFAULT_INDEXES.get(path)
@@ -416,14 +426,15 @@ def append_effect_record(record: dict[str, Any]) -> dict[str, Any]:
 
 def index_payload(operation: str, payload: dict[str, Any]) -> None:
     try:
-        default_ledger_index().index_record(payload)
+        ledger_index().index_record(payload)
     except Exception as exc:
         warn_ledger_failure_once(operation, exc)
 
 
 def reindex(index: LedgerIndex | None = None) -> tuple[int, int]:
     """Rebuild the index from the event store."""
-    target = index if index is not None else default_ledger_index()
+    target = index if index is not None else ledger_index()
+    target.clear()
     turns = 0
     effects = 0
     for event in event_store().list_events(Filter()):

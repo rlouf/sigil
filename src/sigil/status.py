@@ -7,7 +7,7 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from .ledger import default_ledger_index, warn_ledger_failure_once
+from .ledger import ledger_index, warn_ledger_failure_once
 from .session import latest_active_failure
 from .state import session_id
 from .zeta.models import resolve_active_model
@@ -124,7 +124,7 @@ def ledger_status_fields(
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, int]]:
     """Read the session's ledger facts, failing open to empty values."""
     try:
-        index = default_ledger_index()
+        index = ledger_index()
         turns = index.query_turns(session=current_session, limit=LEDGER_SCAN_LIMIT)
         last_turn = next(
             (turn for turn in turns if turn.get("workflow") in DELEGATION_WORKFLOWS),

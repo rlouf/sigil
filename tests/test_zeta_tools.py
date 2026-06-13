@@ -538,12 +538,12 @@ def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
 
 
 def seed_query_log_ledger(monkeypatch) -> None:
-    from sigil.ledger import default_ledger_index
+    from sigil.ledger import ledger_index
     from sigil.protocols import effect_record, turn_contract, turn_record
     from sigil.state import append_event
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "query-log-here")
-    index = default_ledger_index()
+    index = ledger_index()
     index.index_record(
         append_event(
             {

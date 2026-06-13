@@ -63,9 +63,9 @@ def cmd_log(
         return 0
     # Imported lazily: `sigil.cli` must stay light at import time.
     from ..display.summarize import format_turn_line
-    from ..ledger import default_ledger_index, touched_path_variants
+    from ..ledger import ledger_index, touched_path_variants
 
-    turns = default_ledger_index().query_turns(
+    turns = ledger_index().query_turns(
         session=session_filter,
         workflow=workflow,
         since=since_epoch(since) if since else None,
@@ -204,9 +204,9 @@ def cmd_log_reindex() -> int:
     the event log loses no turn, effect, or cost answer.
     """
     # Imported lazily: `sigil.cli` must stay light at import time.
-    from ..ledger import default_ledger_index, reindex
+    from ..ledger import ledger_index, reindex
 
-    turns, effects = reindex(default_ledger_index())
+    turns, effects = reindex(ledger_index())
     click.echo(f"indexed {turns} turn record(s), {effects} effect record(s)")
     return 0
 
@@ -224,9 +224,9 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
     `sigil trace show`. TURN_ID may be a full id or a unique prefix.
     """
     from ..display.summarize import render_turn_record
-    from ..ledger import default_ledger_index
+    from ..ledger import ledger_index
 
-    index = default_ledger_index()
+    index = ledger_index()
     resolved = resolve_cli_turn_id(index, turn_id)
     turn = index.turn(resolved)
     if turn is None:
@@ -256,9 +256,9 @@ def cmd_blame(file: str) -> int:
     hashes. Bash commands record what ran, not which files it touched —
     find those with `sigil log` and the command text.
     """
-    from ..ledger import default_ledger_index, touched_path_variants
+    from ..ledger import ledger_index, touched_path_variants
 
-    index = default_ledger_index()
+    index = ledger_index()
     effects: list[dict[str, Any]] = []
     seen: set[str] = set()
     for path in touched_path_variants(file):

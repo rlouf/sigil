@@ -68,7 +68,7 @@ def known_sessions() -> list[dict[str, Any]]:
     root = state_dir() / "sessions"
     if not root.exists():
         return []
-    latest_by_session = latest_events_by_session(read_event_log())
+    latest_by_session = latest_events_by_session(read_events())
     sessions = []
     for path in sorted(root.iterdir(), key=lambda item: item.name):
         if not path.is_dir():
@@ -127,7 +127,7 @@ def read_session_file(path: Path) -> Any:
     return path.read_text(encoding="utf-8")
 
 
-def read_event_log() -> list[dict[str, Any]]:
+def read_events() -> list[dict[str, Any]]:
     """Read the global event journal."""
     from .events import Filter, event_record, event_store
 
