@@ -86,7 +86,11 @@ def record_durable_event(event: dict[str, Any]) -> None:
     if durable_event_name is None:
         return
     payload = durable_event_payload(event)
-    if event_type == "tool_result" and "returned_objects" not in payload:
+    if (
+        event_type == "tool_result"
+        and "returned_objects" not in payload
+        and "effects" not in payload
+    ):
         return
     try:
         publish_event(

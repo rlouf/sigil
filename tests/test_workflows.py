@@ -1915,11 +1915,16 @@ def ledger_turns() -> list[dict[str, Any]]:
 
 
 def ledger_effects() -> list[dict[str, Any]]:
-    return [
-        sigil_ledger.ledger_event_record(event)
-        for event in read_events()
-        if event.event_type == "sigil.effect"
-    ]
+    rows = (
+        ledger_index()
+        .connection.execute("SELECT record_json FROM effects ORDER BY time, effect_id")
+        .fetchall()
+    )
+    return [json.loads(str(row["record_json"])) for row in rows]
+
+
+def zeta_tool_events() -> list[Any]:
+    return [event for event in read_events() if event.event_type == "zeta.tool.called"]
 
 
 def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
@@ -1985,6 +1990,15 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
     assert effect["command"] == "uv run pytest"
     assert effect["tool_call_id"] == "call-1"
     assert "exit_status" not in effect
+    (tool_event,) = zeta_tool_events()
+    assert tool_event.payload["effects"] == [
+        {
+            key: value
+            for key, value in effect.items()
+            if key not in {"time", "session", "cwd"}
+        }
+    ]
+    assert all(event.event_type != "sigil.effect" for event in read_events())
     index = ledger_index()
     assert index.turn(turn["turn_id"]) == turn
     assert index.effects_for_turn(turn["turn_id"]) == [effect]

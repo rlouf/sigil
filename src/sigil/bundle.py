@@ -106,13 +106,24 @@ def import_ledger_records(
     index: LedgerIndex,
     records: list[dict[str, Any]],
 ) -> int:
-    """Append new turn/effect records to the event store and index them."""
+    """Import new turn records and effect projection rows."""
     imported = 0
     for record in records:
         if not isinstance(record, dict) or not new_ledger_record(index, record):
             continue
-        event = append_event(record)
-        index.index_event(event)
+        if is_effect_record(record):
+            index.index_effect_record(
+                record,
+                timestamp=float(record.get("time") or 0.0),
+                session_id=(
+                    str(record["session"])
+                    if isinstance(record.get("session"), str)
+                    else None
+                ),
+            )
+        else:
+            event = append_event(record)
+            index.index_event(event)
         imported += 1
     return imported
 

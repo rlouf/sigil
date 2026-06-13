@@ -164,17 +164,16 @@ def test_status_reports_pending_staged_handoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-pending")
-    index = ledger_index()
-    index.index_event(
-        append_event(
-            effect_record(
-                "effect-staged",
-                turn_id="turn-1",
-                kind="command",
-                staged=True,
-                command="uv run pytest",
-                tool_call_id="call-1",
-            )
+    from sigil.ledger import append_effect_record
+
+    append_effect_record(
+        effect_record(
+            "effect-staged",
+            turn_id="turn-1",
+            kind="command",
+            staged=True,
+            command="uv run pytest",
+            tool_call_id="call-1",
         )
     )
 

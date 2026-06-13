@@ -55,6 +55,8 @@ def sample_effect_record(
 
 
 def append_indexed(record: dict[str, Any]) -> dict[str, Any]:
+    if record.get("type") == "sigil.effect":
+        return sigil_ledger.append_effect_record(record)
     event = append_event(record)
     sigil_ledger.ledger_index().index_event(event)
     return sigil_ledger.ledger_event_record(event)
@@ -69,12 +71,10 @@ def test_ledger_append_turn_record_writes_log_and_index() -> None:
     assert sigil_ledger.ledger_index().turn("turn-1") == payload
 
 
-def test_ledger_append_effect_record_writes_log_and_index() -> None:
-    event = sigil_ledger.append_effect_record(sample_effect_record())
-    payload = sigil_ledger.ledger_event_record(event)
+def test_ledger_append_effect_record_writes_projection_only() -> None:
+    payload = sigil_ledger.append_effect_record(sample_effect_record())
 
-    (stored_event,) = read_events()
-    assert stored_event == event
+    assert read_events() == []
     index = sigil_ledger.ledger_index()
     assert index.effects_for_turn("turn-1") == [payload]
 
@@ -158,7 +158,17 @@ def test_ledger_append_survives_index_failure(monkeypatch) -> None:
 
 def test_ledger_reindex_reads_event_store() -> None:
     append_event(sample_turn_record("turn-old", time=100.0))
-    append_event(sample_effect_record("effect-old", turn_id="turn-old"))
+    publish_event(
+        DraftEvent(
+            event_type="zeta.tool.called",
+            source="zeta",
+            payload={
+                "effects": [sample_effect_record("effect-old", turn_id="turn-old")]
+            },
+            session_id="default",
+            timestamp_micros=101_000_000,
+        )
+    )
     append_event(sample_turn_record("turn-new", time=200.0))
     append_event({"type": "user_message", "content": "not a ledger record"})
     index = sigil_ledger.ledger_index()
@@ -213,7 +223,15 @@ def test_ledger_reindex_uses_event_metadata() -> None:
 
 def test_ledger_reindex_is_idempotent() -> None:
     append_event(sample_turn_record())
-    append_event(sample_effect_record())
+    publish_event(
+        DraftEvent(
+            event_type="zeta.tool.called",
+            source="zeta",
+            payload={"effects": [sample_effect_record()]},
+            session_id="default",
+            timestamp_micros=101_000_000,
+        )
+    )
 
     first = sigil_ledger.reindex()
     second = sigil_ledger.reindex()
@@ -565,7 +583,15 @@ def test_sigil_blame_reports_untouched_files(monkeypatch) -> None:
 
 def test_ledger_cli_log_reindex_reports_counts() -> None:
     append_event(sample_turn_record())
-    append_event(sample_effect_record())
+    publish_event(
+        DraftEvent(
+            event_type="zeta.tool.called",
+            source="zeta",
+            payload={"effects": [sample_effect_record()]},
+            session_id="default",
+            timestamp_micros=101_000_000,
+        )
+    )
 
     result = CliRunner().invoke(sigil_cli, ["log", "reindex"])
 
@@ -588,16 +614,17 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
             time=100.0,
         )
     )
-    effect = append_event(
+    append_indexed(
         sample_effect_record(
             "effect-bundle-1",
             turn_id="turn-bundle-1",
             kind=EFFECT_KIND_FILE_WRITE,
             path="/tmp/deploy-notes.md",
+            session="bundle-src",
+            time=101.0,
         )
     )
     sigil_ledger.ledger_index().index_event(turn)
-    sigil_ledger.ledger_index().index_event(effect)
     store = zeta_trace.SqliteStore(zeta_trace.session_sqlite_path("bundle-src"))
     prompt_id = store.put_object(
         zeta_trace.Object(
@@ -725,7 +752,8 @@ def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
     assert first["records"] == 2
     assert second["records"] == 0
     log_lines = read_events()
-    assert len(log_lines) == 2
+    assert len(log_lines) == 1
+    assert log_lines[0].event_type == "sigil.turn"
 
 
 def test_bundle_import_survives_reindex(monkeypatch, tmp_path) -> None:

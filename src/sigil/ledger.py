@@ -19,7 +19,7 @@ from .events import (
     event_store_path,
     time_from_timestamp_micros,
 )
-from .state import append_event
+from .state import append_event, session_id
 
 LOGGER = logging.getLogger("sigil.ledger")
 _WARNED_FAILURES: set[str] = set()
@@ -160,9 +160,8 @@ class LedgerIndex:
         if event.event_type == "sigil.turn":
             self.index_turn_event(event)
             return True
-        if event.event_type == "sigil.effect":
-            self.index_effect_event(event)
-            return True
+        if event.event_type == "zeta.tool.called":
+            return self.index_tool_called_event(event) > 0
         return False
 
     def index_turn_event(self, event: Event) -> None:
@@ -195,8 +194,34 @@ class LedgerIndex:
         )
         self.connection.commit()
 
-    def index_effect_event(self, event: Event) -> None:
-        payload = event.payload
+    def index_tool_called_event(self, event: Event) -> int:
+        effects = event.payload.get("effects")
+        if not isinstance(effects, list):
+            return 0
+        count = 0
+        for effect in effects:
+            if not is_effect_record(effect):
+                continue
+            self.index_effect_record(
+                effect,
+                timestamp=event_time(event),
+                session_id=event.session_id,
+            )
+            count += 1
+        return count
+
+    def index_effect_record(
+        self,
+        record: dict[str, Any],
+        *,
+        timestamp: float,
+        session_id: str | None,
+    ) -> dict[str, Any]:
+        payload = ledger_projection_record(
+            record,
+            timestamp=timestamp,
+            session_id=session_id,
+        )
         self.connection.execute(
             """
             INSERT OR REPLACE INTO effects
@@ -208,8 +233,8 @@ class LedgerIndex:
             (
                 str(payload.get("effect_id") or ""),
                 payload.get("turn_id"),
-                event_time(event),
-                event.session_id,
+                timestamp,
+                session_id,
                 payload.get("kind"),
                 1 if payload.get("staged") else 0,
                 payload.get("path"),
@@ -220,10 +245,11 @@ class LedgerIndex:
                 payload.get("resolved_outcome"),
                 payload.get("before_hash"),
                 payload.get("after_hash"),
-                event_json(event),
+                record_json(payload),
             ),
         )
         self.connection.commit()
+        return payload
 
     def query_turns(
         self,
@@ -402,6 +428,23 @@ def ledger_event_record(event: Event) -> dict[str, Any]:
     return record
 
 
+def ledger_projection_record(
+    record: dict[str, Any],
+    *,
+    timestamp: float,
+    session_id: str | None,
+) -> dict[str, Any]:
+    payload = {"cwd": os.getcwd(), **record}
+    payload["time"] = timestamp
+    if session_id is not None:
+        payload["session"] = session_id
+    return payload
+
+
+def is_effect_record(value: Any) -> bool:
+    return isinstance(value, dict) and value.get("schema") == "sigil.effect"
+
+
 def event_json(event: Event) -> str:
     record = ledger_event_record(event)
     return record_json(record)
@@ -441,11 +484,21 @@ def append_turn_record(record: dict[str, Any]) -> Event:
     return event
 
 
-def append_effect_record(record: dict[str, Any]) -> Event:
-    """Append one effect record to the event store and index it."""
-    event = append_event(record)
-    index_event("append_effect_record", event)
-    return event
+def append_effect_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Index one effect projection row without appending a durable event."""
+    try:
+        return ledger_index().index_effect_record(
+            record,
+            timestamp=time.time(),
+            session_id=session_id(),
+        )
+    except Exception as exc:
+        warn_ledger_failure_once("append_effect_record", exc)
+        return ledger_projection_record(
+            record,
+            timestamp=time.time(),
+            session_id=session_id(),
+        )
 
 
 def index_event(operation: str, event: Event) -> None:
@@ -465,7 +518,6 @@ def reindex(index: LedgerIndex | None = None) -> tuple[int, int]:
         if event.event_type == "sigil.turn":
             target.index_turn_event(event)
             turns += 1
-        elif event.event_type == "sigil.effect":
-            target.index_effect_event(event)
-            effects += 1
+        elif event.event_type == "zeta.tool.called":
+            effects += target.index_tool_called_event(event)
     return turns, effects

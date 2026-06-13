@@ -538,7 +538,7 @@ def test_zeta_tool_edit_stage_records_staged_hashes(tmp_path: Path) -> None:
 
 
 def seed_query_log_ledger(monkeypatch) -> None:
-    from sigil.ledger import ledger_index
+    from sigil.ledger import append_effect_record, ledger_index
     from sigil.protocols import effect_record, turn_contract, turn_record
     from sigil.state import append_event
 
@@ -579,15 +579,13 @@ def seed_query_log_ledger(monkeypatch) -> None:
             }
         )
     )
-    index.index_event(
-        append_event(
-            effect_record(
-                "effect-edit",
-                turn_id="turn-do-1111",
-                kind="file_edit",
-                staged=False,
-                path="/tmp/notes.txt",
-            )
+    append_effect_record(
+        effect_record(
+            "effect-edit",
+            turn_id="turn-do-1111",
+            kind="file_edit",
+            staged=False,
+            path="/tmp/notes.txt",
         )
     )
 

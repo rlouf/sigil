@@ -98,8 +98,8 @@ def build_turn_renderer(
 class TurnLedger:
     """Accumulate one agent turn's ledger facts and append its records.
 
-    Effects are appended to the global event journal as the recorder sees the
-    matching tool results; ``finish`` appends the turn record referencing
+    Effects are attached to the matching tool result before it is persisted as
+    a Zeta tool call event; ``finish`` appends the turn record referencing
     them.
     """
 
@@ -123,8 +123,8 @@ class TurnLedger:
         self.effect_object_ids: list[str] = []
         self.model_calls: list[dict[str, Any]] = []
 
-    def record_tool_result(self, event: dict[str, Any]) -> None:
-        """Append the effect record a persisted tool result implies, if any."""
+    def attach_tool_result_effect(self, event: dict[str, Any]) -> None:
+        """Attach the effect record a tool result implies, if any."""
         fields = tool_result_effect_fields(
             str(event.get("name") or ""),
             event.get("result"),
@@ -133,15 +133,14 @@ class TurnLedger:
             return
         effect_id = str(uuid.uuid4())
         tool_call_id = str(event.get("tool_call_id") or "")
-        ledger_event = append_effect_record(
-            effect_record(
-                effect_id,
-                turn_id=self.turn_id,
-                tool_call_id=tool_call_id or None,
-                **fields,
-            )
+        payload = effect_record(
+            effect_id,
+            turn_id=self.turn_id,
+            tool_call_id=tool_call_id or None,
+            **fields,
         )
-        payload = ledger_event_record(ledger_event)
+        event["effects"] = [*event.get("effects", []), payload]
+        payload = append_effect_record(payload)
         self.effect_ids.append(effect_id)
         self.effects.append(payload)
         object_id = str(event.get("tool_result_object_id") or "")
@@ -353,6 +352,8 @@ class TurnEventRecorder:
 
     def record_event(self, event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "")
+        if event_type == "tool_result" and self.ledger is not None:
+            self.ledger.attach_tool_result_effect(event)
         persisted = self.persist(event_type, event)
         if event_type == "tool_call":
             params = persisted.get("input")
@@ -363,8 +364,6 @@ class TurnEventRecorder:
             return
         if event_type != "tool_result":
             return
-        if self.ledger is not None:
-            self.ledger.record_tool_result(persisted)
         status = self.handle_tool_result(persisted)
         if status is not None:
             self.status = status
