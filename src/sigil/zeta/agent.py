@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any, cast
+from typing import Any, TextIO, cast
 
 from .models import (
     CODEX_RESPONSES_API,
@@ -18,7 +18,7 @@ from .models import (
 )
 from .prompt import PromptBuilder, prompt_transform_from_env
 from .prompt.system import model_tool_descriptors
-from .tools.base import proposed_effect
+from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec, proposed_effect
 from .tools.registry import ExecutionMode
 from .tools.registry import registry as tool_registry
 from .trace import PromptTrace, prompt_trace_payload
@@ -698,3 +698,294 @@ def tool_call_stages_effect(name: str, execution_mode: ExecutionMode) -> bool:
 
 def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:
     return proposed_effect(result)
+
+
+class JsonRpcServer:
+    def __init__(self, input: TextIO, output: TextIO) -> None:
+        self.input = input
+        self.output = output
+        self.tool_responses: dict[str, dict[str, Any]] = {}
+        self.client_tools: set[str] = set()
+
+    def serve(self) -> None:
+        while (message := self.read_message()) is not None:
+            self.handle_message(message)
+
+    def read_message(self) -> dict[str, Any] | None:
+        for line in self.input:
+            if not line.strip():
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError as exc:
+                self.write_error(None, -32700, str(exc))
+                continue
+            if isinstance(message, dict):
+                return cast(dict[str, Any], message)
+            self.write_error(None, -32600, "JSON-RPC message must be an object")
+        return None
+
+    def handle_message(self, message: dict[str, Any]) -> None:
+        request_id = message.get("id")
+        method = str(message.get("method") or "")
+        params = message.get("params")
+        params = params if isinstance(params, dict) else {}
+        try:
+            result = self.dispatch(method, params)
+        except Exception as exc:
+            if request_id is not None:
+                self.write_error(request_id, -32000, f"{type(exc).__name__}: {exc}")
+            return
+        if request_id is not None:
+            self.write_response(request_id, result)
+
+    def dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+        if method == "initialize":
+            return {"server": "sigil-zeta", "protocol": "0.1"}
+        if method == "tools.register":
+            return {"registered": self.register_client_tools(params.get("tools"))}
+        if method == "tools.respond":
+            self.record_tool_response(params)
+            return None
+        if method == "session.run":
+            return self.run_session(params)
+        raise ValueError(f"unknown method: {method}")
+
+    def register_client_tools(self, tools: Any) -> list[str]:
+        if not isinstance(tools, list):
+            return []
+        registered = []
+        for item in tools:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            if name not in self.client_tools:
+                self.register_client_tool(name, item)
+            registered.append(name)
+        return registered
+
+    def register_client_tool(self, name: str, item: dict[str, Any]) -> None:
+        existing = tool_registry.get(name)
+        if existing is not None and name not in self.client_tools:
+            raise ValueError(f"tool {name!r} is already registered")
+        self.client_tools.add(name)
+        if existing is not None:
+            return
+        schema = item.get("schema")
+        schema = schema if isinstance(schema, dict) else {"type": "object"}
+        raw_effects = item.get("effects")
+        effects = (
+            tuple(
+                cast(EffectKind, effect)
+                for effect in raw_effects
+                if isinstance(effect, str) and effect in EFFECT_KINDS
+            )
+            if isinstance(raw_effects, list)
+            else ()
+        )
+        spec = ToolSpec(
+            name,
+            str(item.get("description") or ""),
+            schema,
+            interactive=True,
+            effects=effects,
+        )
+
+        def run(params: dict[str, Any]) -> dict[str, Any]:
+            return self.call_client_tool(str(uuid.uuid4()), name, params)
+
+        tool_registry.register(name, ToolImpl(spec, run, run))
+
+    def record_tool_response(self, params: dict[str, Any]) -> None:
+        call_id = str(params.get("id") or "")
+        if not call_id:
+            return
+        result = params.get("result")
+        if not isinstance(result, dict):
+            result = {"ok": False, "error": {"code": "invalid-result"}}
+        self.tool_responses[call_id] = cast(dict[str, Any], result)
+
+    def call_client_tool(
+        self,
+        call_id: str,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.write_notification(
+            "tools.call",
+            {"id": call_id, "name": name, "arguments": arguments},
+        )
+        while call_id not in self.tool_responses:
+            message = self.read_message()
+            if message is None:
+                return {
+                    "ok": False,
+                    "error": {"code": "client-disconnected", "message": name},
+                }
+            if str(message.get("method") or "") == "tools.respond":
+                params = message.get("params")
+                if isinstance(params, dict):
+                    self.record_tool_response(params)
+                continue
+            self.handle_message(message)
+        return self.tool_responses.pop(call_id)
+
+    def run_session(self, params: dict[str, Any]) -> dict[str, Any]:
+        from ..agent_io import TurnLedger, record_turn_abort
+        from ..protocols import (
+            TURN_OUTCOME_ABORTED,
+            TURN_OUTCOME_ANSWERED,
+            TURN_OUTCOME_EXECUTED,
+            TURN_OUTCOME_FAILED,
+            TURN_OUTCOME_STAGED,
+        )
+        from ..session import session_id
+        from ..tools import ensure_builtin_tools_registered
+        from .context import load_project_context
+        from .models import active_model_selection, model_selection_event
+        from .timeline import current_timeline, record_event
+
+        objective = str(params.get("objective") or "")
+        if not objective:
+            raise ValueError("session.run requires objective")
+        workflow = str(params.get("workflow") or "propose")
+        if workflow not in {"ask", "propose", "do"}:
+            raise ValueError("workflow must be ask, propose, or do")
+        requested_tools = params.get("tools")
+        allowed_tools = (
+            tuple(str(tool) for tool in requested_tools if isinstance(tool, str))
+            if isinstance(requested_tools, list)
+            else None
+        )
+        ensure_builtin_tools_registered()
+        selected_model = active_model_selection()
+        enabled_tools = registered_tools(allowed_tools)
+        execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
+        ledger = TurnLedger(
+            workflow=workflow,
+            objective=objective,
+            allowed_tools=enabled_tools,
+            staged=any(
+                tool.spec.mutates()
+                for name in enabled_tools
+                if (tool := tool_registry.get(name)) is not None
+            )
+            and execution_mode == "stage",
+            agent=model_selection_event(selected_model) if selected_model else None,
+        )
+        prior_timeline = current_timeline()
+        user_event = record_event(
+            {
+                "type": "user_message",
+                "content": objective,
+                "workflow": workflow,
+                "runtime": "zeta-rpc",
+                "turn_id": ledger.turn_id,
+                "available_tools": list(enabled_tools),
+            }
+        )
+        ledger.note_root_event(user_event)
+        self.publish_event(user_event)
+
+        def sink(event: dict[str, Any]) -> None:
+            event_type = str(event.get("type") or "")
+            if event_type == "tool_result":
+                ledger.attach_tool_result_effect(event)
+            event["turn_id"] = ledger.turn_id
+            persisted = record_event(event)
+            ledger.note_runtime_event(persisted)
+            self.publish_event(persisted)
+
+        try:
+            result = run_agent_turn(
+                objective,
+                prior_timeline,
+                AgentConfig(
+                    system_prompt=params.get("system")
+                    if isinstance(params.get("system"), str)
+                    else None,
+                    allowed_tools=enabled_tools,
+                    max_turns=params.get("max_steps")
+                    if isinstance(params.get("max_steps"), int)
+                    else None,
+                    stop_on_staged_effect=True,
+                    execution_mode=execution_mode,
+                    model_profile=(
+                        selected_model.profile if selected_model is not None else None
+                    ),
+                    model_name=(
+                        selected_model.model if selected_model is not None else None
+                    ),
+                    model_url=selected_model.url
+                    if selected_model is not None
+                    else None,
+                    thinking=(
+                        selected_model.thinking if selected_model is not None else None
+                    ),
+                    model_api=selected_model.api
+                    if selected_model is not None
+                    else None,
+                ),
+                context=(
+                    str(params.get("context"))
+                    if isinstance(params.get("context"), str)
+                    else load_project_context()
+                ),
+                event_sink=sink,
+                caused_by=ledger.root_event_id,
+            )
+        except RuntimeError as error:
+            record_turn_abort(
+                error,
+                workflow=workflow,
+                caused_by=ledger.causal_parent_event_id(),
+            )
+            turn = ledger.finish(TURN_OUTCOME_ABORTED)
+            self.publish_event(turn)
+            raise
+        ledger.add_model_calls(result.model_telemetry_calls)
+        if result.staged_effect is not None:
+            outcome = TURN_OUTCOME_STAGED
+        elif result.final_text:
+            outcome = (
+                TURN_OUTCOME_EXECUTED if ledger.effect_ids else TURN_OUTCOME_ANSWERED
+            )
+        else:
+            outcome = TURN_OUTCOME_FAILED
+        turn = ledger.finish(outcome, prompt_traces=result.prompt_traces)
+        self.publish_event(turn)
+        return {
+            "turn_id": ledger.turn_id,
+            "session_id": session_id(),
+            "outcome": outcome,
+            "final_text": result.final_text,
+        }
+
+    def publish_event(self, event: dict[str, Any]) -> None:
+        self.write_notification("events.publish", {"event": event})
+
+    def write_response(self, request_id: Any, result: Any) -> None:
+        self.write_message({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+    def write_error(
+        self,
+        request_id: Any,
+        code: int,
+        message: str,
+    ) -> None:
+        self.write_message(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": code, "message": message},
+            }
+        )
+
+    def write_notification(self, method: str, params: dict[str, Any]) -> None:
+        self.write_message({"jsonrpc": "2.0", "method": method, "params": params})
+
+    def write_message(self, message: dict[str, Any]) -> None:
+        self.output.write(json.dumps(message, separators=(",", ":")) + "\n")
+        self.output.flush()

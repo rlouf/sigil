@@ -46,6 +46,7 @@ COMMAND_MODULES = {
     "status": "sigil.cli.status",
     "step": "sigil.cli.step",
     "trace": "sigil.cli.trace",
+    "zeta": "sigil.cli.step",
 }
 
 

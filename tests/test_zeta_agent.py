@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,7 +16,9 @@ from _zeta_helpers import (
     read_tool_payload,
     required_stream_sink,
 )
+from click.testing import CliRunner
 
+from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.zeta import agent as zeta_agent
 from sigil.zeta import prompt as zeta_prompt
@@ -45,6 +48,137 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
 
     assert result.events[0]["reasoning"] == "weighing the options"
     assert result.events[0]["content"] == "done"
+
+
+def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in output.getvalue().splitlines()]
+
+
+def test_zeta_rpc_initialize_returns_server_metadata() -> None:
+    input_stream = StringIO(
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n"
+    )
+    output = StringIO()
+    server = zeta_agent.JsonRpcServer(input_stream, output)
+
+    server.serve()
+
+    assert rpc_messages(output) == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"server": "sigil-zeta", "protocol": "0.1"},
+        }
+    ]
+
+
+def test_zeta_rpc_cli_serves_stdio_initialize() -> None:
+    result = CliRunner().invoke(
+        cli,
+        ["zeta", "rpc", "--stdio"],
+        input=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n",
+    )
+
+    assert result.exit_code == 0
+    assert [json.loads(line) for line in result.output.splitlines()] == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"server": "sigil-zeta", "protocol": "0.1"},
+        }
+    ]
+
+
+def test_zeta_rpc_registers_client_tools_and_calls_client() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools.respond",
+                "params": {
+                    "id": "client-call-1",
+                    "result": {"ok": True, "content": [{"type": "text", "text": "ok"}]},
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_agent.JsonRpcServer(input_stream, output)
+    server.register_client_tools(
+        [
+            {
+                "name": "client.echo",
+                "description": "Echo from the client.",
+                "schema": {"type": "object"},
+                "effects": ["read"],
+            }
+        ]
+    )
+
+    result = server.call_client_tool(
+        "client-call-1",
+        "client.echo",
+        {"text": "hello"},
+    )
+
+    assert result == {"ok": True, "content": [{"type": "text", "text": "ok"}]}
+    assert rpc_messages(output) == [
+        {
+            "jsonrpc": "2.0",
+            "method": "tools.call",
+            "params": {
+                "id": "client-call-1",
+                "name": "client.echo",
+                "arguments": {"text": "hello"},
+            },
+        }
+    ]
+
+
+def test_zeta_rpc_session_run_streams_events_and_returns_turn(
+    monkeypatch,
+) -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session.run",
+                "params": {"objective": "answer", "tools": []},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {"content": "done"},
+    )
+
+    server = zeta_agent.JsonRpcServer(input_stream, output)
+
+    server.serve()
+
+    messages = rpc_messages(output)
+    published = [
+        message["params"]["event"]
+        for message in messages
+        if message.get("method") == "events.publish"
+    ]
+    response = messages[-1]
+
+    assert [event["type"] for event in published] == [
+        "user_message",
+        "model",
+        "sigil.turn.completed",
+    ]
+    assert response["id"] == 1
+    assert response["result"]["outcome"] == "answered"
+    assert response["result"]["turn_id"]
 
 
 def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
