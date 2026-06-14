@@ -935,7 +935,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
     ]
 
 
-def test_zeta_agent_turn_stops_after_handoff_tool(monkeypatch) -> None:
+def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
     requests = 0
 
     def fake_chat_completion_messages(
@@ -980,7 +980,7 @@ def test_zeta_agent_turn_stops_after_handoff_tool(monkeypatch) -> None:
     )
 
     assert requests == 1
-    assert result.handoff == {
+    assert result.staged_effect == {
         "type": SHELL_PROMPT_HANDOFF_TYPE,
         "command": "uv run pytest",
         "reason": "Run tests.",
@@ -1030,7 +1030,7 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
     )
 
     assert requests == 2
-    assert result.handoff is None
+    assert result.staged_effect is None
     assert result.final_text == "done"
     tool_result = next(
         event for event in result.events if event.get("type") == "tool_result"

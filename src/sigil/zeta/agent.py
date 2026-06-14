@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, cast
 
-from ..protocols import is_shell_prompt_handoff
 from .models import (
     CODEX_RESPONSES_API,
     ChatCompletionStreamSink,
@@ -36,8 +35,8 @@ class AgentConfig:
     system_prompt: str | None = None
     allowed_tools: Iterable[str] | None = None
     max_turns: int | None = None
-    stop_on_handoff: bool = True
-    execution_mode: ExecutionMode = "handoff"
+    stop_on_staged_effect: bool = True
+    execution_mode: ExecutionMode = "stage"
     model_profile: str | None = None
     model_name: str | None = None
     model_url: str | None = None
@@ -51,7 +50,7 @@ class AgentTurnResult:
 
     final_text: str = ""
     events: list[dict[str, Any]] = field(default_factory=list)
-    handoff: dict[str, Any] | None = None
+    staged_effect: dict[str, Any] | None = None
     final_text_streamed: bool = False
     model_telemetry: dict[str, Any] = field(default_factory=dict)
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
@@ -139,11 +138,11 @@ def run_agent_turn(
             )
             events.extend(result_event.events)
             next_model_caused_by = next_model_parent(result_event.events)
-            if result_event.handoff is not None and config.stop_on_handoff:
+            if result_event.staged_effect is not None and config.stop_on_staged_effect:
                 return AgentTurnResult(
                     final_text="",
                     events=events,
-                    handoff=result_event.handoff,
+                    staged_effect=result_event.staged_effect,
                     model_telemetry=latest_model_telemetry,
                     model_telemetry_calls=model_telemetry_calls,
                     prompt_traces=prompt_traces,
@@ -187,7 +186,7 @@ def run_tool(
     name: str,
     params: dict[str, Any],
     *,
-    execution_mode: ExecutionMode = "handoff",
+    execution_mode: ExecutionMode = "stage",
 ) -> dict[str, Any]:
     return tool_registry.run_tool(name, params, execution_mode=execution_mode)
 
@@ -301,7 +300,7 @@ def emit_event(
 @dataclass(frozen=True)
 class ToolCallResult:
     events: list[dict[str, Any]]
-    handoff: dict[str, Any] | None = None
+    staged_effect: dict[str, Any] | None = None
     stop: bool = False
 
 
@@ -464,7 +463,7 @@ def handle_tool_call(
     *,
     allowed_tools: tuple[str, ...],
     index: int,
-    execution_mode: ExecutionMode = "handoff",
+    execution_mode: ExecutionMode = "stage",
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
     prompt_builder: PromptBuilder | None = None,
@@ -540,9 +539,13 @@ def handle_tool_call(
         )
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
-    handoff = result_handoff(result)
+    staged_effect = (
+        result_staged_effect(result)
+        if tool_call_stages_effect(name, execution_mode)
+        else None
+    )
     stop = bool(
-        execution_mode == "handoff" and name == "edit" and result.get("ok") is True
+        execution_mode == "stage" and name == "edit" and result.get("ok") is True
     )
     emit_event(
         events,
@@ -559,7 +562,7 @@ def handle_tool_call(
     )
     return ToolCallResult(
         events=events,
-        handoff=handoff,
+        staged_effect=staged_effect,
         stop=stop,
     )
 
@@ -685,8 +688,20 @@ def tool_error(code: str, message: str) -> dict[str, Any]:
     return {"ok": False, "error": {"code": code, "message": message}}
 
 
-def result_handoff(result: dict[str, Any]) -> dict[str, Any] | None:
+def tool_call_stages_effect(name: str, execution_mode: ExecutionMode) -> bool:
+    if execution_mode != "stage":
+        return False
+    tool = tool_registry.get(name)
+    return tool is not None and tool.spec.mutates()
+
+
+def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:
+    if result.get("ok") is not True:
+        return None
+    effect = result.get("effect")
+    if isinstance(effect, dict):
+        return cast(dict[str, Any], effect)
     handoff = result.get("handoff")
-    if is_shell_prompt_handoff(handoff):
+    if isinstance(handoff, dict):
         return cast(dict[str, Any], handoff)
     return None

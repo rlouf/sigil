@@ -20,10 +20,10 @@ PROMPT_TEMPLATE_ENV = Environment(
 
 TOOL_PROTOCOL_PROMPT = """Tool protocol:
 
-- Tools are native Chat Completions function tools exposed by the shell loop.
+- Tools are native Chat Completions function tools exposed by the runtime.
 - You may request multiple read-only tool calls in one turn when useful.
-- Some workflows stage bash, edit, or write as handoffs; some run them directly.
-- For staged handoffs, use one handoff tool at a time and then stop.
+- Some workflows stage mutating tool calls for review; some apply them directly.
+- For staged effects, use one mutating tool at a time and then stop.
 - Use a tool only when its schema matches the needed action.
 - Do not mention unavailable tools.
 - If no tool is needed, return a final answer.

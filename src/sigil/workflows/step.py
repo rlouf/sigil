@@ -100,7 +100,7 @@ def step(
     directly; every other workflow stages mutations for review.
     """
     system = system or STEP_SYSTEM_PROMPT
-    execution_mode: ExecutionMode = "direct" if workflow == "do" else "handoff"
+    execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     selected_model = active_model_selection()
     if not model_server_ready(selected_model):
         return 1
@@ -150,7 +150,7 @@ def step(
                 system_prompt=system,
                 allowed_tools=enabled_tools,
                 max_turns=max_steps,
-                stop_on_handoff=True,
+                stop_on_staged_effect=True,
                 execution_mode=execution_mode,
                 model_profile=(
                     selected_model.profile if selected_model is not None else None
@@ -355,9 +355,9 @@ def stages_mutations(
 ) -> bool:
     """Whether this turn's contract stages mutations for review.
 
-    Handoff mode with a purely read-only allow-list (ask) stages nothing.
+    Stage mode with a purely read-only allow-list (ask) stages nothing.
     """
-    if execution_mode != "handoff":
+    if execution_mode != "stage":
         return False
     return any(
         tool.spec.mutates()

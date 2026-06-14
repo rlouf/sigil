@@ -86,7 +86,7 @@ def test_sigil_step_writes_handoff_file(
                     },
                 },
             ],
-            handoff={
+            staged_effect={
                 "type": SHELL_PROMPT_HANDOFF_TYPE,
                 "command": "uv run pytest",
                 "reason": "Run tests.",
@@ -399,7 +399,7 @@ def test_zeta_agent_step_double_comma_uses_handoff_mode(
 
     assert code == 0
     config = cast(zeta_agent.AgentConfig, captured["config"])
-    assert config.execution_mode == "handoff"
+    assert config.execution_mode == "stage"
     assert config.max_turns is None
 
 
@@ -812,8 +812,8 @@ def test_zeta_agent_step_prints_final_answer_after_direct_edit(
 
 
 def test_zeta_step_only_the_do_workflow_executes_directly() -> None:
-    assert zeta_runner.stages_mutations("handoff", ("bash", "edit")) is True
-    assert zeta_runner.stages_mutations("handoff", ("read", "grep")) is False
+    assert zeta_runner.stages_mutations("stage", ("bash", "edit")) is True
+    assert zeta_runner.stages_mutations("stage", ("read", "grep")) is False
     assert zeta_runner.stages_mutations("direct", ("bash", "edit")) is False
 
 
@@ -2023,7 +2023,7 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
                     },
                 },
             ],
-            handoff={
+            staged_effect={
                 "type": SHELL_PROMPT_HANDOFF_TYPE,
                 "command": "uv run pytest",
                 "reason": "Run tests.",

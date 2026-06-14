@@ -13,7 +13,7 @@ from .base import ToolImpl, error_result
 
 __all__ = ["ExecutionMode", "ToolRegistry", "registry"]
 
-ExecutionMode = Literal["handoff", "direct"]
+ExecutionMode = Literal["stage", "direct"]
 
 
 class ToolRegistry:
@@ -65,12 +65,12 @@ class ToolRegistry:
         name: str,
         params: dict[str, Any],
         *,
-        execution_mode: ExecutionMode = "handoff",
+        execution_mode: ExecutionMode = "stage",
     ) -> dict[str, Any]:
         """Run one tool call under the staging contract its spec declares.
 
         Read-only tools always run. Mutating tools run in direct mode; in
-        handoff mode they stage their work for review, and a mutating tool
+        stage mode they stage their work for review, and a mutating tool
         without a staging implementation is refused.
         """
         tool = self.get(name)
