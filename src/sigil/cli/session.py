@@ -8,6 +8,7 @@ from ..session import (
     clear_current_session,
     current_session_snapshot,
     known_sessions,
+    rename_current_session,
     session_paths,
 )
 from ._base import cli, examples
@@ -22,6 +23,7 @@ JSON_HELP = "Emit session state as JSON."
     epilog=examples(
         "sigil session",
         "sigil session transcript --limit 20",
+        'sigil session rename "frontend work"',
         "sigil session clear",
     ),
 )
@@ -81,10 +83,32 @@ def session_path(json_output: bool) -> int:
 def session_list(json_output: bool) -> int:
     """List all known shell sessions.
 
-    Each line shows a session id, its last working directory, its last
-    event type, and its state directory, tab-separated.
+    Each line shows a session id, optional display name, last working
+    directory, last event type, and state directory, tab-separated.
     """
     return print_session_list(json_output)
+
+
+@cmd_session.command(
+    "rename",
+    epilog=examples(
+        'sigil session rename "frontend work"',
+        "sigil session rename frontend work",
+    ),
+)
+@click.argument("name", nargs=-1, required=True)
+@click.option("--json", "json_output", is_flag=True, help=JSON_HELP)
+def session_rename(name: tuple[str, ...], json_output: bool) -> int:
+    """Give the current session a human display name."""
+    clean_name = " ".join(" ".join(name).split())
+    if not clean_name:
+        raise click.UsageError("session name cannot be blank")
+    renamed = rename_current_session(clean_name)
+    if json_output:
+        pretty_print_json(renamed)
+        return 0
+    print(f"renamed session {renamed['session_id']} -> {renamed['name']}")
+    return 0
 
 
 @cmd_session.command(
@@ -143,6 +167,7 @@ def print_session_list(json_output: bool) -> int:
     for session in sessions:
         parts = [
             str(session["session_id"]),
+            str(session.get("name") or "-"),
             str(session.get("last_cwd") or "-"),
             str(session.get("last_event_type") or "-"),
             str(session["path"]),
@@ -199,6 +224,8 @@ def print_session_snapshot(json_output: bool) -> int:
         pretty_print_json(snapshot)
         return 0
     print(f"session {snapshot['session_id']}")
+    if snapshot.get("name"):
+        print(f"name {snapshot['name']}")
     print(snapshot["path"])
     for name, value in snapshot["files"].items():
         if value is None:

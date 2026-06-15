@@ -44,10 +44,12 @@ from .state import (
 RUN_WORKFLOW = "run"
 
 SESSION_FILES = (
+    "session.json",
     "last-failure.json",
     "recent-turns.jsonl",
 )
 
+SESSION_METADATA_FILE = "session.json"
 RECENT_TURNS_FILE = "recent-turns.jsonl"
 RECENT_TURNS_LIMIT = 50
 TURN_SKIP_PREFIXES = (",", "sigil ", "__sigil_")
@@ -76,9 +78,11 @@ def known_sessions() -> list[dict[str, Any]]:
         if not path.is_dir():
             continue
         latest = latest_by_session.get(path.name)
+        metadata = session_metadata(path)
         sessions.append(
             {
                 "session_id": path.name,
+                "name": metadata.get("name"),
                 "path": str(path),
                 "files": sorted(item.name for item in path.iterdir() if item.is_file()),
                 "last_event_time": event_time(latest) if latest is not None else None,
@@ -87,6 +91,17 @@ def known_sessions() -> list[dict[str, Any]]:
             }
         )
     return sessions
+
+
+def session_metadata(path: Path) -> dict[str, Any]:
+    """Return display metadata for one session directory."""
+    value = read_session_file(path / SESSION_METADATA_FILE)
+    if not isinstance(value, dict):
+        return {}
+    name = value.get("name")
+    if not isinstance(name, str) or not name:
+        return {}
+    return {"name": name}
 
 
 def latest_events_by_session(events: list[Event]) -> dict[str, Event]:
@@ -138,11 +153,29 @@ def read_events() -> list[Event]:
 def current_session_snapshot() -> dict[str, Any]:
     """Return the current session's continuity files as structured data."""
     root = session_dir()
+    metadata = session_metadata(root)
     return {
         "session_id": session_id(),
+        "name": metadata.get("name"),
         "path": str(root),
         "files": {name: read_session_file(root / name) for name in SESSION_FILES},
     }
+
+
+def rename_current_session(name: str) -> dict[str, Any]:
+    """Set a human display name for the current session without changing its id."""
+    clean_name = " ".join(name.split())
+    root = session_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "name": clean_name,
+        "renamed_at": time.time(),
+    }
+    write_text_atomic(
+        root / SESSION_METADATA_FILE,
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+    )
+    return {"session_id": session_id(), "name": clean_name, "path": str(root)}
 
 
 def clear_current_session() -> list[str]:

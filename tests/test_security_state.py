@@ -945,8 +945,37 @@ def test_session_list_includes_last_event_context() -> None:
     assert sessions["alpha"]["files"] == ["last-failure.json"]
     assert sessions["beta"]["last_cwd"] == "/other"
     assert text.exit_code == 0, text.output
-    assert "alpha\t/repo\tnew_alpha\t" in text.output
-    assert "beta\t/other\tbeta_event\t" in text.output
+    assert "alpha\t-\t/repo\tnew_alpha\t" in text.output
+    assert "beta\t-\t/other\tbeta_event\t" in text.output
+
+
+def test_session_rename_adds_display_name_to_current_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SIGIL_SESSION_ID", "alpha")
+    append_event({"type": "session_event", "time": 1.0, "cwd": "/repo"})
+
+    renamed = CliRunner().invoke(cli, ["session", "rename", "frontend", "work"])
+    shown = CliRunner().invoke(cli, ["session", "show", "--json"])
+    listed = CliRunner().invoke(cli, ["session", "list", "--json"])
+    text = CliRunner().invoke(cli, ["session", "list"])
+
+    assert renamed.exit_code == 0, renamed.output
+    assert "renamed session alpha -> frontend work" in renamed.output
+    snapshot = json.loads(shown.output)
+    assert snapshot["name"] == "frontend work"
+    sessions = {session["session_id"]: session for session in json.loads(listed.output)}
+    assert sessions["alpha"]["name"] == "frontend work"
+    assert "alpha\tfrontend work\t/repo\tsession_event\t" in text.output
+
+
+def test_session_rename_rejects_blank_name() -> None:
+    result = CliRunner().invoke(cli, ["session", "rename", "   "])
+
+    assert result.exit_code == 2
+    assert "session name cannot be blank" in result.output
 
 
 def test_question_workflows_record_glyph_and_local_tools() -> None:
