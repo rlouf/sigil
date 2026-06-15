@@ -457,7 +457,7 @@ def test_zeta_prompt_components_keep_only_the_timeline_tail() -> None:
 
 def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     zeta_timeline.record_event({"type": "tool_call", "name": "read"})
 
@@ -475,7 +475,7 @@ def test_zeta_timeline_tool_result_stays_trace_only(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     zeta_timeline.record_event(
         {
@@ -497,7 +497,7 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     zeta_timeline.record_event(
         {
@@ -535,7 +535,7 @@ def test_zeta_model_called_links_used_and_returned_objects(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     store = zeta_trace.default_store()
     prompt_id = store.put_object(
         zeta_trace.Object(
@@ -591,7 +591,7 @@ def test_zeta_tool_called_links_used_and_returned_objects(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     zeta_timeline.record_event(
         {
@@ -621,7 +621,7 @@ def test_zeta_user_message_and_abort_stay_trace_only(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     zeta_timeline.record_event({"type": "user_message", "content": "hello"})
     zeta_timeline.record_event({"type": "model_usage", "usage": {"tokens": 1}})
@@ -635,7 +635,7 @@ def test_zeta_timeline_projects_from_ref_and_object(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     zeta_timeline.record_event({"type": "user_message", "content": "first"})
     store = zeta_trace.default_store()
@@ -666,7 +666,7 @@ def test_zeta_record_event_stores_prompt_link_not_components(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     store = zeta_trace.default_store()
     component_id = store.put_object(
         zeta_trace.Object(
@@ -721,7 +721,7 @@ def test_zeta_timeline_rehydrates_assistant_content_from_the_graph(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     store = zeta_trace.default_store()
     prompt_id = store.put_object(
         zeta_trace.Object(
@@ -775,7 +775,7 @@ def test_zeta_timeline_rehydrates_assistant_reasoning_from_the_graph(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
     store = zeta_trace.default_store()
     prompt_id = store.put_object(
         zeta_trace.Object(
@@ -836,7 +836,7 @@ def test_zeta_timeline_keeps_untraced_assistant_content_inline(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     zeta_timeline.record_event({"type": "model", "content": "fallback"})
 
@@ -854,7 +854,7 @@ def test_zeta_timeline_last_event_time_tracks_the_newest_event(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("SIGIL_SESSION_ID", "zeta-test")
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
 
     assert zeta_timeline.last_event_time() is None
 

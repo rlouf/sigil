@@ -4,8 +4,6 @@ from __future__ import annotations
 
 
 def zeta_context_for_sigil():
-    configure_zeta_for_sigil()
-
     from zeta.context import ZetaContext
     from zeta.events import EVENT_STORE_NAME, SqliteEventStore
     from zeta.tools.registry import registry
@@ -23,12 +21,3 @@ def zeta_context_for_sigil():
         state_dir=state_dir(),
         session_dir=session_dir(active_session),
     )
-
-
-def configure_zeta_for_sigil(*, responses: bool = False) -> None:
-    del responses
-    from zeta.timeline import set_session_id_factory
-
-    from .session import session_id as current_session_id
-
-    set_session_id_factory(current_session_id)

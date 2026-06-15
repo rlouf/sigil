@@ -7,7 +7,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from .context import ZetaContext
 from .events import (
@@ -31,16 +31,6 @@ from .trace import (
 RUN_EVENT_KIND = "run_event"
 RUN_HEAD_EVENT_TYPES = {"model", "tool_call", "tool_result"}
 NON_HEAD_EVENT_TYPES = {"model_usage"}
-_SESSION_ID_FACTORY: SessionIdFactory | None = None
-
-
-class SessionIdFactory(Protocol):
-    def __call__(self) -> str: ...
-
-
-def set_session_id_factory(factory: SessionIdFactory | None) -> None:
-    global _SESSION_ID_FACTORY
-    _SESSION_ID_FACTORY = factory
 
 
 @dataclass(frozen=True)
@@ -169,9 +159,7 @@ def durable_event_from_timeline(
 
 
 def timeline_session_id() -> str:
-    if _SESSION_ID_FACTORY is None:
-        return ""
-    return _SESSION_ID_FACTORY()
+    return os.environ.get("ZETA_SESSION_ID") or ""
 
 
 def durable_event_payload(event: dict[str, Any]) -> dict[str, Any]:

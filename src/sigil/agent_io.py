@@ -491,9 +491,6 @@ def record_zeta_event(
     runtime_context: ZetaContext | None = None,
     **fields: Any,
 ) -> dict[str, Any]:
-    from . import configure_zeta_for_sigil
-
-    configure_zeta_for_sigil(responses=True)
     return record_event({"type": event_type, **fields}, runtime_context=runtime_context)
 
 
@@ -518,9 +515,8 @@ def run_zeta_rpc_session(
     *,
     publish_event: Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
-    from . import configure_zeta_for_sigil, zeta_context_for_sigil
+    from . import zeta_context_for_sigil
 
-    configure_zeta_for_sigil(responses=True)
     runtime_context = zeta_context_for_sigil()
     objective = str(params.get("objective") or "")
     if not objective:

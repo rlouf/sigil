@@ -27,9 +27,8 @@ from .session import event_time, recent_turns
 
 def append_shell_result() -> dict[str, Any]:
     """Append a synthetic tool result for commands run after a shell handoff."""
-    from . import configure_zeta_for_sigil, zeta_context_for_sigil
+    from . import zeta_context_for_sigil
 
-    configure_zeta_for_sigil()
     runtime_context = zeta_context_for_sigil()
     return record_event(
         shell_result_event(current_timeline(runtime_context=runtime_context)),
