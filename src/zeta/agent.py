@@ -63,6 +63,42 @@ class AgentTurnResult:
     prompt_traces: list[PromptTrace] = field(default_factory=list)
 
 
+@dataclass
+class AgentTurnState:
+    events: list[dict[str, Any]] = field(default_factory=list)
+    latest_model_telemetry: dict[str, Any] = field(default_factory=dict)
+    model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
+    prompt_traces: list[PromptTrace] = field(default_factory=list)
+    next_model_caused_by: str | None = None
+
+    def result(
+        self,
+        *,
+        final_text: str = "",
+        staged_effect: dict[str, Any] | None = None,
+        final_text_streamed: bool = False,
+    ) -> AgentTurnResult:
+        return AgentTurnResult(
+            final_text=final_text,
+            events=self.events,
+            staged_effect=staged_effect,
+            final_text_streamed=final_text_streamed,
+            model_telemetry=self.latest_model_telemetry,
+            model_telemetry_calls=self.model_telemetry_calls,
+            prompt_traces=self.prompt_traces,
+        )
+
+    def note_model_telemetry(self, model_telemetry: dict[str, Any]) -> None:
+        if not model_telemetry:
+            return
+        self.latest_model_telemetry = model_telemetry
+        self.model_telemetry_calls.append(model_telemetry)
+
+    def note_prompt_trace(self, prompt_trace: PromptTrace | None) -> None:
+        if prompt_trace is not None:
+            self.prompt_traces.append(prompt_trace)
+
+
 class AgentTurnAborted(RuntimeError):
     """Raised when a cooperative turn budget or cancellation request aborts."""
 
@@ -101,116 +137,174 @@ def run_agent_turn(
     deadline = agent_deadline(config, deadline)
     active_tool_registry = tool_registry or _runtime_tool_registry
     allowed_tools = agent_allowed_tools(config, tool_registry=active_tool_registry)
-    events: list[dict[str, Any]] = []
-    latest_model_telemetry: dict[str, Any] = {}
-    model_telemetry_calls: list[dict[str, Any]] = []
-    prompt_traces: list[PromptTrace] = []
+    state = AgentTurnState(next_model_caused_by=caused_by)
     builder = prompt_builder or PromptBuilder(
         store=trace_store,
         transform=prompt_transform_from_env(),
     )
     tools = model_tool_descriptors(allowed_tools, tool_registry=active_tool_registry)
-    next_model_caused_by = caused_by
     for _ in turn_indices(config.max_turns):
-        raise_if_agent_turn_aborted(
-            events,
+        check_turn_budget(
+            state,
             event_sink=event_sink,
             cancellation_event=cancellation_event,
             deadline=deadline,
-            caused_by=next_model_caused_by,
-            model_telemetry=latest_model_telemetry,
-            model_telemetry_calls=model_telemetry_calls,
-            prompt_traces=prompt_traces,
         )
-        prepared_prompt = builder.build(
+        turn = request_model_turn(
             objective,
             timeline,
-            system=config.system_prompt,
+            config=config,
             allowed_tools=allowed_tools,
             context=context,
-            current_events=events,
             tools=tools,
-            tool_choice="auto",
-            selected_model=config.model_name,
-            thinking=config.thinking,
-        )
-        assistant, streamed_content, model_telemetry = request_assistant_message(
-            prepared_prompt.messages,
-            tools=prepared_prompt.tools,
-            tool_choice=prepared_prompt.tool_choice,
-            config=config,
+            state=state,
+            builder=builder,
             model_status=model_status,
             stream_sink=stream_sink,
         )
-        prompt_trace = builder.record_assistant_message(prepared_prompt, assistant)
-        if prompt_trace is not None:
-            prompt_traces.append(prompt_trace)
-        if model_telemetry:
-            latest_model_telemetry = model_telemetry
-            model_telemetry_calls.append(model_telemetry)
         assistant_event_id, tool_calls = record_model_event(
-            assistant,
-            events,
+            turn.assistant,
+            state.events,
+            prompt_trace=turn.prompt_trace,
+            prompt_builder=builder,
+            event_sink=event_sink,
+            caused_by=state.next_model_caused_by,
+        )
+        if not tool_calls:
+            return state.result(
+                final_text=str(turn.assistant.get("content") or ""),
+                final_text_streamed=turn.streamed_content,
+            )
+        outcome = run_tool_calls(
+            tool_calls,
+            config=config,
+            allowed_tools=allowed_tools,
+            model_telemetry=turn.model_telemetry,
+            prompt_trace=turn.prompt_trace,
+            builder=builder,
+            event_sink=event_sink,
+            tool_registry=active_tool_registry,
+            assistant_event_id=assistant_event_id,
+            state=state,
+            cancellation_event=cancellation_event,
+            deadline=deadline,
+        )
+        if outcome is not None:
+            return outcome
+    return state.result()
+
+
+@dataclass(frozen=True)
+class ModelTurn:
+    assistant: dict[str, Any]
+    streamed_content: bool
+    model_telemetry: dict[str, Any]
+    prompt_trace: PromptTrace | None
+
+
+def request_model_turn(
+    objective: str,
+    timeline: list[dict[str, Any]],
+    *,
+    config: AgentConfig,
+    allowed_tools: tuple[str, ...],
+    context: str,
+    tools: list[dict[str, Any]],
+    state: AgentTurnState,
+    builder: PromptBuilder,
+    model_status: ModelStatusFactory | None,
+    stream_sink: ChatCompletionStreamSink | None,
+) -> ModelTurn:
+    prepared_prompt = builder.build(
+        objective,
+        timeline,
+        system=config.system_prompt,
+        allowed_tools=allowed_tools,
+        context=context,
+        current_events=state.events,
+        tools=tools,
+        tool_choice="auto",
+        selected_model=config.model_name,
+        thinking=config.thinking,
+    )
+    assistant, streamed_content, model_telemetry = request_assistant_message(
+        prepared_prompt.messages,
+        tools=prepared_prompt.tools,
+        tool_choice=prepared_prompt.tool_choice,
+        config=config,
+        model_status=model_status,
+        stream_sink=stream_sink,
+    )
+    prompt_trace = builder.record_assistant_message(prepared_prompt, assistant)
+    state.note_prompt_trace(prompt_trace)
+    state.note_model_telemetry(model_telemetry)
+    return ModelTurn(
+        assistant=assistant,
+        streamed_content=streamed_content,
+        model_telemetry=model_telemetry,
+        prompt_trace=prompt_trace,
+    )
+
+
+def run_tool_calls(
+    tool_calls: list[dict[str, Any]],
+    *,
+    config: AgentConfig,
+    allowed_tools: tuple[str, ...],
+    model_telemetry: dict[str, Any],
+    prompt_trace: PromptTrace | None,
+    builder: PromptBuilder,
+    event_sink: AgentEventSink | None,
+    tool_registry: ToolRegistry,
+    assistant_event_id: str | None,
+    state: AgentTurnState,
+    cancellation_event: threading.Event | None,
+    deadline: float | None,
+) -> AgentTurnResult | None:
+    for index, tool_call in enumerate(tool_calls):
+        check_turn_budget(
+            state,
+            event_sink=event_sink,
+            cancellation_event=cancellation_event,
+            deadline=deadline,
+        )
+        result_event = handle_tool_call(
+            tool_call,
+            allowed_tools=allowed_tools,
+            index=index,
+            execution_mode=config.execution_mode,
+            model_telemetry=(model_telemetry if index == 0 else None),
             prompt_trace=prompt_trace,
             prompt_builder=builder,
             event_sink=event_sink,
-            caused_by=next_model_caused_by,
+            tool_registry=tool_registry,
+            caused_by=assistant_event_id,
         )
-        if not tool_calls:
-            return AgentTurnResult(
-                final_text=str(assistant.get("content") or ""),
-                events=events,
-                final_text_streamed=streamed_content,
-                model_telemetry=latest_model_telemetry,
-                model_telemetry_calls=model_telemetry_calls,
-                prompt_traces=prompt_traces,
-            )
-        for index, tool_call in enumerate(tool_calls):
-            raise_if_agent_turn_aborted(
-                events,
-                event_sink=event_sink,
-                cancellation_event=cancellation_event,
-                deadline=deadline,
-                caused_by=next_model_caused_by,
-                model_telemetry=latest_model_telemetry,
-                model_telemetry_calls=model_telemetry_calls,
-                prompt_traces=prompt_traces,
-            )
-            result_event = handle_tool_call(
-                tool_call,
-                allowed_tools=allowed_tools,
-                index=index,
-                execution_mode=config.execution_mode,
-                model_telemetry=(model_telemetry if index == 0 else None),
-                prompt_trace=prompt_trace,
-                prompt_builder=builder,
-                event_sink=event_sink,
-                tool_registry=active_tool_registry,
-                caused_by=assistant_event_id,
-            )
-            events.extend(result_event.events)
-            next_model_caused_by = next_model_parent(result_event.events)
-            if result_event.staged_effect is not None and config.stop_on_staged_effect:
-                return AgentTurnResult(
-                    final_text="",
-                    events=events,
-                    staged_effect=result_event.staged_effect,
-                    model_telemetry=latest_model_telemetry,
-                    model_telemetry_calls=model_telemetry_calls,
-                    prompt_traces=prompt_traces,
-                )
-            if result_event.stop:
-                return AgentTurnResult(
-                    events=events,
-                    model_telemetry=latest_model_telemetry,
-                    model_telemetry_calls=model_telemetry_calls,
-                    prompt_traces=prompt_traces,
-                )
-    return AgentTurnResult(
-        events=events,
-        model_telemetry=latest_model_telemetry,
-        model_telemetry_calls=model_telemetry_calls,
-        prompt_traces=prompt_traces,
+        state.events.extend(result_event.events)
+        state.next_model_caused_by = next_model_parent(result_event.events)
+        if result_event.staged_effect is not None and config.stop_on_staged_effect:
+            return state.result(staged_effect=result_event.staged_effect)
+        if result_event.stop:
+            return state.result()
+    return None
+
+
+def check_turn_budget(
+    state: AgentTurnState,
+    *,
+    event_sink: AgentEventSink | None,
+    cancellation_event: threading.Event | None,
+    deadline: float | None,
+) -> None:
+    raise_if_agent_turn_aborted(
+        state.events,
+        event_sink=event_sink,
+        cancellation_event=cancellation_event,
+        deadline=deadline,
+        caused_by=state.next_model_caused_by,
+        model_telemetry=state.latest_model_telemetry,
+        model_telemetry_calls=state.model_telemetry_calls,
+        prompt_traces=state.prompt_traces,
     )
 
 
@@ -587,6 +681,15 @@ def model_tool_call_event(
     return event
 
 
+@dataclass(frozen=True)
+class ToolCallInvocation:
+    call_id: str
+    name: str
+    params: dict[str, Any]
+    call_event: dict[str, Any]
+    parse_error: str = ""
+
+
 def handle_tool_call(
     tool_call: dict[str, Any],
     *,
@@ -602,8 +705,8 @@ def handle_tool_call(
 ) -> ToolCallResult:
     active_tool_registry = tool_registry or _runtime_tool_registry
     call_id = str(tool_call.get("id") or f"call-{index}")
-    function = tool_call.get("function")
-    if not isinstance(function, dict):
+    invocation = tool_call_invocation(tool_call, index=index, caused_by=caused_by)
+    if invocation is None:
         return invalid_tool_result(
             call_id,
             "",
@@ -616,6 +719,43 @@ def handle_tool_call(
             event_sink=event_sink,
             caused_by=caused_by,
         )
+    validation_error = tool_call_validation_error(
+        invocation,
+        allowed_tools=allowed_tools,
+        tool_registry=active_tool_registry,
+    )
+    if validation_error is not None:
+        code, message = validation_error
+        return reject_tool_call(
+            invocation,
+            code,
+            message,
+            model_telemetry=model_telemetry,
+            prompt_trace=prompt_trace,
+            prompt_builder=prompt_builder,
+            event_sink=event_sink,
+        )
+    return run_valid_tool_call(
+        invocation,
+        execution_mode=execution_mode,
+        model_telemetry=model_telemetry,
+        prompt_trace=prompt_trace,
+        prompt_builder=prompt_builder,
+        event_sink=event_sink,
+        tool_registry=active_tool_registry,
+    )
+
+
+def tool_call_invocation(
+    tool_call: dict[str, Any],
+    *,
+    index: int,
+    caused_by: str | None,
+) -> ToolCallInvocation | None:
+    call_id = str(tool_call.get("id") or f"call-{index}")
+    function = tool_call.get("function")
+    if not isinstance(function, dict):
+        return None
     name = str(function.get("name") or "")
     arguments = function.get("arguments")
     params, parse_error = parse_tool_arguments(arguments)
@@ -629,67 +769,107 @@ def handle_tool_call(
     }
     if caused_by is not None:
         call_event["caused_by"] = caused_by
+    return ToolCallInvocation(
+        call_id=call_id,
+        name=name,
+        params=params,
+        call_event=call_event,
+        parse_error=parse_error,
+    )
 
-    def reject(code: str, message: str) -> ToolCallResult:
-        return invalid_tool_result(
-            call_id,
-            name,
-            params,
-            code,
-            message,
-            call_event=call_event,
-            model_telemetry=model_telemetry,
-            prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-            event_sink=event_sink,
-        )
 
-    if parse_error:
-        return reject("invalid-json-args", parse_error)
-    if active_tool_registry.get(name) is None:
-        return reject("unknown-tool", f"unknown tool: {name}")
-    if name not in allowed_tools:
-        return reject(
-            "disallowed-tool", f"tool is not allowed in this workflow: {name}"
+def tool_call_validation_error(
+    invocation: ToolCallInvocation,
+    *,
+    allowed_tools: tuple[str, ...],
+    tool_registry: ToolRegistry,
+) -> tuple[str, str] | None:
+    if invocation.parse_error:
+        return "invalid-json-args", invocation.parse_error
+    if tool_registry.get(invocation.name) is None:
+        return "unknown-tool", f"unknown tool: {invocation.name}"
+    if invocation.name not in allowed_tools:
+        return (
+            "disallowed-tool",
+            f"tool is not allowed in this workflow: {invocation.name}",
         )
-    schema_errors = active_tool_registry.validate_tool_args(name, params)
+    schema_errors = tool_registry.validate_tool_args(invocation.name, invocation.params)
     if schema_errors:
-        return reject("schema-mismatch", "; ".join(schema_errors))
+        return "schema-mismatch", "; ".join(schema_errors)
+    return None
+
+
+def reject_tool_call(
+    invocation: ToolCallInvocation,
+    code: str,
+    message: str,
+    *,
+    model_telemetry: dict[str, Any] | None,
+    prompt_trace: PromptTrace | None,
+    prompt_builder: PromptBuilder | None,
+    event_sink: AgentEventSink | None,
+) -> ToolCallResult:
+    return invalid_tool_result(
+        invocation.call_id,
+        invocation.name,
+        invocation.params,
+        code,
+        message,
+        call_event=invocation.call_event,
+        model_telemetry=model_telemetry,
+        prompt_trace=prompt_trace,
+        prompt_builder=prompt_builder,
+        event_sink=event_sink,
+    )
+
+
+def run_valid_tool_call(
+    invocation: ToolCallInvocation,
+    *,
+    execution_mode: ExecutionMode,
+    model_telemetry: dict[str, Any] | None,
+    prompt_trace: PromptTrace | None,
+    prompt_builder: PromptBuilder | None,
+    event_sink: AgentEventSink | None,
+    tool_registry: ToolRegistry,
+) -> ToolCallResult:
     events: list[dict[str, Any]] = []
     attach_tool_call_trace(
-        call_event,
+        invocation.call_event,
         prompt_trace=prompt_trace,
         prompt_builder=prompt_builder,
     )
-    emit_event(events, call_event, event_sink)
+    emit_event(events, invocation.call_event, event_sink)
     try:
         result = run_tool(
-            name,
-            params,
+            invocation.name,
+            invocation.params,
             execution_mode=execution_mode,
-            tool_registry=active_tool_registry,
+            tool_registry=tool_registry,
         )
     except Exception as exc:
         result = tool_error("tool-crashed", f"{type(exc).__name__}: {exc}")
     staged_effect = (
         result_staged_effect(result)
         if tool_call_stages_effect(
-            name,
+            invocation.name,
             execution_mode,
-            tool_registry=active_tool_registry,
+            tool_registry=tool_registry,
         )
         else None
     )
     stop = bool(
-        execution_mode == "stage" and name == "edit" and result.get("ok") is True
+        execution_mode == "stage"
+        and invocation.name == "edit"
+        and result.get("ok") is True
     )
     emit_event(
         events,
         traced_tool_result_event(
-            call_id,
-            name,
+            invocation.call_id,
+            invocation.name,
             result,
-            call_event=call_event,
+            call_event=invocation.call_event,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
             prompt_builder=prompt_builder,
