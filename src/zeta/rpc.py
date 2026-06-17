@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any, TextIO, cast
 
 from .agent import AgentConfig, AgentTurnAborted, registered_tools, run_agent_turn
@@ -15,6 +16,20 @@ from .tools.registry import ExecutionMode, ToolRegistry
 from .tools.registry import registry as _runtime_tool_registry
 
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+@dataclass
+class RpcError(RuntimeError):
+    jsonrpc_code: int
+    zeta_code: str
+    summary: str
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        super().__init__(self.summary)
+
+    def error_data(self) -> dict[str, Any]:
+        return {"code": self.zeta_code, **self.data}
 
 
 def run_rpc_session(
@@ -75,14 +90,27 @@ def run_rpc_session(
 def rpc_objective(params: dict[str, Any]) -> str:
     objective = str(params.get("objective") or "")
     if not objective:
-        raise ValueError("session.run requires objective")
+        raise RpcError(
+            -32602,
+            "missing_objective",
+            "Invalid params",
+            {"message": "session.run requires objective"},
+        )
     return objective
 
 
 def rpc_workflow(params: dict[str, Any]) -> str:
     workflow = str(params.get("workflow") or "ask")
     if workflow not in {"ask", "propose", "do"}:
-        raise ValueError("workflow must be ask, propose, or do")
+        raise RpcError(
+            -32602,
+            "invalid_workflow",
+            "Invalid params",
+            {
+                "message": "workflow must be ask, propose, or do",
+                "workflow": workflow,
+            },
+        )
     return workflow
 
 
@@ -185,9 +213,26 @@ class JsonRpcServer:
         params = params if isinstance(params, dict) else {}
         try:
             result = self.dispatch(method, params)
+        except RpcError as exc:
+            if request_id is not None:
+                self.write_error(
+                    request_id,
+                    exc.jsonrpc_code,
+                    exc.summary,
+                    data=exc.error_data(),
+                )
+            return
         except Exception as exc:
             if request_id is not None:
-                self.write_error(request_id, -32000, f"{type(exc).__name__}: {exc}")
+                self.write_error(
+                    request_id,
+                    -32603,
+                    "Internal error",
+                    data={
+                        "code": "internal_error",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    },
+                )
             return
         if request_id is not None:
             self.write_response(request_id, result)
@@ -202,9 +247,19 @@ class JsonRpcServer:
             return None
         if method == "session.run":
             if self.session_runner is None:
-                raise ValueError("session.run is not configured")
+                raise RpcError(
+                    -32000,
+                    "session_run_unavailable",
+                    "Server error",
+                    {"message": "session.run is not configured"},
+                )
             return self.session_runner(params)
-        raise ValueError(f"unknown method: {method}")
+        raise RpcError(
+            -32601,
+            "method_not_found",
+            "Method not found",
+            {"method": method},
+        )
 
     def register_client_tools(self, tools: Any) -> list[str]:
         if not isinstance(tools, list):
@@ -224,7 +279,15 @@ class JsonRpcServer:
     def register_client_tool(self, name: str, item: dict[str, Any]) -> None:
         existing = self.tool_registry.get(name)
         if existing is not None and name not in self.client_tools:
-            raise ValueError(f"tool {name!r} is already registered")
+            raise RpcError(
+                -32602,
+                "duplicate_tool",
+                "Invalid params",
+                {
+                    "message": f"tool {name!r} is already registered",
+                    "tool": name,
+                },
+            )
         self.client_tools.add(name)
         if existing is not None:
             return
@@ -298,14 +361,13 @@ class JsonRpcServer:
         request_id: Any,
         code: int,
         message: str,
+        *,
+        data: dict[str, Any] | None = None,
     ) -> None:
-        self.write_message(
-            {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": code, "message": message},
-            }
-        )
+        error: dict[str, Any] = {"code": code, "message": message}
+        if data is not None:
+            error["data"] = data
+        self.write_message({"jsonrpc": "2.0", "id": request_id, "error": error})
 
     def write_notification(self, method: str, params: dict[str, Any]) -> None:
         self.write_message({"jsonrpc": "2.0", "method": method, "params": params})

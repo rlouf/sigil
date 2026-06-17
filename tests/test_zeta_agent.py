@@ -143,6 +143,109 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
     ]
 
 
+def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
+    input_stream = StringIO(
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": "missing.method"}) + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
+
+    server.serve()
+
+    assert rpc_messages(output) == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32601,
+                "message": "Method not found",
+                "data": {"code": "method_not_found", "method": "missing.method"},
+            },
+        }
+    ]
+
+
+def test_zeta_rpc_session_run_requires_objective() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session.run",
+                "params": {"tools": []},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream,
+        output,
+        session_runner=lambda params: zeta_rpc.run_rpc_session(
+            params,
+            publish_event=lambda event: None,
+        ),
+    )
+
+    server.serve()
+
+    assert rpc_messages(output) == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32602,
+                "message": "Invalid params",
+                "data": {
+                    "code": "missing_objective",
+                    "message": "session.run requires objective",
+                },
+            },
+        }
+    ]
+
+
+def test_zeta_rpc_session_run_rejects_invalid_workflow() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "session.run",
+                "params": {"objective": "answer", "workflow": "ship"},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream,
+        output,
+        session_runner=lambda params: zeta_rpc.run_rpc_session(
+            params,
+            publish_event=lambda event: None,
+        ),
+    )
+
+    server.serve()
+
+    assert rpc_messages(output) == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32602,
+                "message": "Invalid params",
+                "data": {
+                    "code": "invalid_workflow",
+                    "message": "workflow must be ask, propose, or do",
+                    "workflow": "ship",
+                },
+            },
+        }
+    ]
+
+
 def test_zeta_rpc_cli_serves_stdio_initialize() -> None:
     result = CliRunner().invoke(
         zeta_cli.cli,
@@ -314,6 +417,67 @@ def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
     assert registered == ["ctx_read"]
     assert registry.get("ctx_read") is not None
     assert zeta_agent.tool_registry.get("ctx_read") is None
+
+
+def test_zeta_rpc_rejects_duplicate_client_tool_registration() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "ctx_read",
+        ToolImpl(
+            ToolSpec(
+                "ctx_read",
+                "Read through the host.",
+                {"type": "object"},
+                effects=("read",),
+            ),
+            lambda params: {"ok": True},
+            lambda params: {"ok": True},
+        ),
+    )
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools.register",
+                "params": {
+                    "tools": [
+                        {
+                            "name": "ctx_read",
+                            "description": "Read through the client.",
+                            "schema": {"type": "object"},
+                            "effects": ["read"],
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream,
+        output,
+        tool_registry=registry,
+    )
+
+    server.serve()
+
+    assert rpc_messages(output) == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32602,
+                "message": "Invalid params",
+                "data": {
+                    "code": "duplicate_tool",
+                    "message": "tool 'ctx_read' is already registered",
+                    "tool": "ctx_read",
+                },
+            },
+        }
+    ]
 
 
 def test_zeta_rpc_registers_client_tools_and_calls_client() -> None:
