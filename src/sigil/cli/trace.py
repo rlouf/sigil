@@ -10,6 +10,7 @@ from typing import Any
 
 import click
 
+from zeta.context import reconstructed_prompt_request
 from zeta.events import (
     EVENT_STORE_NAME,
     Event,
@@ -17,7 +18,6 @@ from zeta.events import (
     row_to_event,
 )
 from zeta.models import chat_completion_messages
-from zeta.prompt import reconstructed_prompt_request
 from zeta.trace import (
     DEFAULT_SQLITE_NAME,
     Derivation,
@@ -112,9 +112,9 @@ def scoped_store(ctx: click.Context) -> Store:
 
 
 def current_store() -> Store:
-    from .. import zeta_context_for_sigil
+    from .. import zeta_session_for_sigil
 
-    return zeta_context_for_sigil().trace_store
+    return zeta_session_for_sigil().trace_store
 
 
 def open_session_store(session_id: str) -> SqliteStore:

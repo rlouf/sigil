@@ -32,8 +32,8 @@ from zeta import cli as zeta_cli
 from zeta import context as zeta_context
 from zeta import events as zeta_events
 from zeta import models as zeta_models_api
-from zeta import prompt as zeta_prompt
 from zeta import rpc as zeta_rpc
+from zeta import session as zeta_session
 from zeta import trace as zeta_trace
 from zeta import turn as zeta_agent
 from zeta.models import chat_completions as zeta_model
@@ -456,11 +456,11 @@ def test_zeta_request_assistant_message_returns_model_output(monkeypatch) -> Non
 def test_zeta_request_model_turn_builds_assistant_from_model_output(
     monkeypatch,
 ) -> None:
-    class PlanOnlyPromptBuilder(zeta_prompt.PromptBuilder):
+    class PlanOnlyPromptBuilder(zeta_context.PromptBuilder):
         planned = False
         committed = False
 
-        def build(self, *args: object, **kwargs: object) -> zeta_prompt.PreparedPrompt:
+        def build(self, *args: object, **kwargs: object) -> zeta_context.PreparedPrompt:
             raise AssertionError("request_model_turn should use explicit prompt phases")
 
         def plan_prompt(
@@ -477,7 +477,7 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
             max_tokens: int = zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
             selected_model: str | None = None,
             thinking: str | None = None,
-        ) -> zeta_prompt.PromptPlan:
+        ) -> zeta_context.PromptPlan:
             self.planned = True
             return super().plan_prompt(
                 objective,
@@ -495,8 +495,8 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
 
         def commit_prompt_plan(
             self,
-            plan: zeta_prompt.PromptPlan,
-        ) -> zeta_prompt.StoredPrompt:
+            plan: zeta_context.PromptPlan,
+        ) -> zeta_context.StoredPrompt:
             self.committed = True
             return super().commit_prompt_plan(plan)
 
@@ -565,7 +565,7 @@ def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
         current_events=[],
         tools=[],
         state=state,
-        builder=zeta_prompt.PromptBuilder(store=store),
+        builder=zeta_context.PromptBuilder(store=store),
     )
 
     assert [step.step for step in state.steps] == ["build_prompt"]
@@ -620,7 +620,7 @@ def test_zeta_call_model_step_returns_output_and_telemetry(monkeypatch) -> None:
 def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
     store = zeta_trace.InMemoryStore()
     state = zeta_agent.RunState()
-    builder = zeta_prompt.PromptBuilder(store=store)
+    builder = zeta_context.PromptBuilder(store=store)
     prepared_prompt, _ = zeta_agent.build_prompt_step(
         "answer",
         [],
@@ -682,7 +682,7 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         projection=projection,
         model_telemetry={},
         prompt_trace=None,
-        builder=zeta_prompt.PromptBuilder(),
+        builder=zeta_context.PromptBuilder(),
         event_sink=None,
         tool_registry=registry,
         assistant_event_id="assistant-1",
@@ -737,7 +737,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
         projection=projection,
         model_telemetry={},
         prompt_trace=None,
-        builder=zeta_prompt.PromptBuilder(),
+        builder=zeta_context.PromptBuilder(),
         event_sink=None,
         tool_registry=registry,
         assistant_event_id="assistant-1",
@@ -1151,7 +1151,7 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    context = zeta_context.ZetaContext(
+    context = zeta_session.Session(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1250,7 +1250,7 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
 def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     trace_store = zeta_trace.InMemoryStore()
-    context = zeta_context.ZetaContext(
+    context = zeta_session.Session(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=trace_store,
@@ -1325,7 +1325,7 @@ def test_zeta_rpc_session_result_returns_prompt_trace_refs(
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     trace_store = zeta_trace.InMemoryStore()
-    context = zeta_context.ZetaContext(
+    context = zeta_session.Session(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=trace_store,
@@ -1370,7 +1370,7 @@ def test_zeta_rpc_tool_run_result_returns_tool_trace_refs(
             run_result={"ok": True, "content": [{"type": "text", "text": "ok"}]},
         )
     )
-    context = zeta_context.ZetaContext(
+    context = zeta_session.Session(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=trace_store,
@@ -1425,7 +1425,7 @@ def test_zeta_rpc_session_trace_refs_degrade_when_trace_data_is_missing(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    context = zeta_context.ZetaContext(
+    context = zeta_session.Session(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1441,7 +1441,7 @@ def test_zeta_rpc_session_trace_refs_degrade_when_trace_data_is_missing(
         lambda *args, **kwargs: {"content": "done"},
     )
     monkeypatch.setattr(
-        zeta_prompt.PromptBuilder,
+        zeta_context.PromptBuilder,
         "record_assistant_message",
         lambda self, prepared, assistant: None,
     )
@@ -1466,7 +1466,7 @@ def test_zeta_rpc_sequential_runs_get_distinct_run_ids(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    context = zeta_context.ZetaContext(
+    context = zeta_session.Session(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1505,7 +1505,7 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    context = zeta_context.ZetaContext(
+    context = zeta_session.Session(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -1590,7 +1590,7 @@ def test_zeta_rpc_session_cancel_aborts_active_run(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    context = zeta_context.ZetaContext(
+    context = zeta_session.Session(
         session_id="ctx-session",
         event_sink=event_store,
         trace_store=zeta_trace.InMemoryStore(),
@@ -2670,7 +2670,7 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
         "read",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
-        prompt_builder=zeta_prompt.PromptBuilder(store=store),
+        prompt_builder=zeta_context.PromptBuilder(store=store),
         caused_by="prompt-event",
     )
 
@@ -2750,7 +2750,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
             model_name="unit-model",
         ),
         context="Project context",
-        prompt_builder=zeta_prompt.PromptBuilder(store=store),
+        prompt_builder=zeta_context.PromptBuilder(store=store),
     )
 
     assert len(result.prompt_traces) == 1
@@ -2758,7 +2758,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
     prompt = store.get_object(trace.prompt_object_id)
     assert prompt is not None
     kwargs = cast(dict[str, Any], captured["kwargs"])
-    assert prompt.data["payload_sha256"] == zeta_prompt.builder.payload_sha256(
+    assert prompt.data["payload_sha256"] == zeta_context.builder.payload_sha256(
         zeta_model.chat_completion_request_body(
             cast(list[dict[str, Any]], captured["messages"]),
             tools=cast(list[dict[str, Any]], kwargs["tools"]),
@@ -2923,7 +2923,7 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
-        prompt_builder=zeta_prompt.PromptBuilder(store=store),
+        prompt_builder=zeta_context.PromptBuilder(store=store),
     )
 
     assert result.final_text == "done"
@@ -2971,7 +2971,7 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
-        prompt_builder=zeta_prompt.PromptBuilder(store=store),
+        prompt_builder=zeta_context.PromptBuilder(store=store),
     )
 
     assert_tool_result_derivation_graph(
@@ -3560,7 +3560,7 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         "test",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("bash",), max_turns=3),
-        prompt_builder=zeta_prompt.PromptBuilder(store=store),
+        prompt_builder=zeta_context.PromptBuilder(store=store),
     )
 
     assert requests == 1
@@ -3742,7 +3742,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
                 max_wall_seconds=1.0,
             ),
             event_sink=events.append,
-            prompt_builder=zeta_prompt.PromptBuilder(store=store),
+            prompt_builder=zeta_context.PromptBuilder(store=store),
         )
 
     assert raised.value.reason == "deadline_exceeded"

@@ -7,7 +7,6 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
-from zeta.context import ZetaContext
 from zeta.history import (
     TURN_RECORD_SCHEMA,
     effect_record,
@@ -16,6 +15,7 @@ from zeta.history import (
     publish_turn_record,
     turn_record,
 )
+from zeta.session import Session
 from zeta.timeline import add_event_link
 from zeta.tools.base import proposed_effect
 from zeta.trace import Derivation, Object, PromptTrace, warn_trace_failure_once
@@ -41,7 +41,7 @@ class TurnRecorder:
     def __init__(
         self,
         *,
-        runtime_context: ZetaContext,
+        runtime_context: Session,
         workflow: str,
         objective: str,
         allowed_tools: Iterable[str],
@@ -166,7 +166,7 @@ def record_turn_trace_object(
     effects: list[dict[str, Any]],
     effect_object_ids: list[str],
     *,
-    runtime_context: ZetaContext,
+    runtime_context: Session,
 ) -> None:
     """Bridge one turn record into the session trace graph, fail-open.
 

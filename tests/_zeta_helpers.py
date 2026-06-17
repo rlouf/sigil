@@ -12,7 +12,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
-from zeta import prompt as zeta_prompt
+from zeta import context as zeta_context
 from zeta import trace as zeta_trace
 from zeta import turn as zeta_agent
 from zeta.models import chat_completions as zeta_model
@@ -204,7 +204,7 @@ def assert_structural_trim_payload(
 
 def assert_structural_trim_graph(
     store: zeta_trace.InMemoryStore,
-    prepared: zeta_prompt.PreparedPrompt,
+    prepared: zeta_context.PreparedPrompt,
     payload: dict[str, Any],
     *,
     metadata: dict[str, Any],
@@ -230,7 +230,7 @@ def assert_structural_trim_graph(
 
 def assert_task_state_graph(
     store: zeta_trace.InMemoryStore,
-    prepared: zeta_prompt.PreparedPrompt,
+    prepared: zeta_context.PreparedPrompt,
     *,
     source_count: int,
 ) -> zeta_trace.Object:
@@ -271,8 +271,8 @@ def assert_tool_result_derivation_graph(
 def assert_prompt_trace_replay_graph(
     store: zeta_trace.InMemoryStore,
     trace: zeta_trace.PromptTrace,
-) -> zeta_prompt.ReconstructedPrompt:
-    reconstructed = zeta_prompt.reconstructed_prompt_request(
+) -> zeta_context.ReconstructedPrompt:
+    reconstructed = zeta_context.reconstructed_prompt_request(
         store,
         trace.prompt_object_id,
     )
@@ -384,7 +384,7 @@ def write_skill(
     return skill
 
 
-def big_transcript_components(count: int = 6) -> list[zeta_prompt.PromptComponent]:
+def big_transcript_components(count: int = 6) -> list[zeta_context.PromptComponent]:
     timeline = [
         {
             "role": "user" if index % 2 == 0 else "assistant",
@@ -392,7 +392,7 @@ def big_transcript_components(count: int = 6) -> list[zeta_prompt.PromptComponen
         }
         for index in range(count)
     ]
-    return zeta_prompt.prompt_components("continue", timeline, allowed_capabilities=())
+    return zeta_context.prompt_components("continue", timeline, allowed_capabilities=())
 
 
 class BatchSpyStore(zeta_trace.InMemoryStore):

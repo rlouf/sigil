@@ -175,11 +175,11 @@ def write_handoff_resume(path: Path | None, command: str, status: int) -> None:
         return
     from zeta.timeline import current_timeline
 
-    from .. import zeta_context_for_sigil
+    from .. import zeta_session_for_sigil
 
     if not matching_pending_handoff(
         command,
-        current_timeline(runtime_context=zeta_context_for_sigil()),
+        current_timeline(runtime_context=zeta_session_for_sigil()),
     ):
         return
     path.write_text(command + "\n", encoding="utf-8")

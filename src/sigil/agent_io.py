@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any, TextIO
 
 from zeta.agents import AgentConfig
-from zeta.context import ZetaContext
+from zeta.context import load_project_instructions
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelSelection,
@@ -22,6 +22,7 @@ from zeta.models import (
     ensure_server,
     model_selection_event,
 )
+from zeta.session import Session
 from zeta.timeline import current_timeline, record_event
 from zeta.tools.registry import ExecutionMode
 from zeta.turn import (
@@ -31,7 +32,6 @@ from zeta.turn import (
     run_agent_turn,
 )
 
-from . import load_project_context
 from .display.render import render_tool_start
 from .display.state import (
     PROGRESS_MODE_TRACE,
@@ -120,7 +120,7 @@ class TurnEventRecorder:
         *,
         render_output: TextIO,
         turn_recorder: TurnRecorder | None = None,
-        runtime_context: ZetaContext,
+        runtime_context: Session,
     ) -> None:
         self.renderer = renderer
         self.render_output = render_output
@@ -217,7 +217,7 @@ def render_final_text(
 def record_zeta_event(
     event_type: str,
     *,
-    runtime_context: ZetaContext,
+    runtime_context: Session,
     **fields: Any,
 ) -> dict[str, Any]:
     return record_event({"type": event_type, **fields}, runtime_context=runtime_context)
@@ -226,7 +226,7 @@ def record_zeta_event(
 def record_turn_abort(
     error: BaseException,
     *,
-    runtime_context: ZetaContext,
+    runtime_context: Session,
     reason: str | None = None,
     **fields: Any,
 ) -> dict[str, Any]:
@@ -248,9 +248,9 @@ def run_zeta_rpc_session(
     *,
     publish_event: Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
-    from . import zeta_context_for_sigil
+    from . import zeta_session_for_sigil
 
-    runtime_context = zeta_context_for_sigil()
+    runtime_context = zeta_session_for_sigil()
     objective = str(params.get("objective") or "")
     if not objective:
         raise ValueError("session.run requires objective")
@@ -341,7 +341,7 @@ def run_zeta_rpc_session(
             context=(
                 str(params.get("context"))
                 if isinstance(params.get("context"), str)
-                else load_project_context()
+                else load_project_instructions()
             ),
             event_sink=sink,
             trace_store=runtime_context.trace_store,

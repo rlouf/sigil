@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from typing import Any, cast
 
-from zeta.prompt.budget import estimated_tokens_for_text
+from zeta.context.budget import estimated_tokens_for_text
 from zeta.tools.base import proposed_effect
 from zeta.trace import Object
 

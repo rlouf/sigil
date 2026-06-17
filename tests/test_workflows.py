@@ -59,13 +59,13 @@ from zeta.trace import PromptTrace
 def record_sigil_event(event: dict[str, Any]) -> dict[str, Any]:
     return zeta_timeline.record_event(
         event,
-        runtime_context=sigil.zeta_context_for_sigil(),
+        runtime_context=sigil.zeta_session_for_sigil(),
     )
 
 
 def current_sigil_timeline() -> list[dict[str, Any]]:
     return zeta_timeline.current_timeline(
-        runtime_context=sigil.zeta_context_for_sigil()
+        runtime_context=sigil.zeta_session_for_sigil()
     )
 
 
@@ -205,7 +205,7 @@ def test_zeta_agent_step_separates_trace_from_final_answer(
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
-    monkeypatch.setattr(zeta_runner, "load_project_context", lambda: "ctx")
+    monkeypatch.setattr(zeta_runner, "load_project_instructions", lambda: "ctx")
 
     code = zeta_runner.step("answer me", workflow="propose")
 
@@ -1697,7 +1697,7 @@ def test_zeta_question_loop_passes_prior_timeline_as_turns(
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
     monkeypatch.setattr(zeta_runner, "run_agent_turn", fake_run_agent_turn)
-    monkeypatch.setattr(zeta_runner, "load_project_context", lambda: "ctx")
+    monkeypatch.setattr(zeta_runner, "load_project_instructions", lambda: "ctx")
 
     record_sigil_event({"type": "user_message", "content": "summarize README"})
     record_sigil_event({"type": "model", "content": "It is a Sigil README."})
@@ -2211,7 +2211,7 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
 
     assert code == 0
     (turn,) = history_turns()
-    store = sigil.zeta_context_for_sigil().trace_store
+    store = sigil.zeta_session_for_sigil().trace_store
     turn_object_id = zeta_trace.resolve_object_id(store, f"turn/{turn['turn_id']}")
     turn_object = store.get_object(turn_object_id)
     assert turn_object is not None
@@ -2247,9 +2247,9 @@ def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
             self.trace_store = BrokenStore()
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    base_context = sigil.zeta_context_for_sigil()
+    base_context = sigil.zeta_session_for_sigil()
     monkeypatch.setattr(
-        sigil, "zeta_context_for_sigil", lambda: BrokenContext(base_context)
+        sigil, "zeta_session_for_sigil", lambda: BrokenContext(base_context)
     )
     monkeypatch.setattr(
         zeta_runner,

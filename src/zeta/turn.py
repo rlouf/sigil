@@ -13,6 +13,13 @@ from types import TracebackType
 from typing import Any, Literal, cast
 
 from .agents import AgentConfig
+from .context import (
+    PreparedPrompt,
+    PromptBuilder,
+    prompt_transform_from_env,
+    render_model_input,
+)
+from .context.builder import prepared_prompt_from
 from .models import (
     CODEX_RESPONSES_API,
     ChatCompletionStreamSink,
@@ -21,13 +28,6 @@ from .models import (
     chat_completion_messages,
     model_endpoint_open,
 )
-from .prompt import (
-    PreparedPrompt,
-    PromptBuilder,
-    prompt_transform_from_env,
-    render_model_input,
-)
-from .prompt.builder import prepared_prompt_from
 from .tools.base import proposed_effect
 from .tools.registry import CapabilityProjection, CapabilityRegistry, ExecutionMode
 from .tools.registry import registry as _runtime_tool_registry

@@ -15,7 +15,6 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from .agents import AgentConfig
-from .context import ZetaContext, default_context
 from .events import (
     AgentDefinition,
     AgentRun,
@@ -30,6 +29,7 @@ from .events import (
     event_payload_draft,
     time_from_timestamp_micros,
 )
+from .session import Session, default_session
 from .timeline import current_timeline, record_event, timeline_event_from_durable_event
 from .tools.base import (
     EFFECT_KINDS,
@@ -126,9 +126,9 @@ def run_rpc_session(
     params: dict[str, Any],
     *,
     publish_event: Callable[[dict[str, Any]], None],
-    runtime_context: ZetaContext | None = None,
+    runtime_context: Session | None = None,
 ) -> dict[str, Any]:
-    runtime_context = runtime_context or default_context()
+    runtime_context = runtime_context or default_session()
     run_id = rpc_run_id_param(params) or rpc_run_id()
     cancellation_event = rpc_cancellation_event_param(params)
     draft = session_turn_requested_draft(
@@ -155,7 +155,7 @@ def run_rpc_session(
 def run_session_turn_from_event(
     run: AgentRun,
     *,
-    runtime_context: ZetaContext,
+    runtime_context: Session,
     publish_event: Callable[[dict[str, Any]], None],
     cancellation_event: threading.Event | None = None,
 ) -> dict[str, Any]:
@@ -179,7 +179,7 @@ def run_session_turn(
     run_id: str,
     caused_by: str,
     publish_event: Callable[[dict[str, Any]], None],
-    runtime_context: ZetaContext,
+    runtime_context: Session,
     cancellation_event: threading.Event | None,
 ) -> dict[str, Any]:
     objective = rpc_objective(params)
@@ -246,7 +246,7 @@ def run_session_turn(
 
 
 def session_event_dispatcher(
-    runtime_context: ZetaContext,
+    runtime_context: Session,
     *,
     publish_event: Callable[[dict[str, Any]], None],
     cancellation_event: threading.Event | None = None,
@@ -273,7 +273,7 @@ def session_turn_requested_draft(
     params: dict[str, Any],
     *,
     run_id: str,
-    runtime_context: ZetaContext,
+    runtime_context: Session,
 ) -> DraftEvent:
     objective = rpc_objective(params)
     workflow = rpc_workflow(params)
@@ -335,7 +335,7 @@ def rpc_session_result(
     final_text: str,
     *,
     run_id: str,
-    runtime_context: ZetaContext,
+    runtime_context: Session,
     agent_result: AgentTurnResult | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
@@ -400,7 +400,7 @@ def add_unique_list(values: list[str], raw_values: Any) -> None:
         add_unique(values, value)
 
 
-def final_event_cursor(runtime_context: ZetaContext, run_id: str) -> str | None:
+def final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
     if not isinstance(runtime_context.event_sink, EventReader):
         return None
     events = runtime_context.event_sink.list_events(
@@ -412,7 +412,7 @@ def final_event_cursor(runtime_context: ZetaContext, run_id: str) -> str | None:
 
 
 def rpc_event_with_cursor(
-    runtime_context: ZetaContext,
+    runtime_context: Session,
     event: dict[str, Any],
     run_id: str,
 ) -> dict[str, Any]:
@@ -423,7 +423,7 @@ def rpc_event_with_cursor(
 
 
 def durable_event_for_rpc_event(
-    runtime_context: ZetaContext,
+    runtime_context: Session,
     event: dict[str, Any],
     run_id: str,
 ) -> Event | None:

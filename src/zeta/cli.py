@@ -6,9 +6,9 @@ import sys
 
 import click
 
-from .context import default_context
 from .events import EventReader
 from .rpc import JsonRpcServer, run_rpc_session, session_event_dispatcher
+from .session import default_session
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -22,7 +22,7 @@ def rpc(stdio: bool) -> int:
     """Serve the Zeta JSON-RPC protocol."""
     if not stdio:
         raise click.UsageError("only --stdio is supported")
-    runtime_context = default_context()
+    runtime_context = default_session()
     event_reader = (
         runtime_context.event_sink
         if isinstance(runtime_context.event_sink, EventReader)

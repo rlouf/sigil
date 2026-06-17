@@ -9,7 +9,6 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from .context import ZetaContext
 from .events import (
     DraftEvent,
     Event,
@@ -22,6 +21,7 @@ from .events import (
     time_from_timestamp_micros,
     timestamp_micros_from_time,
 )
+from .session import Session
 from .tools.base import effect_resolution, proposed_effect
 from .trace import (
     ObjectId,
@@ -42,7 +42,7 @@ class ChatMessageEntry:
 def record_event(
     event: dict[str, Any],
     *,
-    runtime_context: ZetaContext,
+    runtime_context: Session,
 ) -> dict[str, Any]:
     """Record a Zeta event in the durable event log."""
     scoped_event = dict(event)
@@ -230,7 +230,7 @@ def optional_event_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def current_timeline(*, runtime_context: ZetaContext) -> list[dict[str, Any]]:
+def current_timeline(*, runtime_context: Session) -> list[dict[str, Any]]:
     try:
         return timeline_from_event_reader(
             event_reader(runtime_context.event_sink),

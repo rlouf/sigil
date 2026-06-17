@@ -18,13 +18,13 @@ from click.testing import CliRunner
 from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
-from zeta import prompt as zeta_prompt
+from zeta import context as zeta_context
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
 from zeta import turn as zeta_agent
-from zeta.context import ZetaContext, default_context
 from zeta.events import Filter, SqliteEventStore, event_store_path
 from zeta.models import profiles as zeta_models
+from zeta.session import Session, default_session
 
 
 def zeta_event_store() -> SqliteEventStore:
@@ -33,11 +33,11 @@ def zeta_event_store() -> SqliteEventStore:
 
 def zeta_runtime_context(
     trace_store: zeta_trace.Store | None = None,
-) -> ZetaContext:
-    context = default_context()
+) -> Session:
+    context = default_session()
     if trace_store is None:
         return context
-    return ZetaContext(
+    return Session(
         session_id=context.session_id,
         event_sink=context.event_sink,
         trace_store=trace_store,
@@ -50,7 +50,7 @@ def zeta_runtime_context(
 def record_zeta_event(
     event: dict[str, object],
     *,
-    runtime_context: ZetaContext | None = None,
+    runtime_context: Session | None = None,
 ) -> dict[str, object]:
     return zeta_timeline.record_event(
         event,
@@ -475,8 +475,8 @@ def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
         {"type": "model", "content": f"current-{index}"} for index in range(25)
     ]
 
-    messages = zeta_prompt.component_messages(
-        zeta_prompt.prompt_components(
+    messages = zeta_context.component_messages(
+        zeta_context.prompt_components(
             "inspect",
             transcript,
             allowed_capabilities=(),
@@ -494,13 +494,13 @@ def test_zeta_chat_messages_keeps_full_history_and_current_events() -> None:
 
 
 def test_zeta_prompt_components_keep_only_the_timeline_tail() -> None:
-    over_limit = zeta_prompt.TIMELINE_TAIL_LIMIT + 10
+    over_limit = zeta_context.TIMELINE_TAIL_LIMIT + 10
     transcript = [
         {"role": "user", "content": f"prior-{index}"} for index in range(over_limit)
     ]
 
-    messages = zeta_prompt.component_messages(
-        zeta_prompt.prompt_components(
+    messages = zeta_context.component_messages(
+        zeta_context.prompt_components(
             "inspect",
             transcript,
             allowed_capabilities=(),
@@ -720,7 +720,7 @@ def test_zeta_agent_durable_events_link_trace_objects(
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
         event_sink=record_runtime_event,
-        prompt_builder=zeta_prompt.PromptBuilder(store=runtime_context.trace_store),
+        prompt_builder=zeta_context.PromptBuilder(store=runtime_context.trace_store),
     )
 
     tool_call = event_by_type(result.events, "tool_call")

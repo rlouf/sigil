@@ -9,7 +9,7 @@ from typing import Protocol
 from .budget import ContextUsage, measure
 from .components import PromptComponent
 
-LOGGER = logging.getLogger("zeta.prompt")
+LOGGER = logging.getLogger("zeta.context")
 _warned_over_budget = False
 
 

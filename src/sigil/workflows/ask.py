@@ -56,9 +56,9 @@ def ask(
     tools: tuple[str, ...] = ASK_TOOLS,
 ) -> int:
     """Run Zeta for a shell ask continuing the session timeline."""
-    from .. import zeta_context_for_sigil
+    from .. import zeta_session_for_sigil
 
-    runtime_context = zeta_context_for_sigil()
+    runtime_context = zeta_session_for_sigil()
     return step(
         question,
         workflow="ask",

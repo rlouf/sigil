@@ -267,7 +267,7 @@ def clear_current_session() -> list[str]:
     and the active-model selection must go too, or the next agent step resumes
     the conversation the user just cleared.
     """
-    from . import zeta_context_for_sigil
+    from . import zeta_session_for_sigil
 
     roots = [session_dir()]
     existing_roots = [root for root in roots if root.exists()]
@@ -282,7 +282,7 @@ def clear_current_session() -> list[str]:
         ]
         for root in existing_roots:
             shutil.rmtree(root)
-    context = zeta_context_for_sigil()
+    context = zeta_session_for_sigil()
     trace_store = context.trace_store
     if hasattr(trace_store, "clear_session"):
         trace_store.clear_session(session_id())  # type: ignore[attr-defined]

@@ -45,6 +45,11 @@ from .components import (
     prompt_components,
     zeta_context_message,
 )
+from .instructions import (
+    MAX_INSTRUCTION_FILE_CHARS,
+    MAX_INSTRUCTION_TOTAL_CHARS,
+    load_project_instructions,
+)
 from .system import (
     GREP_TOOL_POLICY,
     TOOL_PROTOCOL_PROMPT,
@@ -66,7 +71,7 @@ from .transforms import (
 )
 
 DEFAULT_TRIM_THRESHOLD_TOKENS = 100_000
-LOGGER = logging.getLogger("zeta.prompt")
+LOGGER = logging.getLogger("zeta.context")
 
 
 def prompt_transform_from_env(
@@ -118,6 +123,8 @@ __all__ = [
     "DEFAULT_TRIM_THRESHOLD_TOKENS",
     "DropOldestPromptTransform",
     "GREP_TOOL_POLICY",
+    "MAX_INSTRUCTION_FILE_CHARS",
+    "MAX_INSTRUCTION_TOTAL_CHARS",
     "ModelTaskStateExtractor",
     "NoOpPromptTransform",
     "PreparedPrompt",
@@ -134,11 +141,13 @@ __all__ = [
     "TaskStateExtractionPromptTransform",
     "TaskStateExtractor",
     "can_read_skill_files",
+    "capability_available",
     "clean_prompt",
     "component_messages",
     "commit_prompt_plan",
     "estimated_tokens",
     "estimated_tokens_for_text",
+    "load_project_instructions",
     "measure",
     "plan_prompt",
     "prompt_component_object",
@@ -156,7 +165,6 @@ __all__ = [
     "task_state_extraction_messages",
     "task_state_json",
     "task_state_message",
-    "tool_available",
     "tool_signature",
     "tools_prompt",
     "zeta_context_message",

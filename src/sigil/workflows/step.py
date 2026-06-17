@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import Any, Literal, TextIO
 
 from zeta.agents import AgentConfig
-from zeta.context import ZetaContext
+from zeta.context import load_project_instructions, system_prompt
 from zeta.models import (
     active_model_selection,
     model_selection_event,
 )
-from zeta.prompt import system_prompt
+from zeta.session import Session
 from zeta.skills import expand_skill_directive
 from zeta.timeline import current_timeline, record_event
 from zeta.tools.base import proposed_effect
@@ -30,7 +30,6 @@ from zeta.turn import (
     run_agent_turn,
 )
 
-from .. import load_project_context
 from ..agent_io import (
     TurnEventRecorder,
     TurnRenderer,
@@ -110,9 +109,9 @@ def step(
     wrapped in the step instruction scaffolding. The do workflow executes
     directly; every other workflow stages mutations for review.
     """
-    from .. import zeta_context_for_sigil
+    from .. import zeta_session_for_sigil
 
-    runtime_context = zeta_context_for_sigil()
+    runtime_context = zeta_session_for_sigil()
     system = system or STEP_SYSTEM_PROMPT
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
     selected_model = active_model_selection(session_dir=runtime_context.session_dir)
@@ -159,7 +158,7 @@ def step(
     prompt_event = record_event(user_event, runtime_context=runtime_context)
     append_prompt_submitted_event(prompt_event)
     turn_recorder.note_root_event(prompt_event)
-    context = load_project_context()
+    context = load_project_instructions()
     renderer = build_turn_renderer(output, objective=objective)
     recorder = AgentStepEventRecorder(
         renderer,
@@ -302,7 +301,7 @@ class AgentStepEventRecorder(TurnEventRecorder):
         handoff_output: HandoffOutput,
         render_output: TextIO,
         turn_recorder: TurnRecorder | None = None,
-        runtime_context: ZetaContext,
+        runtime_context: Session,
     ) -> None:
         super().__init__(
             renderer,
@@ -426,7 +425,7 @@ def record_agent_model_telemetry(
     *,
     workflow: str,
     prompt_traces: Sequence[Any] = (),
-    runtime_context: ZetaContext,
+    runtime_context: Session,
 ) -> None:
     fields = model_telemetry_fields(model_telemetry)
     if not fields:

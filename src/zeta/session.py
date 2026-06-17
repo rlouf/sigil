@@ -1,4 +1,4 @@
-"""Project instruction discovery for Zeta prompts."""
+"""Session resources for Zeta runtime calls."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class ZetaContext:
+class Session:
     """Runtime dependencies for one Zeta host/session."""
 
     session_id: str
@@ -25,24 +25,24 @@ class ZetaContext:
     session_dir: Path
 
 
-def default_context() -> ZetaContext:
-    """Return the default process context for pure Zeta runtime calls."""
+def default_session() -> Session:
+    """Return the default process session for pure Zeta runtime calls."""
     state_dir = zeta_state_dir()
     session_id = os.environ.get("ZETA_SESSION_ID") or "default"
-    return context_for_session(
+    return session_for_id(
         session_id=session_id,
         state_dir=state_dir,
         session_dir=state_dir / "sessions" / session_id,
     )
 
 
-def context_for_session(
+def session_for_id(
     *,
     session_id: str,
     state_dir: Path,
     session_dir: Path,
     tool_registry: CapabilityRegistry | None = None,
-) -> ZetaContext:
+) -> Session:
     """Build the default Zeta runtime dependencies for one session."""
     from .events import SqliteEventStore, event_store_path
     from .trace import SqliteStore, zeta_sqlite_path
@@ -50,7 +50,7 @@ def context_for_session(
     if tool_registry is None:
         from .tools.registry import registry as tool_registry
 
-    return ZetaContext(
+    return Session(
         session_id=session_id,
         event_sink=SqliteEventStore(event_store_path(state_dir)),
         trace_store=SqliteStore(zeta_sqlite_path(state_dir), session_id=session_id),

@@ -76,7 +76,7 @@ SPEC = CapabilitySpec(
 
 def run(params: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily: the registry imports every tool module, and the
-    # display layer reaches back into zeta.prompt — a module-level import
+    # display layer reaches back into zeta.context — a module-level import
     # here closes that loop into a cycle.
     from zeta.history import query_history
 

@@ -195,9 +195,9 @@ def print_session_transcript(limit: int | None, json_output: bool) -> int:
     # Imported lazily: `sigil.cli` must not load zeta or rich at import time.
     from zeta.timeline import current_timeline
 
-    from .. import zeta_context_for_sigil
+    from .. import zeta_session_for_sigil
 
-    events = current_timeline(runtime_context=zeta_context_for_sigil())
+    events = current_timeline(runtime_context=zeta_session_for_sigil())
     if limit is not None and limit > 0:
         events = events[-limit:]
     if json_output:
