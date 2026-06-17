@@ -546,6 +546,33 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
     assert turn.model_telemetry == {"usage": {"prompt_tokens": 1}}
 
 
+def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
+    store = zeta_trace.InMemoryStore()
+    state = zeta_agent.RunState()
+
+    built = zeta_agent.build_prompt_step(
+        "answer",
+        [{"role": "user", "content": "prior"}],
+        config=zeta_agent.AgentConfig(model_name="unit-model"),
+        allowed_capabilities=(),
+        context="Project context",
+        current_events=[],
+        tools=[],
+        state=state,
+        builder=zeta_prompt.PromptBuilder(store=store),
+    )
+
+    assert [step.step for step in state.steps] == ["build_prompt"]
+    assert built.prepared_prompt.prompt_object_id is not None
+    assert built.model_input == zeta_models_api.ModelInput(
+        messages=built.prepared_prompt.messages,
+        tools=[],
+        tool_choice="auto",
+        max_tokens=zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
+        selected_model="unit-model",
+    )
+
+
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 

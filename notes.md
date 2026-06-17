@@ -1333,6 +1333,33 @@ Verification:
   passed.
 - `uv run pre-commit run --all` passed.
 
+### Slice 3: prompt build step function - complete
+
+Split prompt build/render out of `request_model_turn()` into
+`build_prompt_step()`, returning a committed `PreparedPrompt` plus the
+provider-neutral `ModelInput`.
+
+Behavior preserved:
+
+- `request_model_turn()` still records the same step sequence:
+  `build_prompt`, `call_model`, `record_assistant`.
+- The build step still commits the prompt graph before the model request.
+- The model call still receives rendered provider-neutral input.
+
+Verification:
+
+- `uv run ripple src/zeta/agent.py request_model_turn` could not run because
+  `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
+  passed with 248 tests and 2 skipped.
+- `uv run pytest -q` passed with 824 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check` passed.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+- `uv run pre-commit run --all` passed.
+
 ## 7. Replay, diff, and fork acceptance tests
 
 ### Current read

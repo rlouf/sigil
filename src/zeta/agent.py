@@ -15,11 +15,17 @@ from typing import Any, Literal, cast
 from .models import (
     CODEX_RESPONSES_API,
     ChatCompletionStreamSink,
+    ModelInput,
     ModelOutput,
     chat_completion_messages,
     model_endpoint_open,
 )
-from .prompt import PromptBuilder, prompt_transform_from_env, render_model_input
+from .prompt import (
+    PreparedPrompt,
+    PromptBuilder,
+    prompt_transform_from_env,
+    render_model_input,
+)
 from .prompt.builder import prepared_prompt_from
 from .tools.base import proposed_effect
 from .tools.registry import CapabilityProjection, CapabilityRegistry, ExecutionMode
@@ -290,6 +296,12 @@ class ModelTurn:
 
 
 @dataclass(frozen=True)
+class BuiltPrompt:
+    prepared_prompt: PreparedPrompt
+    model_input: ModelInput
+
+
+@dataclass(frozen=True)
 class AssistantMessage:
     content: str
     reasoning_content: str
@@ -324,27 +336,22 @@ def request_model_turn(
     model_status: ModelStatusFactory | None,
     stream_sink: ChatCompletionStreamSink | None,
 ) -> ModelTurn:
-    state.note_step("build_prompt")
-    prompt_plan = builder.plan_prompt(
+    built_prompt = build_prompt_step(
         objective,
         timeline,
-        system=config.system_prompt,
+        config=config,
         allowed_capabilities=allowed_capabilities,
         context=context,
         current_events=state.events,
         tools=tools,
-        tool_choice="auto",
-        selected_model=config.model_name,
-        thinking=config.thinking,
+        state=state,
+        builder=builder,
     )
-    stored_prompt = builder.commit_prompt_plan(prompt_plan)
-    model_input = render_model_input(stored_prompt)
-    prepared_prompt = prepared_prompt_from(stored_prompt)
     state.note_step("call_model")
     model_output, streamed_content, model_telemetry = request_assistant_message(
-        model_input.messages,
-        tools=model_input.tools or [],
-        tool_choice=model_input.tool_choice,
+        built_prompt.model_input.messages,
+        tools=built_prompt.model_input.tools or [],
+        tool_choice=built_prompt.model_input.tool_choice,
         config=config,
         model_status=model_status,
         stream_sink=stream_sink,
@@ -352,7 +359,7 @@ def request_model_turn(
     assistant_message = AssistantMessage.from_provider(model_output.message)
     state.note_step("record_assistant")
     prompt_trace = builder.record_assistant_message(
-        prepared_prompt,
+        built_prompt.prepared_prompt,
         model_output,
     )
     state.note_prompt_trace(prompt_trace)
@@ -363,6 +370,37 @@ def request_model_turn(
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
     )
+
+
+def build_prompt_step(
+    objective: str,
+    timeline: list[dict[str, Any]],
+    *,
+    config: AgentConfig,
+    allowed_capabilities: tuple[str, ...],
+    context: str,
+    current_events: Iterable[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    state: RunState,
+    builder: PromptBuilder,
+) -> BuiltPrompt:
+    state.note_step("build_prompt")
+    prompt_plan = builder.plan_prompt(
+        objective,
+        timeline,
+        system=config.system_prompt,
+        allowed_capabilities=allowed_capabilities,
+        context=context,
+        current_events=current_events,
+        tools=tools,
+        tool_choice="auto",
+        selected_model=config.model_name,
+        thinking=config.thinking,
+    )
+    stored_prompt = builder.commit_prompt_plan(prompt_plan)
+    model_input = render_model_input(stored_prompt)
+    prepared_prompt = prepared_prompt_from(stored_prompt)
+    return BuiltPrompt(prepared_prompt=prepared_prompt, model_input=model_input)
 
 
 def run_capability_calls(
