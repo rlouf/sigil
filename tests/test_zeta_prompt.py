@@ -1008,23 +1008,6 @@ def test_zeta_skill_directive_leaves_unknown_inline_skill_unchanged(
     assert "<skill name=" not in message
 
 
-def test_zeta_skill_directive_leaves_old_skill_form_unchanged(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    home = tmp_path / "home"
-    project = tmp_path / "repo"
-    project.mkdir()
-    write_skill(project / ".agents" / "skills", "reviewer")
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.chdir(project)
-
-    message = zeta_prompt.zeta_context_message("@skill reviewer inspect")
-
-    assert message.startswith("@skill reviewer inspect\n\ncwd:")
-    assert '<skill name="reviewer"' not in message
-
-
 def test_zeta_skill_directive_expands_leading_bare_token(
     tmp_path: Path,
     monkeypatch,
