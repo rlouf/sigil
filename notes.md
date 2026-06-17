@@ -1657,6 +1657,37 @@ Verification:
 - `uvx --with radon radon cc tests/test_zeta_agent.py tests/_zeta_helpers.py -s`
   passed.
 
+### Slice 4: durable event object-link acceptance - complete
+
+Added a real agent-run acceptance test for durable event object references:
+
+- the first model event records the prompt it consumed plus the assistant and
+  tool-call objects it returned;
+- the tool-result event records the tool-call object it consumed and the
+  tool-result object it returned;
+- the final model event records the follow-up prompt it consumed and final
+  assistant object it returned.
+
+Behavior preserved:
+
+- The runtime code is unchanged in this slice.
+- Low-level durable event projection tests still cover manual event payloads;
+  this slice covers the full agent-to-timeline path.
+
+Verification:
+
+- `uv run ripple tests/test_zeta_trace.py test_zeta_model_called_links_used_and_returned_objects`
+  could not run because `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_trace.py -q -k agent_durable_events_link_trace_objects`
+  passed with 1 test.
+- `uv run pytest tests/test_zeta_trace.py tests/test_zeta_agent.py -q` passed
+  with 176 tests.
+- `uv run pytest -q` passed with 829 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc tests/test_zeta_trace.py -s` passed.
+
 ## 8. Zeta core boundary
 
 ### Current read

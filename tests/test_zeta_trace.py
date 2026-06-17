@@ -9,12 +9,16 @@ from pathlib import Path
 import pytest
 from _zeta_helpers import (
     BatchSpyStore,
+    event_by_type,
+    read_tool_call_response,
+    read_tool_payload,
 )
 from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
+from zeta import agent as zeta_agent
 from zeta import prompt as zeta_prompt
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
@@ -682,6 +686,79 @@ def test_zeta_tool_called_links_used_and_returned_objects(
     ]
     assert events[0].payload["returned_objects"] == [
         {"kind": "tool_result", "id": "sha256:result"},
+    ]
+
+
+def test_zeta_agent_durable_events_link_trace_objects(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("ZETA_SESSION_ID", "zeta-test")
+    runtime_context = zeta_runtime_context()
+    target = tmp_path / "README.md"
+    target.write_text("README\n", encoding="utf-8")
+    responses = iter([read_tool_call_response(target), {"content": "done"}])
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: next(responses),
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "invoke_capability",
+        lambda name, params, **kwargs: read_tool_payload(target),
+    )
+
+    def record_runtime_event(event: dict[str, object]) -> None:
+        record_zeta_event(event, runtime_context=runtime_context)
+
+    result = zeta_agent.run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
+        event_sink=record_runtime_event,
+        prompt_builder=zeta_prompt.PromptBuilder(store=runtime_context.trace_store),
+    )
+
+    tool_call = event_by_type(result.events, "tool_call")
+    tool_result = event_by_type(result.events, "tool_result")
+    model_events = zeta_event_store().list_events(
+        Filter(event_type="zeta.model.called")
+    )
+    tool_events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
+
+    assert len(model_events) == 2
+    assert model_events[0].payload["used_objects"] == [
+        {"kind": "prompt", "id": result.prompt_traces[0].prompt_object_id},
+    ]
+    assert model_events[0].payload["returned_objects"] == [
+        {
+            "kind": "assistant_message",
+            "id": result.prompt_traces[0].assistant_message_object_id,
+        },
+        {"kind": "tool_call", "id": tool_call["tool_call_object_id"]},
+    ]
+    assert model_events[1].payload["used_objects"] == [
+        {"kind": "prompt", "id": result.prompt_traces[1].prompt_object_id},
+    ]
+    assert model_events[1].payload["returned_objects"] == [
+        {
+            "kind": "assistant_message",
+            "id": result.prompt_traces[1].assistant_message_object_id,
+        },
+    ]
+    assert [event.payload["_timeline_type"] for event in tool_events] == [
+        "tool_call",
+        "tool_result",
+    ]
+    assert tool_events[1].payload["used_objects"] == [
+        {"kind": "tool_call", "id": tool_call["tool_call_object_id"]},
+    ]
+    assert tool_events[1].payload["returned_objects"] == [
+        {"kind": "tool_result", "id": tool_result["tool_result_object_id"]},
     ]
 
 
