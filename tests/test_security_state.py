@@ -627,7 +627,7 @@ def test_sqlite_event_store_causal_chain_stops_on_cycles(tmp_path: Path) -> None
     ]
 
 
-def test_sigil_event_query_helpers_use_sigil_event_store() -> None:
+def test_sigil_event_query_helpers_use_zeta_event_log() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         with patch_dict(
             os.environ,

@@ -20,12 +20,12 @@ from sigil.protocols import (
 from sigil.session import clear_current_session, read_events
 from sigil.state import (
     append_event,
+    event_store_path,
     session_dir,
-    sigil_event_store,
     state_dir,
 )
 from zeta import history as zeta_history
-from zeta.events import DraftEvent, publish_event
+from zeta.events import DraftEvent, publish_event_to_log
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:
@@ -69,11 +69,7 @@ def append_history_record(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def publish_sigil_draft(draft: DraftEvent) -> None:
-    store = sigil_event_store()
-    try:
-        publish_event(draft, sink=store)
-    finally:
-        store.close()
+    publish_event_to_log(event_store_path(), draft)
 
 
 def test_history_publish_turn_record_writes_log_and_history() -> None:

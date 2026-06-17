@@ -13,7 +13,9 @@ from .events import (
     DraftEvent,
     Event,
     Filter,
-    SqliteEventStore,
+    append_event_to_log,
+    publish_event_to_log,
+    read_event_log,
     time_from_timestamp_micros,
     timestamp_micros_from_time,
 )
@@ -83,11 +85,7 @@ class HistoryView:
 
     @classmethod
     def from_store(cls, path: str | Path) -> HistoryView:
-        store = SqliteEventStore(path)
-        try:
-            return cls(store.list_events(Filter()))
-        finally:
-            store.close()
+        return cls(read_event_log(path, Filter()))
 
     def query_turns(
         self,
@@ -392,19 +390,11 @@ def publish_effect_record(
 
 
 def append_draft(path: str | Path, draft: DraftEvent) -> Event:
-    store = SqliteEventStore(path)
-    try:
-        return store.accept(draft).event
-    finally:
-        store.close()
+    return publish_event_to_log(path, draft)
 
 
 def append_event(path: str | Path, event: Event) -> Event:
-    store = SqliteEventStore(path)
-    try:
-        return store.append(event).event
-    finally:
-        store.close()
+    return append_event_to_log(path, event)
 
 
 def import_history_records(
@@ -417,34 +407,27 @@ def import_history_records(
     imported = 0
     imported_turn_ids: set[str] = set()
     imported_effect_ids: set[str] = set()
-    store = SqliteEventStore(path)
-    try:
-        for record in records:
-            if not isinstance(record, dict):
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if is_turn_record(record):
+            record_id = str(record.get("turn_id") or "")
+            if record_id in imported_turn_ids or history.turn(record_id) is not None:
                 continue
-            if is_turn_record(record):
-                record_id = str(record.get("turn_id") or "")
-                if (
-                    record_id in imported_turn_ids
-                    or history.turn(record_id) is not None
-                ):
-                    continue
-                imported_turn_ids.add(record_id)
-                store.append(event_from_record(record))
-                imported += 1
+            imported_turn_ids.add(record_id)
+            append_event(path, event_from_record(record))
+            imported += 1
+            continue
+        if is_effect_record(record):
+            record_id = str(record.get("effect_id") or "")
+            if (
+                record_id in imported_effect_ids
+                or history.effect(record_id) is not None
+            ):
                 continue
-            if is_effect_record(record):
-                record_id = str(record.get("effect_id") or "")
-                if (
-                    record_id in imported_effect_ids
-                    or history.effect(record_id) is not None
-                ):
-                    continue
-                imported_effect_ids.add(record_id)
-                store.append(event_from_effect_record(record))
-                imported += 1
-    finally:
-        store.close()
+            imported_effect_ids.add(record_id)
+            append_event(path, event_from_effect_record(record))
+            imported += 1
     return imported
 
 

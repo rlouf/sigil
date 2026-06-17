@@ -490,6 +490,59 @@ def publish_event(draft: DraftEvent, *, sink: EventSink) -> AppendOutcome:
     return sink.accept(draft)
 
 
+def read_event_log(path: Path | str, filter: Filter | None = None) -> list[Event]:
+    store = SqliteEventStore(path)
+    try:
+        return store.list_events(filter or Filter())
+    finally:
+        store.close()
+
+
+def publish_event_to_log(path: Path | str, draft: DraftEvent) -> Event:
+    store = SqliteEventStore(path)
+    try:
+        return store.accept(draft).event
+    finally:
+        store.close()
+
+
+def append_event_to_log(path: Path | str, event: Event) -> Event:
+    store = SqliteEventStore(path)
+    try:
+        return store.append(event).event
+    finally:
+        store.close()
+
+
+def event_log_children(
+    path: Path | str,
+    event_id: str,
+    *,
+    limit: int | None = None,
+) -> list[Event]:
+    store = SqliteEventStore(path)
+    try:
+        return store.children(event_id, limit=limit)
+    finally:
+        store.close()
+
+
+def event_log_causal_chain(path: Path | str, event_id: str) -> list[Event]:
+    store = SqliteEventStore(path)
+    try:
+        return store.causal_chain(event_id)
+    finally:
+        store.close()
+
+
+def event_log_turn_events(path: Path | str, turn_id: str) -> list[Event]:
+    store = SqliteEventStore(path)
+    try:
+        return store.events_for_turn(turn_id)
+    finally:
+        store.close()
+
+
 def row_to_event(row: sqlite3.Row) -> Event:
     payload = json.loads(str(row["payload"]))
     if not isinstance(payload, dict):

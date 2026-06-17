@@ -19,9 +19,14 @@ from zeta.events import (
     EVENT_STORE_NAME,
     DraftEvent,
     Filter,
-    SqliteEventStore,
     durable_event_draft,
+    event_log_causal_chain,
+    event_log_children,
+    event_log_turn_events,
     model_called_event,
+    publish_event_to_log,
+    read_event_log,
+    timestamp_micros_from_time,
     tool_called_event,
     turn_idempotency_key,
 )
@@ -118,18 +123,9 @@ def event_store_path() -> Path:
     return state_dir() / EVENT_STORE_NAME
 
 
-def sigil_event_store() -> SqliteEventStore:
-    """Open Sigil's frontend event journal."""
-    return SqliteEventStore(event_store_path())
-
-
 def read_events() -> list[Event]:
     """Read Sigil's frontend event journal."""
-    store = sigil_event_store()
-    try:
-        return store.list_events(Filter())
-    finally:
-        store.close()
+    return read_event_log(event_store_path(), Filter())
 
 
 def history_view(events: list[Event] | None = None) -> Any:
@@ -142,36 +138,19 @@ def history_view(events: list[Event] | None = None) -> Any:
 
 
 def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:
-    store = sigil_event_store()
-    try:
-        return store.children(event_id, limit=limit)
-    finally:
-        store.close()
+    return event_log_children(event_store_path(), event_id, limit=limit)
 
 
 def causal_chain(event_id: str) -> list[Event]:
-    store = sigil_event_store()
-    try:
-        return store.causal_chain(event_id)
-    finally:
-        store.close()
+    return event_log_causal_chain(event_store_path(), event_id)
 
 
 def events_for_turn(turn_id: str) -> list[Event]:
-    store = sigil_event_store()
-    try:
-        return store.events_for_turn(turn_id)
-    finally:
-        store.close()
+    return event_log_turn_events(event_store_path(), turn_id)
 
 
 def append_event(event: dict[str, Any]) -> Event:
     """Append a global audit/debug event with session metadata."""
-    from zeta.events import (
-        publish_event,
-        timestamp_micros_from_time,
-    )
-
     payload = _with_envelope(event)
     event_id = payload.get("id") if isinstance(payload.get("id"), str) else None
     event_type = str(payload.get("type") or "event")
@@ -209,12 +188,7 @@ def append_event(event: dict[str, Any]) -> Event:
             timestamp_micros=event_timestamp,
             event_id=event_id,
         )
-    store = sigil_event_store()
-    try:
-        outcome = publish_event(draft, sink=store)
-        return outcome.event
-    finally:
-        store.close()
+    return publish_event_to_log(event_store_path(), draft)
 
 
 def append_prompt_submitted_event(event: dict[str, Any]) -> Event:

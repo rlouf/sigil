@@ -9,10 +9,11 @@ import click
 from zeta.events import (
     Event,
     Filter,
+    read_event_log,
     time_from_timestamp_micros,
 )
 
-from ..state import causal_chain, events_for_turn, read_events, sigil_event_store
+from ..state import causal_chain, event_store_path, events_for_turn, read_events
 from ._base import cli, examples
 from ._shared import pretty_print_json
 
@@ -174,12 +175,8 @@ def print_events_list(
 ) -> int:
     """Print a bounded recent view of the global event journal."""
     if raw:
-        store = sigil_event_store()
-        try:
-            events = store.list_events(Filter(session_id=session_id))
-            pretty_print_json([normalized_event(event) for event in events[-limit:]])
-        finally:
-            store.close()
+        events = read_event_log(event_store_path(), Filter(session_id=session_id))
+        pretty_print_json([normalized_event(event) for event in events[-limit:]])
         return 0
     events = read_events()
     if session_id is not None:
