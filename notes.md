@@ -942,7 +942,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 4: agent model-call boundary
+### Slice 4: agent model-call boundary - complete
 
 Update the agent to request and carry `ModelOutput` internally:
 
@@ -971,7 +971,10 @@ Tests first:
 Verification:
 
 - `uv run pytest tests/test_zeta_agent.py tests/test_zeta_model.py tests/test_zeta_responses.py -q`
-- `uv run pytest -q`
+  passed with 171 tests.
+- `uv run pytest -q` passed with 818 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 5: provider-neutral trace payloads
 

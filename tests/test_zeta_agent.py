@@ -29,6 +29,7 @@ from zeta import agent as zeta_agent
 from zeta import cli as zeta_cli
 from zeta import context as zeta_context
 from zeta import events as zeta_events
+from zeta import models as zeta_models_api
 from zeta import prompt as zeta_prompt
 from zeta import rpc as zeta_rpc
 from zeta import trace as zeta_trace
@@ -412,6 +413,90 @@ def test_zeta_model_turn_carries_typed_assistant_message() -> None:
     assert turn.assistant is assistant
     assert turn.assistant.to_provider() == {"content": "done"}
     assert turn.assistant.content == "done"
+
+
+def test_zeta_request_assistant_message_returns_model_output(monkeypatch) -> None:
+    def fake_chat_completion_messages(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        del messages
+        telemetry_sink = cast(
+            "Callable[[dict[str, Any]], None]", kwargs["telemetry_sink"]
+        )
+        telemetry_sink({"usage": {"prompt_tokens": 1}})
+        return {"role": "assistant", "content": "done"}
+
+    monkeypatch.setattr(
+        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+    )
+
+    output, streamed_content, telemetry = zeta_agent.request_assistant_message(
+        [{"role": "user", "content": "hi"}],
+        tools=[],
+        tool_choice="auto",
+        config=zeta_agent.AgentConfig(),
+        model_status=None,
+        stream_sink=None,
+    )
+
+    assert output == zeta_models_api.ModelOutput(
+        message={"role": "assistant", "content": "done"}
+    )
+    assert streamed_content is False
+    assert telemetry == {"usage": {"prompt_tokens": 1}}
+
+
+def test_zeta_request_model_turn_builds_assistant_from_model_output(
+    monkeypatch,
+) -> None:
+    def fake_request_assistant_message(
+        messages: list[dict[str, Any]],
+        **kwargs: object,
+    ) -> tuple[zeta_models_api.ModelOutput, bool, dict[str, Any]]:
+        del messages
+        del kwargs
+        return (
+            zeta_models_api.ModelOutput(
+                message={
+                    "role": "assistant",
+                    "content": "done",
+                    "reasoning_content": "thinking",
+                }
+            ),
+            True,
+            {"usage": {"prompt_tokens": 1}},
+        )
+
+    monkeypatch.setattr(
+        zeta_agent,
+        "request_assistant_message",
+        fake_request_assistant_message,
+    )
+    state = zeta_agent.AgentTurnState()
+
+    turn = zeta_agent.request_model_turn(
+        "answer",
+        [],
+        config=zeta_agent.AgentConfig(),
+        allowed_capabilities=(),
+        context="",
+        tools=[],
+        state=state,
+        builder=zeta_prompt.PromptBuilder(),
+        model_status=None,
+        stream_sink=None,
+    )
+
+    assert turn.assistant.content == "done"
+    assert turn.assistant.reasoning_content == "thinking"
+    assert turn.assistant.to_provider() == {
+        "role": "assistant",
+        "content": "done",
+        "reasoning_content": "thinking",
+    }
+    assert turn.streamed_content is True
+    assert turn.model_telemetry == {"usage": {"prompt_tokens": 1}}
 
 
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:

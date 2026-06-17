@@ -15,6 +15,7 @@ from typing import Any, cast
 from .models import (
     CODEX_RESPONSES_API,
     ChatCompletionStreamSink,
+    ModelOutput,
     chat_completion_messages,
     model_endpoint_open,
 )
@@ -261,7 +262,7 @@ def request_model_turn(
         selected_model=config.model_name,
         thinking=config.thinking,
     )
-    assistant, streamed_content, model_telemetry = request_assistant_message(
+    model_output, streamed_content, model_telemetry = request_assistant_message(
         prepared_prompt.messages,
         tools=prepared_prompt.tools,
         tool_choice=prepared_prompt.tool_choice,
@@ -269,7 +270,7 @@ def request_model_turn(
         model_status=model_status,
         stream_sink=stream_sink,
     )
-    assistant_message = AssistantMessage.from_provider(assistant)
+    assistant_message = AssistantMessage.from_provider(model_output.message)
     prompt_trace = builder.record_assistant_message(
         prepared_prompt,
         assistant_message.to_provider(),
@@ -469,7 +470,7 @@ def request_assistant_message(
     config: AgentConfig,
     model_status: ModelStatusFactory | None,
     stream_sink: ChatCompletionStreamSink | None,
-) -> tuple[dict[str, Any], bool, dict[str, Any]]:
+) -> tuple[ModelOutput, bool, dict[str, Any]]:
     status_context = model_status_context(model_status)
     status_open = False
     model_telemetry: dict[str, Any] = {}
@@ -509,7 +510,11 @@ def request_assistant_message(
         close_status(type(exc), exc, exc.__traceback__)
         raise
     close_status()
-    return assistant, turn_stream_sink.streamed_content, model_telemetry
+    return (
+        ModelOutput(message=assistant),
+        turn_stream_sink.streamed_content,
+        model_telemetry,
+    )
 
 
 class ModelTurnStreamSink:
