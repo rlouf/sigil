@@ -3347,6 +3347,10 @@ def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None
 
     assert raised.value.reason == "cancelled"
     assert raised.value.result.events == events
+    assert [step.step for step in raised.value.result.steps] == [
+        "check_budget",
+        "abort_run",
+    ]
     assert events == [
         {
             "type": "turn_aborted",
@@ -3394,6 +3398,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
         )
 
     assert raised.value.reason == "deadline_exceeded"
+    assert raised.value.result.steps[-1].step == "abort_run"
     assert [event["type"] for event in events] == [
         "model",
         "tool_call",

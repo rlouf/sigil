@@ -1486,6 +1486,37 @@ Verification:
   passed.
 - `uv run pre-commit run --all` passed.
 
+### Slice 8: abort step visibility - complete
+
+Made between-step aborts visible in the step result sequence. When cancellation
+or deadline expiry aborts a turn, the resulting `AgentTurnResult.steps` now ends
+with `abort_run`, so abort behavior is represented through the same step-engine
+surface as normal completion.
+
+Behavior preserved:
+
+- Cancellation and deadline aborts still emit exactly one `turn_aborted` event.
+- The abort exception still carries the already-recorded events, telemetry, and
+  prompt traces.
+- Existing non-abort step sequences are unchanged.
+
+Verification:
+
+- `uv run ripple src/zeta/agent.py check_turn_budget` and
+  `uv run ripple src/zeta/agent.py raise_if_agent_turn_aborted` could not run
+  because `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py -q -k 'aborts_before_model_when_cancelled or aborts_on_deadline_between_model_turns'`
+  passed with 2 tests.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
+  passed with 252 tests and 2 skipped.
+- `uv run pytest -q` passed with 828 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+- `uv run pre-commit run --all` passed.
+
 ## 7. Replay, diff, and fork acceptance tests
 
 ### Current read

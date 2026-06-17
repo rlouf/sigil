@@ -589,6 +589,7 @@ def check_turn_budget(
         model_telemetry=state.latest_model_telemetry,
         model_telemetry_calls=state.model_telemetry_calls,
         prompt_traces=state.prompt_traces,
+        steps=state.steps,
     )
 
 
@@ -611,10 +612,12 @@ def raise_if_agent_turn_aborted(
     model_telemetry: dict[str, Any],
     model_telemetry_calls: list[dict[str, Any]],
     prompt_traces: list[PromptTrace],
+    steps: list[StepResult],
 ) -> None:
     reason = agent_abort_reason(cancellation_event, deadline)
     if reason is None:
         return
+    steps.append(StepResult("abort_run"))
     event = turn_aborted_event(reason, caused_by=caused_by)
     emit_event(events, event, event_sink)
     raise AgentTurnAborted(
@@ -624,6 +627,7 @@ def raise_if_agent_turn_aborted(
             model_telemetry=model_telemetry,
             model_telemetry_calls=model_telemetry_calls,
             prompt_traces=prompt_traces,
+            steps=steps,
         ),
         event_recorded=True,
     )
