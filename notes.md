@@ -1011,7 +1011,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 6: compatibility cleanup
+### Slice 6: compatibility cleanup - complete
 
 Only after the adapter and agent boundaries use `ModelInput` / `ModelOutput`:
 
@@ -1024,9 +1024,17 @@ Only after the adapter and agent boundaries use `ModelInput` / `ModelOutput`:
 
 Verification:
 
+- `uv run ripple ...` could not run because `ripple` is not installed in this
+  checkout.
+- `rg` audit found production or protocol-boundary callers for
+  `chat_completion_messages()`, `codex_completion_messages()`,
+  `responses_request_body()`, `responses_input_items()`,
+  `AssistantMessage.from_provider()`, and `AssistantMessage.to_provider()`, so
+  no compatibility helper was removed in this slice.
 - `uv run pytest tests/test_zeta_model.py tests/test_zeta_responses.py tests/test_zeta_agent.py tests/test_zeta_prompt.py -q`
-- `uv run pytest -q`
-- `uvx --with radon radon cc src tests -s`
+  passed with 235 tests.
+- `uv run pytest -q` passed with 820 tests and 4 skipped.
+- `uvx --with radon radon cc src tests -s` passed.
 
 ## 5. Prompt plan, commit, and render
 
