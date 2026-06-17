@@ -784,6 +784,13 @@ Acceptance test for any new transport:
 
 ## 4. Typed Zeta domain records
 
+### Second opinion status
+
+- Tried `claude -p` as required for a complex refactor plan.
+- The installed Claude CLI is not authenticated and returned
+  `401 Invalid authentication credentials`. No usable external critique is
+  folded in here.
+
 ### Current read
 
 The current runtime passes model messages, events, tool calls, telemetry, RPC
@@ -846,6 +853,202 @@ Add tests for round-tripping each record through its boundary representation:
 5. Convert RPC parsing last, because it is the externally visible contract.
 6. Delete dict-shape helper functions only after `ripple` shows no remaining
    callers.
+
+### Slice 1: typed tool-call records inside `zeta.agent`
+
+Start with model-emitted tool calls because the conversion is local to
+`src/zeta/agent.py` and already has a small internal record,
+`CapabilityCallInvocation`.
+
+Target records:
+
+- `ModelToolCall`
+  - provider call id;
+  - model-visible alias/name;
+  - raw JSON argument string;
+  - parsed params;
+  - parse error.
+- `CapabilityCallInvocation`
+  - canonical capability id after projection validation;
+  - `ModelToolCall`;
+  - event serialization for the current trace/timeline boundary.
+
+Behavior to preserve:
+
+- malformed tool-call payloads still produce the current `invalid-tool-call`
+  result;
+- invalid JSON arguments still produce `invalid-json-args`;
+- model aliases still resolve through the per-run projection;
+- tool-call and tool-result events keep their current JSON shape, including
+  `name`, `tool_call_id`, `arguments`, `input`, `capability_id`, and causality.
+
+Tests first:
+
+- round-trip a valid provider tool-call dict through `ModelToolCall` and back
+  to the existing event dict;
+- invalid function payload fails without creating a partial invocation;
+- invalid JSON arguments preserve the current error message;
+- alias resolution still records canonical `capability_id` on call and result
+  events.
+
+Implementation notes:
+
+- Keep public function boundaries accepting/returning dicts in this slice.
+- Convert dicts to records immediately inside `handle_tool_call()` and
+  `model_tool_call_event()`.
+- Do not change provider request/response adapters yet.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_agent.py -q`
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py -q`
+
+### Slice 2: typed capability result payloads
+
+The registry already normalizes executor output into one JSON result shape.
+Make that shape explicit without changing builtin or RPC wire payloads.
+
+Target records:
+
+- `CapabilityResultPayload`
+  - `ok`;
+  - `content`;
+  - `metadata`;
+  - `effect`;
+  - `error`.
+- `CapabilityError`
+  - `code`;
+  - `message`;
+  - optional `data`.
+
+Behavior to preserve:
+
+- `CapabilityRegistry.invoke()` still returns dicts at its public boundary;
+- existing display summaries still read `content`, `metadata`, `effect`, and
+  `error`;
+- malformed executor results and executor exceptions keep the structured
+  errors added in Section 3.
+
+Tests first:
+
+- round-trip success, proposed-effect, and structured-error result payloads;
+- malformed result normalization produces `CapabilityError`;
+- display summaries for bash/read/edit still render from the boundary dict.
+
+Verification:
+
+- `uv run pytest tests/test_display.py tests/test_zeta_tools.py -q`
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py -q`
+
+### Slice 3: typed runtime event records at the agent boundary
+
+Introduce typed records for the runtime events the agent creates before they are
+persisted or published.
+
+Target records:
+
+- `ModelRuntimeEvent`;
+- `ToolCallRuntimeEvent`;
+- `ToolResultRuntimeEvent`;
+- `TurnAbortedRuntimeEvent`.
+
+Behavior to preserve:
+
+- `AgentTurnResult.events` remains `list[dict[str, Any]]` for now;
+- `event_sink` still receives dict payloads;
+- trace attachment fields remain unchanged;
+- durable timeline projection keeps current event shapes.
+
+Tests first:
+
+- current model/tool/abort event helper tests assert record-to-dict output;
+- event sink receives the same dicts as before;
+- trace object ids are still attached to the same events.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_trace.py -q`
+- `uv run pytest -q`
+
+### Slice 4: typed model turn record without provider-neutralizing yet
+
+Make `ModelTurn` carry a typed assistant message wrapper while keeping
+Chat-Completions-shaped dicts at the model adapter boundary. This is a local
+preparation step for Section 5, not the provider-neutral model contract itself.
+
+Target records:
+
+- `AssistantMessage`
+  - content;
+  - reasoning content;
+  - tool calls;
+  - provider/raw dict for boundary preservation.
+- `ModelTurn`
+  - `AssistantMessage`;
+  - streamed content flag;
+  - telemetry;
+  - prompt trace.
+
+Behavior to preserve:
+
+- `request_assistant_message()` still returns the same tuple until Section 5;
+- prompt trace stores the same assistant-message object;
+- final text extraction and tool-call extraction behave identically.
+
+Tests first:
+
+- assistant content-only response round-trips to current model event;
+- assistant with tool calls round-trips to current tool call handling;
+- reasoning content is preserved in the model event.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_model.py -q`
+- `uv run pytest -q`
+
+### Slice 5: prompt component boundary records
+
+`PromptComponent` already exists. Tighten its boundary conversions before
+attempting broader prompt-plan work.
+
+Target records:
+
+- explicit conversion helpers for component message/data dicts;
+- typed wrappers for source event links where that improves ownership.
+
+Behavior to preserve:
+
+- prompt reconstruction remains byte-for-byte compatible for existing tests;
+- trace object ids and derivation links remain unchanged;
+- prompt component order remains stable.
+
+Tests first:
+
+- existing prompt reconstruction tests keep passing;
+- add focused round-trip tests for a user message component, assistant message
+  component, tool-call component, and tool-result component.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py -q`
+- `uv run pytest -q`
+
+### Slice 6: cleanup and caller audit
+
+Only after the typed records above are in place:
+
+- run `ripple` on old dict-shape helpers such as `assistant_tool_calls()`,
+  `model_tool_call_event()`, `tool_result_event()`, and any conversion helpers
+  replaced by records;
+- delete helpers with no production callers;
+- keep compatibility helpers where tests or public boundaries intentionally
+  assert JSON shape.
+
+Verification:
+
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_prompt.py -q`
+- `uv run pytest -q`
+- `uvx --with radon radon cc src tests -s`
 
 ### Verification
 
