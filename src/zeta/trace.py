@@ -198,9 +198,9 @@ def default_sqlite_path() -> Path:
     return zeta_sqlite_path()
 
 
-def available_session_ids() -> list[str]:
+def available_session_ids(root: Path | None = None) -> list[str]:
     """Return the session ids recorded in the unified Zeta store, sorted."""
-    path = zeta_sqlite_path()
+    path = zeta_sqlite_path(root)
     if not path.exists():
         return []
     connection = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
@@ -233,6 +233,114 @@ def available_session_ids() -> list[str]:
         return sorted(session for session in sessions if session)
     finally:
         connection.close()
+
+
+def open_trace_store(
+    session_id: str,
+    *,
+    read_only: bool = False,
+    root: Path | None = None,
+) -> SqliteStore:
+    """Open the unified Zeta trace store for one session."""
+    return SqliteStore(
+        zeta_sqlite_path(root), session_id=session_id, read_only=read_only
+    )
+
+
+def open_existing_trace_store(
+    session_id: str,
+    *,
+    read_only: bool = True,
+    root: Path | None = None,
+) -> SqliteStore:
+    """Open a recorded session trace store or raise with known sessions."""
+    available = available_session_ids(root)
+    if session_id not in available:
+        raise UnknownSessionError(session_id, available)
+    return open_trace_store(session_id, read_only=read_only, root=root)
+
+
+def export_trace_refs(
+    session_id: str,
+    refs: Sequence[str],
+    *,
+    root: Path | None = None,
+) -> dict[str, Any] | None:
+    """Export the trace closure for refs in one session, or None."""
+    try:
+        store = open_existing_trace_store(session_id, read_only=True, root=root)
+    except UnknownSessionError:
+        return None
+    try:
+        resolved_refs: dict[str, str] = {}
+        for name in refs:
+            target = store.get_ref(name)
+            if target is not None:
+                resolved_refs[name] = target
+        if not resolved_refs:
+            return None
+        closure = store.graph_closure(list(resolved_refs.values()))
+        objects = [
+            {
+                "id": object_id,
+                "kind": obj.kind,
+                "schema": obj.schema,
+                "data": obj.data,
+                "links": list(obj.links),
+            }
+            for object_id, obj in closure.items()
+        ]
+        derivations: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for object_id in closure:
+            for row in store.derivation_records_for_output(object_id):
+                if row["id"] in seen:
+                    continue
+                seen.add(row["id"])
+                derivations.append(row)
+        return {"objects": objects, "derivations": derivations, "refs": resolved_refs}
+    finally:
+        store.close()
+
+
+def import_trace_graph(
+    session_id: str,
+    graph: dict[str, Any],
+    *,
+    root: Path | None = None,
+) -> int:
+    """Import exported trace objects, derivations, and refs into a session."""
+    store = open_trace_store(session_id, root=root)
+    count = 0
+    try:
+        with store.batch():
+            for entry in graph.get("objects") or []:
+                store.import_object(
+                    str(entry["id"]),
+                    Object(
+                        kind=str(entry["kind"]),
+                        schema=str(entry["schema"]),
+                        data=entry["data"],
+                        links=tuple(entry["links"]),
+                    ),
+                )
+                count += 1
+            for row in graph.get("derivations") or []:
+                store.import_derivation(
+                    str(row["id"]),
+                    Derivation(
+                        producer=str(row["producer"]),
+                        output_id=str(row["output_id"]),
+                        input_ids=tuple(row["input_ids"]),
+                        params=row["params"],
+                    ),
+                    float(row["created_at"]),
+                )
+            for name, object_id in (graph.get("refs") or {}).items():
+                store.set_ref(str(name), str(object_id))
+    finally:
+        store.close()
+    return count
 
 
 def _table_exists(connection: sqlite3.Connection, name: str) -> bool:

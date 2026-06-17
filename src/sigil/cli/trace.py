@@ -10,7 +10,12 @@ from typing import Any
 
 import click
 
-from zeta.events import EVENT_STORE_NAME, Event, SqliteEventStore, row_to_event
+from zeta.events import (
+    EVENT_STORE_NAME,
+    Event,
+    append_event_to_log_outcome,
+    row_to_event,
+)
 from zeta.models import chat_completion_messages
 from zeta.prompt import reconstructed_prompt_request
 from zeta.trace import (
@@ -21,6 +26,8 @@ from zeta.trace import (
     Store,
     UnknownSessionError,
     available_session_ids,
+    open_existing_trace_store,
+    open_trace_store,
     trace_state_dir,
     zeta_sqlite_path,
 )
@@ -113,10 +120,7 @@ def current_store() -> Store:
 def open_session_store(session_id: str) -> SqliteStore:
     """Open a named session's store, mapping lookup errors onto CLI errors."""
     try:
-        available = available_session_ids()
-        if session_id not in available:
-            raise UnknownSessionError(session_id, available)
-        return SqliteStore(zeta_sqlite_path(), session_id=session_id, read_only=True)
+        return open_existing_trace_store(session_id, read_only=True)
     except UnknownSessionError as error:
         available = ", ".join(error.available) or "none recorded"
         raise click.ClickException(
@@ -185,7 +189,6 @@ def legacy_event_path() -> Path | None:
 def import_legacy_event_store(path: Path) -> int:
     source = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
     source.row_factory = sqlite3.Row
-    target = SqliteEventStore(zeta_sqlite_path())
     imported = 0
     try:
         if not legacy_table_exists(source, "events"):
@@ -202,12 +205,11 @@ def import_legacy_event_store(path: Path) -> int:
             event = row_to_event(row)
             if not isinstance(event, Event):
                 continue
-            outcome = target.append(event)
+            outcome = append_event_to_log_outcome(zeta_sqlite_path(), event)
             if outcome.inserted:
                 imported += 1
     finally:
         source.close()
-        target.close()
     return imported
 
 
@@ -215,7 +217,7 @@ def import_legacy_trace_store(path: Path) -> dict[str, int]:
     session_id_value = path.parent.name
     source = sqlite3.connect(f"{path.as_uri()}?mode=ro&immutable=1", uri=True)
     source.row_factory = sqlite3.Row
-    target = SqliteStore(zeta_sqlite_path(), session_id=session_id_value)
+    target = open_trace_store(session_id_value)
     objects = 0
     derivations = 0
     refs = 0
@@ -230,7 +232,7 @@ def import_legacy_trace_store(path: Path) -> dict[str, int]:
     return {"objects": objects, "derivations": derivations, "refs": refs}
 
 
-def import_legacy_objects(source: sqlite3.Connection, target: SqliteStore) -> int:
+def import_legacy_objects(source: sqlite3.Connection, target: Any) -> int:
     if not legacy_table_exists(source, "objects"):
         return 0
     imported = 0
@@ -250,7 +252,7 @@ def import_legacy_objects(source: sqlite3.Connection, target: SqliteStore) -> in
     return imported
 
 
-def import_legacy_derivations(source: sqlite3.Connection, target: SqliteStore) -> int:
+def import_legacy_derivations(source: sqlite3.Connection, target: Any) -> int:
     if not legacy_table_exists(source, "derivations"):
         return 0
     imported = 0
@@ -277,7 +279,7 @@ def import_legacy_derivations(source: sqlite3.Connection, target: SqliteStore) -
 
 def import_legacy_refs(
     source: sqlite3.Connection,
-    target: SqliteStore,
+    target: Any,
     session_id_value: str,
 ) -> int:
     if not legacy_table_exists(source, "refs"):

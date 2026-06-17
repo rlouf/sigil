@@ -507,9 +507,13 @@ def publish_event_to_log(path: Path | str, draft: DraftEvent) -> Event:
 
 
 def append_event_to_log(path: Path | str, event: Event) -> Event:
+    return append_event_to_log_outcome(path, event).event
+
+
+def append_event_to_log_outcome(path: Path | str, event: Event) -> AppendOutcome:
     store = SqliteEventStore(path)
     try:
-        return store.append(event).event
+        return store.append(event)
     finally:
         store.close()
 
