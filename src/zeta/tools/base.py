@@ -25,6 +25,9 @@ class ToolSpec:
     schema: dict[str, Any]
     interactive: bool = False
     effects: tuple[EffectKind, ...] = ()
+    staging_supported: bool = False
+    direct_execution_allowed: bool = True
+    timeout_sec: float | None = None
 
     def mutates(self) -> bool:
         """Whether the tool declares effects beyond reading.
@@ -43,6 +46,9 @@ class ToolSpec:
             "schema": self.schema,
             "interactive": self.interactive,
             "effects": list(self.effects),
+            "staging_supported": self.staging_supported,
+            "direct_execution_allowed": self.direct_execution_allowed,
+            "timeout_sec": self.timeout_sec,
         }
 
 

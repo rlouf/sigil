@@ -635,6 +635,116 @@ def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
     assert zeta_agent.tool_registry.get("ctx_read") is None
 
 
+def test_zeta_rpc_registered_client_tool_exposes_capability_metadata() -> None:
+    registry = ToolRegistry()
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
+
+    registered = server.register_client_tools(
+        [
+            {
+                "name": "client.write",
+                "description": "Write through the client.",
+                "schema": {"type": "object"},
+                "effects": ["write"],
+                "staging_supported": True,
+                "direct_execution_allowed": False,
+                "timeout_sec": 2.5,
+            }
+        ]
+    )
+
+    tool = registry.get("client.write")
+    assert registered == ["client.write"]
+    assert tool is not None
+    assert tool.spec.metadata() == {
+        "name": "client.write",
+        "description": "Write through the client.",
+        "schema": {"type": "object"},
+        "interactive": True,
+        "effects": ["write"],
+        "staging_supported": True,
+        "direct_execution_allowed": False,
+        "timeout_sec": 2.5,
+    }
+
+
+def test_zeta_rpc_rejects_invalid_client_tool_schema() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools.register",
+                "params": {
+                    "tools": [
+                        {
+                            "name": "client.bad",
+                            "description": "Bad client schema.",
+                            "schema": {"type": "definitely-not-json-schema"},
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output, tool_registry=ToolRegistry())
+
+    server.serve()
+
+    message = rpc_messages(output)[0]
+    assert message["error"]["code"] == -32602
+    assert message["error"]["message"] == "Invalid params"
+    assert message["error"]["data"]["code"] == "invalid_tool_schema"
+    assert message["error"]["data"]["tool"] == "client.bad"
+
+
+def test_zeta_rpc_mutating_client_tool_without_staging_is_refused_in_propose() -> None:
+    registry = ToolRegistry()
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
+    server.register_client_tools(
+        [
+            {
+                "name": "client.write",
+                "description": "Write through the client.",
+                "schema": {"type": "object"},
+                "effects": ["write"],
+            }
+        ]
+    )
+
+    result = registry.run_tool("client.write", {}, execution_mode="stage")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "staging-unsupported"
+
+
+def test_zeta_rpc_mutating_client_tool_requires_direct_execution_opt_in() -> None:
+    registry = ToolRegistry()
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
+    server.register_client_tools(
+        [
+            {
+                "name": "client.write",
+                "description": "Write through the client.",
+                "schema": {"type": "object"},
+                "effects": ["write"],
+            }
+        ]
+    )
+
+    result = registry.run_tool("client.write", {}, execution_mode="direct")
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "direct-execution-disallowed",
+            "message": "tool client.write does not allow direct execution",
+        },
+    }
+
+
 def test_zeta_rpc_rejects_duplicate_client_tool_registration() -> None:
     registry = ToolRegistry()
     registry.register(
@@ -690,6 +800,59 @@ def test_zeta_rpc_rejects_duplicate_client_tool_registration() -> None:
                     "code": "duplicate_tool",
                     "message": "tool 'ctx_read' is already registered",
                     "tool": "ctx_read",
+                },
+            },
+        }
+    ]
+
+
+def test_zeta_rpc_rejects_reregistering_client_owned_tool() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools.register",
+                "params": {
+                    "tools": [
+                        {
+                            "name": "client.echo",
+                            "description": "Echo from the client.",
+                            "schema": {"type": "object"},
+                            "effects": ["read"],
+                        },
+                        {
+                            "name": "client.echo",
+                            "description": "Echo from the client.",
+                            "schema": {"type": "object"},
+                            "effects": ["read"],
+                        },
+                    ]
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream,
+        output,
+        tool_registry=ToolRegistry(),
+    )
+
+    server.serve()
+
+    assert rpc_messages(output) == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32602,
+                "message": "Invalid params",
+                "data": {
+                    "code": "duplicate_tool",
+                    "message": "tool 'client.echo' is already registered",
+                    "tool": "client.echo",
                 },
             },
         }

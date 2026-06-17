@@ -8,6 +8,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, TextIO, cast
 
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
+
 from .agent import (
     AgentConfig,
     AgentTurnAborted,
@@ -314,6 +317,15 @@ def optional_float_param(params: dict[str, Any], key: str) -> float | None:
     return None
 
 
+def client_tool_timeout_sec(item: dict[str, Any]) -> float | None:
+    value = item.get("timeout_sec")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float) and value > 0:
+        return float(value)
+    return None
+
+
 def event_cursor_param(value: Any) -> EventCursor | None:
     if value is None:
         return None
@@ -486,14 +498,13 @@ class JsonRpcServer:
             name = str(item.get("name") or "")
             if not name:
                 continue
-            if name not in self.client_tools:
-                self.register_client_tool(name, item)
+            self.register_client_tool(name, item)
             registered.append(name)
         return registered
 
     def register_client_tool(self, name: str, item: dict[str, Any]) -> None:
         existing = self.tool_registry.get(name)
-        if existing is not None and name not in self.client_tools:
+        if existing is not None:
             raise RpcError(
                 -32602,
                 "duplicate_tool",
@@ -503,11 +514,20 @@ class JsonRpcServer:
                     "tool": name,
                 },
             )
-        self.client_tools.add(name)
-        if existing is not None:
-            return
         schema = item.get("schema")
         schema = schema if isinstance(schema, dict) else {"type": "object"}
+        try:
+            Draft202012Validator.check_schema(schema)
+        except SchemaError as exc:
+            raise RpcError(
+                -32602,
+                "invalid_tool_schema",
+                "Invalid params",
+                {
+                    "message": exc.message,
+                    "tool": name,
+                },
+            ) from exc
         raw_effects = item.get("effects")
         effects = (
             tuple(
@@ -524,12 +544,17 @@ class JsonRpcServer:
             schema,
             interactive=True,
             effects=effects,
+            staging_supported=item.get("staging_supported") is True,
+            direct_execution_allowed=item.get("direct_execution_allowed") is True,
+            timeout_sec=client_tool_timeout_sec(item),
         )
 
         def run(params: dict[str, Any]) -> dict[str, Any]:
             return self.call_client_tool(str(uuid.uuid4()), name, params)
 
-        self.tool_registry.register(name, ToolImpl(spec, run, run))
+        stage = run if spec.staging_supported else None
+        self.tool_registry.register(name, ToolImpl(spec, run, stage))
+        self.client_tools.add(name)
 
     def record_tool_response(self, params: dict[str, Any]) -> None:
         call_id = str(params.get("id") or "")

@@ -42,6 +42,62 @@ def test_zeta_tool_registry_registers_and_lists_tools() -> None:
     assert tool.spec.metadata()["name"] == "unit"
 
 
+def test_zeta_tool_registry_rejects_invalid_tool_schema() -> None:
+    registry = ToolRegistry()
+    tool = ToolImpl(
+        ToolSpec("bad", "Bad schema.", {"type": "definitely-not-json-schema"}),
+        lambda params: {"ok": True, "metadata": params},
+    )
+
+    with pytest.raises(ValueError, match="invalid schema for tool 'bad'"):
+        registry.register("bad", tool)
+
+
+def test_zeta_tool_registry_refuses_undeclared_effects_in_stage_mode() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "unit",
+        ToolImpl(
+            ToolSpec("unit", "Unit test tool.", {"type": "object"}),
+            lambda params: {"ok": True, "metadata": params},
+        ),
+    )
+
+    result = registry.run_tool("unit", {})
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "staging-unsupported"
+    assert "undeclared" in result["error"]["message"]
+
+
+def test_zeta_tool_registry_requires_direct_execution_permission() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        "unit",
+        ToolImpl(
+            ToolSpec(
+                "unit",
+                "Unit test tool.",
+                {"type": "object"},
+                effects=("write",),
+                direct_execution_allowed=False,
+            ),
+            lambda params: {"ok": True, "metadata": params},
+            lambda params: {"ok": True, "effect": {"status": "proposed"}},
+        ),
+    )
+
+    result = registry.run_tool("unit", {}, execution_mode="direct")
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "direct-execution-disallowed",
+            "message": "tool unit does not allow direct execution",
+        },
+    }
+
+
 def test_zeta_tool_registry_starts_empty() -> None:
     registry = ToolRegistry()
 
@@ -833,6 +889,17 @@ def test_zeta_builtin_metadata_declares_effects() -> None:
     assert tool_metadata("grep")["effects"] == ["search"]
     assert tool_metadata("ast_grep")["effects"] == ["search"]
     assert tool_metadata("ls")["effects"] == ["read"]
+
+
+def test_zeta_builtin_metadata_declares_execution_capabilities() -> None:
+    assert tool_metadata("bash")["staging_supported"] is True
+    assert tool_metadata("bash")["direct_execution_allowed"] is True
+    assert tool_metadata("bash")["timeout_sec"] == 120.0
+    assert tool_metadata("write")["staging_supported"] is True
+    assert tool_metadata("edit")["staging_supported"] is True
+    assert tool_metadata("read")["staging_supported"] is False
+    assert tool_metadata("read")["direct_execution_allowed"] is True
+    assert tool_metadata("read")["timeout_sec"] is None
 
 
 def test_zeta_tool_bash_direct_records_duration() -> None:

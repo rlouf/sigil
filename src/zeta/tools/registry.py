@@ -28,6 +28,14 @@ class ToolRegistry:
             )
         if name in self._tools:
             raise ValueError(f"tool {name!r} is already registered")
+        try:
+            Draft202012Validator.check_schema(tool.spec.schema)
+        except SchemaError as exc:
+            raise ValueError(
+                f"invalid schema for tool {name!r}: {exc.message}"
+            ) from exc
+        if tool.spec.staging_supported and tool.stage is None:
+            raise ValueError(f"tool {name!r} declares staging without an implementation")
         self._tools[name] = tool
 
     def get(self, name: str) -> ToolImpl | None:
@@ -66,7 +74,14 @@ class ToolRegistry:
         tool = self.get(name)
         if tool is None:
             return error_result("unknown-tool", f"unknown tool: {name}")
-        if execution_mode == "direct" or not tool.spec.mutates():
+        if not tool.spec.mutates():
+            return tool.run(params)
+        if execution_mode == "direct":
+            if not tool.spec.direct_execution_allowed:
+                return error_result(
+                    "direct-execution-disallowed",
+                    f"tool {name} does not allow direct execution",
+                )
             return tool.run(params)
         if tool.stage is None:
             declared = ", ".join(tool.spec.effects) or "undeclared"

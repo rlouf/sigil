@@ -41,6 +41,7 @@ SPEC = ToolSpec(
     SCHEMA,
     interactive=True,
     effects=("write",),
+    staging_supported=True,
 )
 
 HEADER_RE = re.compile(r"^\[(?P<path>.+)\]$")

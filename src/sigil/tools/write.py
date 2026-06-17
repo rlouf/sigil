@@ -31,6 +31,7 @@ SPEC = ToolSpec(
     SCHEMA,
     interactive=True,
     effects=("write",),
+    staging_supported=True,
 )
 
 

@@ -29,6 +29,8 @@ SPEC = ToolSpec(
     SCHEMA,
     interactive=True,
     effects=("execute",),
+    staging_supported=True,
+    timeout_sec=DEFAULT_TIMEOUT_SECONDS,
 )
 
 
