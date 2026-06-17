@@ -21,7 +21,7 @@ from zeta.tools.base import (
     CapabilityPolicy,
     CapabilitySpec,
     EffectKind,
-    FunctionCapabilityExecutor,
+    InProcessCapabilityExecutor,
 )
 from zeta.tools.registry import CapabilityRegistry
 from zeta.tools.registry import registry as tool_registry
@@ -62,7 +62,7 @@ def _test_capability(
             supports_direct=supports_direct,
             trust="builtin",
         ),
-        FunctionCapabilityExecutor(
+        InProcessCapabilityExecutor(
             lambda params: {"ok": True, "metadata": params},
             (lambda params: {"ok": True, "effect": {"status": "proposed"}})
             if supports_staging
@@ -124,6 +124,34 @@ def test_zeta_tool_registry_requires_direct_execution_permission() -> None:
             "message": "capability test.unit does not allow direct execution",
         },
     }
+
+
+def test_zeta_in_process_capability_executor_runs_read_capability() -> None:
+    capability = _test_capability("read", effects=("read",))
+
+    result = capability.executor.invoke(
+        capability.spec,
+        {"path": "README.md"},
+        mode="stage",
+    )
+
+    assert result.payload == {"ok": True, "metadata": {"path": "README.md"}}
+
+
+def test_zeta_in_process_capability_executor_stages_mutating_capability() -> None:
+    capability = _test_capability(
+        "write",
+        effects=("write",),
+        supports_staging=True,
+    )
+
+    result = capability.executor.invoke(
+        capability.spec,
+        {"path": "README.md"},
+        mode="stage",
+    )
+
+    assert result.payload == {"ok": True, "effect": {"status": "proposed"}}
 
 
 def test_zeta_capability_registry_rejects_duplicate_canonical_ids() -> None:

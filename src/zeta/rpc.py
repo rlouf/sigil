@@ -29,9 +29,9 @@ from .tools.base import (
     Capability,
     CapabilityId,
     CapabilityPolicy,
+    CapabilityResult,
     CapabilitySpec,
     EffectKind,
-    FunctionCapabilityExecutor,
     error_result,
 )
 from .tools.registry import CapabilityRegistry, ExecutionMode
@@ -68,6 +68,30 @@ class EventSubscription:
     after: EventCursor | None = None
     session_id: str | None = None
     run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RpcClientCapabilityExecutor:
+    call_client_tool: Callable[..., dict[str, Any]]
+    name: str
+    timeout_seconds: float | None = None
+
+    def invoke(
+        self,
+        capability: CapabilitySpec,
+        params: dict[str, Any],
+        *,
+        mode: ExecutionMode,
+    ) -> CapabilityResult:
+        del capability, mode
+        return CapabilityResult.from_mapping(
+            self.call_client_tool(
+                str(uuid.uuid4()),
+                self.name,
+                params,
+                timeout_sec=self.timeout_seconds,
+            )
+        )
 
 
 @dataclass
@@ -806,15 +830,6 @@ class JsonRpcServer:
             aliases=(name,),
         )
 
-        def run(params: dict[str, Any]) -> dict[str, Any]:
-            return self.call_client_tool(
-                str(uuid.uuid4()),
-                name,
-                params,
-                timeout_sec=timeout_seconds,
-            )
-
-        stage = run if supports_staging else None
         self.tool_registry.register(
             Capability(
                 spec,
@@ -824,7 +839,11 @@ class JsonRpcServer:
                     trust="client",
                     timeout_seconds=timeout_seconds,
                 ),
-                FunctionCapabilityExecutor(run, stage),
+                RpcClientCapabilityExecutor(
+                    self.call_client_tool,
+                    name,
+                    timeout_seconds=timeout_seconds,
+                ),
             )
         )
         self.client_tools.add(name)

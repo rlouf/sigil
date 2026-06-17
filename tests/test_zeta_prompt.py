@@ -32,7 +32,7 @@ from zeta.tools.base import (
     CapabilityId,
     CapabilityPolicy,
     CapabilitySpec,
-    FunctionCapabilityExecutor,
+    InProcessCapabilityExecutor,
 )
 from zeta.tools.registry import CapabilityRegistry
 
@@ -55,7 +55,7 @@ def test_model_capability_descriptors_are_generated_from_projection() -> None:
                 supports_direct=True,
                 trust="builtin",
             ),
-            FunctionCapabilityExecutor(lambda params: {"ok": True}),
+            InProcessCapabilityExecutor(lambda params: {"ok": True}),
         )
     )
 

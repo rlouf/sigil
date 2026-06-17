@@ -39,7 +39,7 @@ from zeta.tools.base import (
     CapabilityPolicy,
     CapabilitySpec,
     EffectKind,
-    FunctionCapabilityExecutor,
+    InProcessCapabilityExecutor,
 )
 from zeta.tools.registry import CapabilityRegistry
 
@@ -68,7 +68,7 @@ def _test_capability(
             supports_direct=supports_direct,
             trust="builtin",
         ),
-        FunctionCapabilityExecutor(
+        InProcessCapabilityExecutor(
             lambda params: (
                 run_result or {"ok": True, "content": [{"type": "text", "text": "ok"}]}
             ),
@@ -984,7 +984,8 @@ def test_zeta_rpc_rejects_reregistering_client_owned_tool() -> None:
     ]
 
 
-def test_zeta_rpc_registers_client_tools_and_calls_client() -> None:
+def test_zeta_rpc_registers_client_tools_and_calls_client(monkeypatch) -> None:
+    monkeypatch.setattr(zeta_rpc.uuid, "uuid4", lambda: "client-call-1")
     input_stream = StringIO(
         json.dumps(
             {
@@ -1010,26 +1011,20 @@ def test_zeta_rpc_registers_client_tools_and_calls_client() -> None:
             }
         ]
     )
+    capability = server.tool_registry.get("rpc.client.echo")
+    assert capability is not None
+    assert isinstance(capability.executor, zeta_rpc.RpcClientCapabilityExecutor)
 
-    result = server.call_client_tool(
-        "client-call-1",
-        "client.echo",
-        {"text": "hello"},
-    )
+    result = server.tool_registry.invoke("client.echo", {"text": "hello"})
 
     assert result == {"ok": True, "content": [{"type": "text", "text": "ok"}]}
-    assert rpc_messages(output) == [
-        {
-            "jsonrpc": "2.0",
-            "method": "tools.call",
-            "params": {
-                "id": "client-call-1",
-                "name": "client.echo",
-                "arguments": {"text": "hello"},
-                "status": "requested",
-            },
-        }
-    ]
+    messages = rpc_messages(output)
+    assert len(messages) == 1
+    assert messages[0]["jsonrpc"] == "2.0"
+    assert messages[0]["method"] == "tools.call"
+    assert messages[0]["params"]["name"] == "client.echo"
+    assert messages[0]["params"]["arguments"] == {"text": "hello"}
+    assert messages[0]["params"]["status"] == "requested"
     assert server.tool_calls["client-call-1"].status == "responded"
 
 

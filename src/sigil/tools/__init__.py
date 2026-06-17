@@ -9,7 +9,7 @@ from zeta.tools.base import (
     CapabilityFunction,
     CapabilityPolicy,
     CapabilitySpec,
-    FunctionCapabilityExecutor,
+    InProcessCapabilityExecutor,
 )
 
 from . import bash, edit, grep, ls, query_log, read, web, write
@@ -62,7 +62,7 @@ def builtin_capability(
                 spec.aliases[0] if spec.aliases else "",
             ),
         ),
-        FunctionCapabilityExecutor(
+        InProcessCapabilityExecutor(
             run,
             typed_stage,
         ),

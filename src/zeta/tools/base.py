@@ -92,7 +92,7 @@ CapabilityFunction = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 @dataclass(frozen=True)
-class FunctionCapabilityExecutor:
+class InProcessCapabilityExecutor:
     run: CapabilityFunction
     stage: CapabilityFunction | None = None
 
