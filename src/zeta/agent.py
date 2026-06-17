@@ -370,16 +370,11 @@ def agent_abort_reason(
 
 
 def turn_aborted_event(reason: str, *, caused_by: str | None) -> dict[str, Any]:
-    message = reason.replace("_", " ")
-    event: dict[str, Any] = {
-        "type": "turn_aborted",
-        "id": str(uuid.uuid4()),
-        "reason": reason,
-        "content": f"(turn aborted: {message})",
-    }
-    if caused_by is not None:
-        event["caused_by"] = caused_by
-    return event
+    return TurnAbortedRuntimeEvent(
+        event_id=str(uuid.uuid4()),
+        reason=reason,
+        caused_by=caused_by,
+    ).to_event()
 
 
 def agent_model_endpoint_open(config: AgentConfig) -> bool:
@@ -547,18 +542,102 @@ class CapabilityCallResult:
     stop: bool = False
 
 
+@dataclass(frozen=True)
+class ModelRuntimeEvent:
+    content: str = ""
+    reasoning: str = ""
+    tool_calls: tuple[dict[str, Any], ...] = ()
+
+    @classmethod
+    def from_assistant(cls, assistant: dict[str, Any]) -> ModelRuntimeEvent:
+        content = assistant.get("content")
+        reasoning = assistant.get("reasoning_content")
+        return cls(
+            content=content if isinstance(content, str) else "",
+            reasoning=reasoning if isinstance(reasoning, str) else "",
+            tool_calls=tuple(assistant_tool_calls(assistant)),
+        )
+
+    def to_event(self) -> dict[str, Any]:
+        event: dict[str, Any] = {"type": "model"}
+        if self.reasoning:
+            event["reasoning"] = self.reasoning
+        if self.content:
+            event["content"] = self.content
+        if self.tool_calls:
+            event["tool_calls"] = list(self.tool_calls)
+        return event
+
+
+@dataclass(frozen=True)
+class ToolCallRuntimeEvent:
+    tool_call: ModelToolCall
+    caused_by: str | None = None
+
+    def to_event(self) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "type": "tool_call",
+            "id": self.tool_call.call_id,
+            "tool_call_id": self.tool_call.call_id,
+            "name": self.tool_call.name,
+            "input": self.tool_call.params,
+            "arguments": self.tool_call.raw_arguments,
+        }
+        if self.caused_by is not None:
+            event["caused_by"] = self.caused_by
+        return event
+
+
+@dataclass(frozen=True)
+class ToolResultRuntimeEvent:
+    call_id: str
+    name: str
+    result: dict[str, Any]
+    event_id: str | None = None
+    capability_id: str = ""
+    model_telemetry: dict[str, Any] | None = None
+    prompt_trace: dict[str, Any] | None = None
+
+    def to_event(self) -> dict[str, Any]:
+        event: dict[str, Any] = {
+            "type": "tool_result",
+            "tool_call_id": self.call_id,
+            "name": self.name,
+            "result": normalized_tool_result(self.name, self.result),
+        }
+        if self.event_id is not None:
+            event["id"] = self.event_id
+        ensure_event_id(event)
+        if self.capability_id:
+            event["capability_id"] = self.capability_id
+        if self.model_telemetry:
+            event["model_telemetry"] = dict(self.model_telemetry)
+        if self.prompt_trace is not None:
+            event["prompt_trace"] = self.prompt_trace
+        return event
+
+
+@dataclass(frozen=True)
+class TurnAbortedRuntimeEvent:
+    event_id: str
+    reason: str
+    caused_by: str | None = None
+
+    def to_event(self) -> dict[str, Any]:
+        message = self.reason.replace("_", " ")
+        event: dict[str, Any] = {
+            "type": "turn_aborted",
+            "id": self.event_id,
+            "reason": self.reason,
+            "content": f"(turn aborted: {message})",
+        }
+        if self.caused_by is not None:
+            event["caused_by"] = self.caused_by
+        return event
+
+
 def model_event(assistant: dict[str, Any]) -> dict[str, Any]:
-    content = assistant.get("content")
-    reasoning = assistant.get("reasoning_content")
-    tool_calls = assistant_tool_calls(assistant)
-    event: dict[str, Any] = {"type": "model"}
-    if isinstance(reasoning, str) and reasoning:
-        event["reasoning"] = reasoning
-    if isinstance(content, str) and content:
-        event["content"] = content
-    if tool_calls:
-        event["tool_calls"] = tool_calls
-    return event
+    return ModelRuntimeEvent.from_assistant(assistant).to_event()
 
 
 def ensure_event_id(event: dict[str, Any]) -> str:
@@ -719,17 +798,7 @@ class ModelToolCall:
         )
 
     def event(self, *, caused_by: str | None) -> dict[str, Any]:
-        event: dict[str, Any] = {
-            "type": "tool_call",
-            "id": self.call_id,
-            "tool_call_id": self.call_id,
-            "name": self.name,
-            "input": self.params,
-            "arguments": self.raw_arguments,
-        }
-        if caused_by is not None:
-            event["caused_by"] = caused_by
-        return event
+        return ToolCallRuntimeEvent(tool_call=self, caused_by=caused_by).to_event()
 
 
 @dataclass
@@ -1053,20 +1122,17 @@ def tool_result_event(
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
 ) -> dict[str, Any]:
-    event = {
-        "type": "tool_result",
-        "tool_call_id": call_id,
-        "name": name,
-        "result": normalized_tool_result(name, result),
-    }
-    if capability_id:
-        event["capability_id"] = capability_id
-    ensure_event_id(event)
-    if model_telemetry:
-        event["model_telemetry"] = dict(model_telemetry)
-    if prompt_trace is not None:
-        attach_prompt_trace(event, prompt_trace)
-    return event
+    trace_payload = (
+        prompt_trace_payload(prompt_trace) if prompt_trace is not None else None
+    )
+    return ToolResultRuntimeEvent(
+        call_id=call_id,
+        name=name,
+        result=result,
+        capability_id=capability_id,
+        model_telemetry=model_telemetry,
+        prompt_trace=trace_payload,
+    ).to_event()
 
 
 def normalized_tool_result(name: str, result: dict[str, Any]) -> dict[str, Any]:

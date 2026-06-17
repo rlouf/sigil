@@ -230,6 +230,119 @@ def test_zeta_model_tool_call_preserves_invalid_json_error() -> None:
     assert invocation.call_event == record.event(caused_by="assistant-1")
 
 
+def test_zeta_model_runtime_event_round_trips_to_current_dict_shape() -> None:
+    record = zeta_agent.ModelRuntimeEvent.from_assistant(
+        {
+            "content": "done",
+            "reasoning_content": "thinking",
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "read", "arguments": "{}"},
+                }
+            ],
+        }
+    )
+
+    assert record.to_event() == {
+        "type": "model",
+        "reasoning": "thinking",
+        "content": "done",
+        "tool_calls": [
+            {
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "read", "arguments": "{}"},
+            }
+        ],
+    }
+
+
+def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> None:
+    model_tool_call = zeta_agent.ModelToolCall(
+        call_id="call-1",
+        name="read",
+        raw_arguments="{}",
+        params={},
+    )
+
+    event = zeta_agent.ToolCallRuntimeEvent(
+        tool_call=model_tool_call,
+        caused_by="assistant-1",
+    )
+
+    assert event.to_event() == {
+        "type": "tool_call",
+        "id": "call-1",
+        "tool_call_id": "call-1",
+        "name": "read",
+        "input": {},
+        "arguments": "{}",
+        "caused_by": "assistant-1",
+    }
+
+
+def test_zeta_tool_result_runtime_event_round_trips_to_current_dict_shape() -> None:
+    event = zeta_agent.ToolResultRuntimeEvent(
+        event_id="result-1",
+        call_id="call-1",
+        name="read",
+        result={"ok": True, "content": [{"type": "text", "text": "done"}]},
+        capability_id="builtin.read",
+        model_telemetry={"input_tokens": 1},
+        prompt_trace={"session_id": "session-1"},
+    )
+
+    assert event.to_event() == {
+        "type": "tool_result",
+        "tool_call_id": "call-1",
+        "name": "read",
+        "result": {"ok": True, "content": [{"type": "text", "text": "done"}]},
+        "id": "result-1",
+        "capability_id": "builtin.read",
+        "model_telemetry": {"input_tokens": 1},
+        "prompt_trace": {"session_id": "session-1"},
+    }
+
+
+def test_zeta_turn_aborted_runtime_event_round_trips_to_current_dict_shape() -> None:
+    event = zeta_agent.TurnAbortedRuntimeEvent(
+        event_id="abort-1",
+        reason="deadline_exceeded",
+        caused_by="tool-result-1",
+    )
+
+    assert event.to_event() == {
+        "type": "turn_aborted",
+        "id": "abort-1",
+        "reason": "deadline_exceeded",
+        "content": "(turn aborted: deadline exceeded)",
+        "caused_by": "tool-result-1",
+    }
+
+
+def test_zeta_record_model_event_sends_same_dict_to_sink() -> None:
+    events: list[dict[str, Any]] = []
+    sink_events: list[dict[str, Any]] = []
+
+    event_id, tool_calls = zeta_agent.record_model_event(
+        {"content": "done"},
+        events,
+        prompt_trace=None,
+        prompt_builder=cast(Any, None),
+        event_sink=sink_events.append,
+        caused_by="parent-1",
+    )
+
+    assert isinstance(event_id, str)
+    assert tool_calls == []
+    assert sink_events == events
+    assert sink_events[0] is events[0]
+    assert events[0]["content"] == "done"
+    assert events[0]["caused_by"] == "parent-1"
+
+
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 

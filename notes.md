@@ -949,7 +949,7 @@ Verification:
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 
-### Slice 3: typed runtime event records at the agent boundary
+### Slice 3: typed runtime event records at the agent boundary - complete
 
 Introduce typed records for the runtime events the agent creates before they are
 persisted or published.
@@ -976,8 +976,11 @@ Tests first:
 
 Verification:
 
-- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_trace.py -q`
-- `uv run pytest -q`
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_trace.py -q` passed
+  with 163 tests.
+- `uv run pytest -q` passed with 801 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 
 ### Slice 4: typed model turn record without provider-neutralizing yet
 
