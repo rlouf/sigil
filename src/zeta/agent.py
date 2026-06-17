@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from types import TracebackType
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from .models import (
     CODEX_RESPONSES_API,
@@ -31,6 +31,30 @@ ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 DEFAULT_MAX_TURNS = 25
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
+StepName = Literal[
+    "check_budget",
+    "build_prompt",
+    "call_model",
+    "record_assistant",
+    "record_capability_call",
+    "execute_capability",
+    "record_capability_result",
+    "finish_run",
+    "abort_run",
+]
+Step = StepName
+
+
+@dataclass(frozen=True)
+class StepEffect:
+    kind: str
+    payload: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class StepResult:
+    step: Step
+    effects: tuple[StepEffect, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,14 +86,16 @@ class AgentTurnResult:
     model_telemetry: dict[str, Any] = field(default_factory=dict)
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
+    steps: list[StepResult] = field(default_factory=list)
 
 
 @dataclass
-class AgentTurnState:
+class RunState:
     events: list[dict[str, Any]] = field(default_factory=list)
     latest_model_telemetry: dict[str, Any] = field(default_factory=dict)
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
+    steps: list[StepResult] = field(default_factory=list)
     next_model_caused_by: str | None = None
 
     def result(
@@ -87,6 +113,7 @@ class AgentTurnState:
             model_telemetry=self.latest_model_telemetry,
             model_telemetry_calls=self.model_telemetry_calls,
             prompt_traces=self.prompt_traces,
+            steps=self.steps,
         )
 
     def note_model_telemetry(self, model_telemetry: dict[str, Any]) -> None:
@@ -98,6 +125,12 @@ class AgentTurnState:
     def note_prompt_trace(self, prompt_trace: PromptTrace | None) -> None:
         if prompt_trace is not None:
             self.prompt_traces.append(prompt_trace)
+
+    def note_step(self, step: StepName, *effects: StepEffect) -> None:
+        self.steps.append(StepResult(step, effects))
+
+
+AgentTurnState = RunState
 
 
 class AgentTurnAborted(RuntimeError):
@@ -149,6 +182,7 @@ def run_agent_turn(
     projection = active_tool_registry.project(allowed_capabilities)
     tools = projection.descriptors
     for _ in turn_indices(config.max_turns):
+        state.note_step("check_budget")
         check_turn_budget(
             state,
             event_sink=event_sink,
@@ -184,6 +218,7 @@ def run_agent_turn(
             caused_by=state.next_model_caused_by,
         )
         if not tool_calls:
+            state.note_step("finish_run")
             return state.result(
                 final_text=turn.assistant.content,
                 final_text_streamed=turn.streamed_content,
@@ -205,6 +240,7 @@ def run_agent_turn(
         )
         if outcome is not None:
             return outcome
+    state.note_step("finish_run")
     return state.result()
 
 
@@ -251,6 +287,7 @@ def request_model_turn(
     model_status: ModelStatusFactory | None,
     stream_sink: ChatCompletionStreamSink | None,
 ) -> ModelTurn:
+    state.note_step("build_prompt")
     prompt_plan = builder.plan_prompt(
         objective,
         timeline,
@@ -266,6 +303,7 @@ def request_model_turn(
     stored_prompt = builder.commit_prompt_plan(prompt_plan)
     model_input = render_model_input(stored_prompt)
     prepared_prompt = prepared_prompt_from(stored_prompt)
+    state.note_step("call_model")
     model_output, streamed_content, model_telemetry = request_assistant_message(
         model_input.messages,
         tools=model_input.tools or [],
@@ -275,6 +313,7 @@ def request_model_turn(
         stream_sink=stream_sink,
     )
     assistant_message = AssistantMessage.from_provider(model_output.message)
+    state.note_step("record_assistant")
     prompt_trace = builder.record_assistant_message(
         prepared_prompt,
         model_output,
@@ -306,12 +345,15 @@ def run_capability_calls(
     deadline: float | None,
 ) -> AgentTurnResult | None:
     for index, tool_call in enumerate(tool_calls):
+        state.note_step("check_budget")
         check_turn_budget(
             state,
             event_sink=event_sink,
             cancellation_event=cancellation_event,
             deadline=deadline,
         )
+        state.note_step("record_capability_call")
+        state.note_step("execute_capability")
         result_event = handle_tool_call(
             tool_call,
             allowed_capabilities=allowed_capabilities,
@@ -325,11 +367,14 @@ def run_capability_calls(
             tool_registry=tool_registry,
             caused_by=assistant_event_id,
         )
+        state.note_step("record_capability_result")
         state.events.extend(result_event.events)
         state.next_model_caused_by = next_model_parent(result_event.events)
         if result_event.staged_effect is not None and config.stop_on_staged_effect:
+            state.note_step("finish_run")
             return state.result(staged_effect=result_event.staged_effect)
         if result_event.stop:
+            state.note_step("finish_run")
             return state.result()
     return None
 

@@ -2175,6 +2175,13 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     assert result.events[0]["type"] == "model"
     assert result.events[0]["content"] == "done"
     assert result.events[0]["prompt_trace"]["prompt_object_id"]
+    assert [step.step for step in result.steps] == [
+        "check_budget",
+        "build_prompt",
+        "call_model",
+        "record_assistant",
+        "finish_run",
+    ]
     assert len(result.prompt_traces) == 1
     kwargs = cast(dict[str, Any], captured["kwargs"])
     assert kwargs["tools"][0]["function"]["name"] == "read"

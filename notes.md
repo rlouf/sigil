@@ -1265,6 +1265,46 @@ that result instead of invoking the capability again.
 - `uvx --with coverage coverage report`
 - `uvx --with radon radon cc src tests -s`
 
+### Slice 1: in-memory step records - complete
+
+Added the first explicit step-engine surface without changing execution
+semantics:
+
+- `RunState`;
+- `Step`;
+- `StepResult`;
+- `StepEffect`.
+
+The existing loop now records an in-memory step sequence around the current
+budget check, prompt build, model call, assistant recording, capability-call
+block, and finish points. Durable resume, pending capability journals, and
+reconciliation remain future slices.
+
+Behavior preserved:
+
+- Pure answer runs still emit the same model event and final text.
+- Tool and trace behavior remains under the existing helper functions.
+- `AgentTurnState` remains as a compatibility alias for current tests and
+  call sites.
+
+Verification:
+
+- `claude -p ...` could not provide a second opinion because the installed CLI
+  returned `401 Invalid authentication credentials`.
+- `gemini -p ...` could not provide a second opinion because `gemini` is not
+  installed in this checkout.
+- `uv run ripple src/zeta/agent.py run_agent_turn` and
+  `uv run ripple src/zeta/agent.py request_model_turn` could not run because
+  `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
+  passed with 247 tests and 2 skipped.
+- `uv run pytest -q` passed with 823 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+- `uv run pre-commit run --all` passed.
+
 ## 7. Replay, diff, and fork acceptance tests
 
 ### Current read
