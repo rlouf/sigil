@@ -312,6 +312,10 @@ def test_zeta_rpc_cli_runs_pure_session_without_sigil_turn(monkeypatch) -> None:
     assert [event["type"] for event in published] == ["user_message", "model"]
     assert messages[-1]["result"]["outcome"] == "answered"
     assert messages[-1]["result"]["final_text"] == "done"
+    assert messages[-1]["result"]["run_id"].startswith("run_")
+    assert {event["run_id"] for event in published} == {
+        messages[-1]["result"]["run_id"]
+    }
 
 
 def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> None:
@@ -340,17 +344,73 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         runtime_context=context,
     )
 
-    assert result == {"outcome": "answered", "final_text": "done"}
+    assert result["outcome"] == "answered"
+    assert result["final_text"] == "done"
+    assert result["run_id"].startswith("run_")
+    assert result["final_event_cursor"] == "2"
     assert [event["session"] for event in published] == [
         "ctx-session",
         "ctx-session",
     ]
+    assert [event["run_id"] for event in published] == [
+        result["run_id"],
+        result["run_id"],
+    ]
+    assert [event["turn_id"] for event in published] == [
+        result["run_id"],
+        result["run_id"],
+    ]
     assert [
         event.event_type for event in event_store.list_events(zeta_events.Filter())
     ] == ["zeta.user_message", "zeta.model.called"]
+    assert [
+        event.turn_id
+        for event in event_store.list_events(
+            zeta_events.Filter(turn_id=result["run_id"])
+        )
+    ] == [result["run_id"], result["run_id"]]
     assert trace_store.objects(kind="run_event") == []
     assert "run/ctx-session/head" not in trace_store.refs()
     assert "run/ctx-session/event_head" not in trace_store.refs()
+
+
+def test_zeta_rpc_sequential_runs_get_distinct_run_ids(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    context = zeta_context.ZetaContext(
+        session_id="ctx-session",
+        event_sink=event_store,
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=ToolRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {"content": "done"},
+    )
+
+    first = zeta_rpc.run_rpc_session(
+        {"objective": "first", "tools": [], "context": ""},
+        publish_event=lambda event: None,
+        runtime_context=context,
+    )
+    second = zeta_rpc.run_rpc_session(
+        {"objective": "second", "tools": [], "context": ""},
+        publish_event=lambda event: None,
+        runtime_context=context,
+    )
+
+    assert first["run_id"].startswith("run_")
+    assert second["run_id"].startswith("run_")
+    assert first["run_id"] != second["run_id"]
+    assert first["final_event_cursor"] == "2"
+    assert second["final_event_cursor"] == "4"
 
 
 def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
@@ -388,10 +448,17 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
         runtime_context=context,
     )
 
-    assert result == {"outcome": "aborted", "final_text": ""}
+    assert result["outcome"] == "aborted"
+    assert result["final_text"] == ""
+    assert result["run_id"].startswith("run_")
+    assert result["final_event_cursor"] == "2"
     assert [event["type"] for event in published] == [
         "user_message",
         "turn_aborted",
+    ]
+    assert [event["run_id"] for event in published] == [
+        result["run_id"],
+        result["run_id"],
     ]
     assert published[-1]["reason"] == "deadline_exceeded"
     assert [

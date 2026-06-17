@@ -10,6 +10,7 @@ from typing import Any, TextIO, cast
 
 from .agent import AgentConfig, AgentTurnAborted, registered_tools, run_agent_turn
 from .context import ZetaContext, default_context, load_project_context
+from .events import EventReader, Filter
 from .timeline import current_timeline, record_event
 from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec
 from .tools.registry import ExecutionMode, ToolRegistry
@@ -39,6 +40,7 @@ def run_rpc_session(
     runtime_context: ZetaContext | None = None,
 ) -> dict[str, Any]:
     runtime_context = runtime_context or default_context()
+    run_id = rpc_run_id()
     objective = rpc_objective(params)
     workflow = rpc_workflow(params)
     enabled_tools = registered_tools(
@@ -54,13 +56,18 @@ def run_rpc_session(
             "workflow": workflow,
             "runtime": "zeta-rpc",
             "available_tools": list(enabled_tools),
+            "run_id": run_id,
+            "turn_id": run_id,
         },
         runtime_context=runtime_context,
     )
     publish_event(user_event)
 
     def sink(event: dict[str, Any]) -> None:
-        persisted = record_event(event, runtime_context=runtime_context)
+        persisted = record_event(
+            rpc_event_with_run_id(event, run_id),
+            runtime_context=runtime_context,
+        )
         publish_event(persisted)
 
     try:
@@ -80,11 +87,58 @@ def run_rpc_session(
             caused_by=str(user_event.get("id") or ""),
         )
     except AgentTurnAborted:
-        return {"outcome": "aborted", "final_text": ""}
-    return {
-        "outcome": rpc_outcome(result.staged_effect, result.final_text),
-        "final_text": result.final_text,
+        return rpc_session_result(
+            "aborted",
+            "",
+            run_id=run_id,
+            runtime_context=runtime_context,
+        )
+    return rpc_session_result(
+        rpc_outcome(result.staged_effect, result.final_text),
+        result.final_text,
+        run_id=run_id,
+        runtime_context=runtime_context,
+    )
+
+
+def rpc_run_id() -> str:
+    return f"run_{uuid.uuid4().hex}"
+
+
+def rpc_event_with_run_id(event: dict[str, Any], run_id: str) -> dict[str, Any]:
+    scoped = dict(event)
+    scoped["run_id"] = run_id
+    scoped["turn_id"] = run_id
+    return scoped
+
+
+def rpc_session_result(
+    outcome: str,
+    final_text: str,
+    *,
+    run_id: str,
+    runtime_context: ZetaContext,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "run_id": run_id,
+        "outcome": outcome,
+        "final_text": final_text,
     }
+    cursor = final_event_cursor(runtime_context, run_id)
+    if cursor is not None:
+        result["final_event_cursor"] = cursor
+    return result
+
+
+def final_event_cursor(runtime_context: ZetaContext, run_id: str) -> str | None:
+    if not isinstance(runtime_context.event_sink, EventReader):
+        return None
+    events = runtime_context.event_sink.list_events(
+        Filter(session_id=runtime_context.session_id, turn_id=run_id)
+    )
+    if not events:
+        return None
+    return events[-1].cursor().encode()
 
 
 def rpc_objective(params: dict[str, Any]) -> str:
