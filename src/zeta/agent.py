@@ -473,29 +473,22 @@ def run_capability_calls(
     deadline: float | None,
 ) -> AgentTurnResult | None:
     for index, tool_call in enumerate(tool_calls):
-        state.note_step("check_budget")
-        check_turn_budget(
-            state,
+        result_event = run_capability_step(
+            tool_call,
+            index=index,
+            config=config,
+            allowed_capabilities=allowed_capabilities,
+            projection=projection,
+            model_telemetry=(model_telemetry if index == 0 else None),
+            prompt_trace=prompt_trace,
+            builder=builder,
             event_sink=event_sink,
+            tool_registry=tool_registry,
+            assistant_event_id=assistant_event_id,
+            state=state,
             cancellation_event=cancellation_event,
             deadline=deadline,
         )
-        state.note_step("record_capability_call")
-        state.note_step("execute_capability")
-        result_event = handle_tool_call(
-            tool_call,
-            allowed_capabilities=allowed_capabilities,
-            projection=projection,
-            index=index,
-            execution_mode=config.execution_mode,
-            model_telemetry=(model_telemetry if index == 0 else None),
-            prompt_trace=prompt_trace,
-            prompt_builder=builder,
-            event_sink=event_sink,
-            tool_registry=tool_registry,
-            caused_by=assistant_event_id,
-        )
-        state.note_step("record_capability_result")
         state.events.extend(result_event.events)
         state.next_model_caused_by = next_model_parent(result_event.events)
         if result_event.staged_effect is not None and config.stop_on_staged_effect:
@@ -505,6 +498,49 @@ def run_capability_calls(
             state.note_step("finish_run")
             return state.result()
     return None
+
+
+def run_capability_step(
+    tool_call: dict[str, Any],
+    *,
+    index: int,
+    config: AgentConfig,
+    allowed_capabilities: tuple[str, ...],
+    projection: CapabilityProjection,
+    model_telemetry: dict[str, Any] | None,
+    prompt_trace: PromptTrace | None,
+    builder: PromptBuilder,
+    event_sink: AgentEventSink | None,
+    tool_registry: CapabilityRegistry,
+    assistant_event_id: str | None,
+    state: RunState,
+    cancellation_event: threading.Event | None,
+    deadline: float | None,
+) -> CapabilityCallResult:
+    state.note_step("check_budget")
+    check_turn_budget(
+        state,
+        event_sink=event_sink,
+        cancellation_event=cancellation_event,
+        deadline=deadline,
+    )
+    state.note_step("record_capability_call")
+    state.note_step("execute_capability")
+    result = handle_tool_call(
+        tool_call,
+        allowed_capabilities=allowed_capabilities,
+        projection=projection,
+        index=index,
+        execution_mode=config.execution_mode,
+        model_telemetry=model_telemetry,
+        prompt_trace=prompt_trace,
+        prompt_builder=builder,
+        event_sink=event_sink,
+        tool_registry=tool_registry,
+        caused_by=assistant_event_id,
+    )
+    state.note_step("record_capability_result")
+    return result
 
 
 def check_turn_budget(

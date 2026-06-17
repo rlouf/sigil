@@ -647,6 +647,58 @@ def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
     assert state.latest_model_telemetry == {"usage": {"prompt_tokens": 1}}
 
 
+def test_zeta_run_capability_step_records_call_execution_and_result(
+    monkeypatch,
+) -> None:
+    state = zeta_agent.RunState()
+    registry = CapabilityRegistry()
+    projection = registry.project(())
+    tool_call = {"id": "call-1", "function": {"name": "read", "arguments": "{}"}}
+
+    def fake_handle_tool_call(
+        received: dict[str, Any],
+        **kwargs: object,
+    ) -> zeta_agent.CapabilityCallResult:
+        assert received == tool_call
+        assert kwargs["index"] == 0
+        return zeta_agent.CapabilityCallResult(
+            events=[
+                {"type": "tool_call", "tool_call_id": "call-1"},
+                {"type": "tool_result", "tool_call_id": "call-1"},
+            ]
+        )
+
+    monkeypatch.setattr(zeta_agent, "handle_tool_call", fake_handle_tool_call)
+
+    result = zeta_agent.run_capability_step(
+        tool_call,
+        index=0,
+        config=zeta_agent.AgentConfig(),
+        allowed_capabilities=(),
+        projection=projection,
+        model_telemetry={},
+        prompt_trace=None,
+        builder=zeta_prompt.PromptBuilder(),
+        event_sink=None,
+        tool_registry=registry,
+        assistant_event_id="assistant-1",
+        state=state,
+        cancellation_event=None,
+        deadline=None,
+    )
+
+    assert [step.step for step in state.steps] == [
+        "check_budget",
+        "record_capability_call",
+        "execute_capability",
+        "record_capability_result",
+    ]
+    assert result.events == [
+        {"type": "tool_call", "tool_call_id": "call-1"},
+        {"type": "tool_result", "tool_call_id": "call-1"},
+    ]
+
+
 def rpc_messages(output: StringIO) -> list[dict[str, Any]]:
     return [json.loads(line) for line in output.getvalue().splitlines()]
 

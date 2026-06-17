@@ -1382,10 +1382,44 @@ Verification:
   `ripple` is not installed in this checkout.
 - `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
   passed with 250 tests and 2 skipped.
-- `uv run pytest -q` passed with 826 tests and 4 skipped.
+- `uv run pytest -q` passed with 827 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
 - `uv run coverage run -m pytest` and `uv run coverage report` passed with
   93% total coverage.
 - `uv run ty check` passed.
+- `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
+  passed.
+- `uv run pre-commit run --all` passed.
+
+### Slice 5: capability execution step function - complete
+
+Extracted the per-tool-call body of `run_capability_calls()` into
+`run_capability_step()`. This is still the existing behavior under the hood, but
+the step runner now has a single boundary for:
+
+- budget check before a capability call;
+- capability call recording;
+- capability execution;
+- capability result recording.
+
+Behavior preserved:
+
+- Tool-call events still stream before capability execution.
+- Tool-result events still attach trace and telemetry through the existing
+  helper path.
+- Staged-effect and stop behavior still live in `run_capability_calls()`.
+
+Verification:
+
+- `uv run ripple src/zeta/agent.py run_capability_calls` could not run because
+  `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_agent.py tests/test_zeta_tools.py tests/test_zeta_trace.py -q`
+  passed with 251 tests and 2 skipped.
+- `uv run pytest -q` passed with 826 tests and 4 skipped.
+- `uv run ty check src tests` passed. A broader `uv run ty check` also scans
+  the untracked `.worktrees/` checkout and fails on that separate tree, so the
+  scoped project command is the relevant verification.
 - `uvx --with radon radon cc src/zeta/agent.py tests/test_zeta_agent.py -s`
   passed.
 - `uv run pre-commit run --all` passed.
