@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import tomllib
 from collections.abc import Callable
 from io import StringIO
@@ -901,9 +902,101 @@ def test_zeta_rpc_registers_client_tools_and_calls_client() -> None:
                 "id": "client-call-1",
                 "name": "client.echo",
                 "arguments": {"text": "hello"},
+                "status": "requested",
             },
         }
     ]
+    assert server.tool_calls["client-call-1"].status == "responded"
+
+
+def test_zeta_rpc_client_tool_call_rejects_malformed_response() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools.respond",
+                "params": {"id": "client-call-1", "result": {"content": []}},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
+
+    result = server.call_client_tool("client-call-1", "client.echo", {})
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "invalid-tool-response",
+            "message": "tool response result must include boolean ok",
+        },
+    }
+    assert server.tool_calls["client-call-1"].status == "failed"
+
+
+def test_zeta_rpc_client_tool_call_records_cancellation() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "tools.respond",
+                "params": {"id": "client-call-1", "cancelled": True},
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(input_stream, output)
+
+    result = server.call_client_tool("client-call-1", "client.echo", {})
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "client-cancelled",
+            "message": "client cancelled tool call client-call-1",
+        },
+    }
+    assert server.tool_calls["client-call-1"].status == "cancelled"
+
+
+def test_zeta_rpc_client_tool_call_records_disconnect_failure() -> None:
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO())
+
+    result = server.call_client_tool("client-call-1", "client.echo", {})
+
+    assert result == {
+        "ok": False,
+        "error": {"code": "client-disconnected", "message": "client.echo"},
+    }
+    assert server.tool_calls["client-call-1"].status == "failed"
+
+
+def test_zeta_rpc_client_tool_call_times_out(monkeypatch) -> None:
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO())
+
+    def slow_read_message() -> None:
+        time.sleep(0.02)
+        return None
+
+    monkeypatch.setattr(server, "read_message", slow_read_message)
+
+    result = server.call_client_tool(
+        "client-call-1",
+        "client.echo",
+        {},
+        timeout_sec=0.001,
+    )
+
+    assert result == {
+        "ok": False,
+        "error": {
+            "code": "client-tool-timeout",
+            "message": "client tool client.echo timed out after 0.001s",
+        },
+    }
+    assert server.tool_calls["client-call-1"].status == "timed_out"
 
 
 def test_zeta_rpc_session_run_streams_events_and_returns_turn(

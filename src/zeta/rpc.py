@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import select
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, TextIO, cast
+from typing import Any, Literal, TextIO, cast
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
@@ -21,11 +23,22 @@ from .agent import (
 from .context import ZetaContext, default_context, load_project_context
 from .events import Event, EventCursor, EventReader, Filter
 from .timeline import current_timeline, record_event, timeline_event_from_durable_event
-from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec
+from .tools.base import EFFECT_KINDS, EffectKind, ToolImpl, ToolSpec, error_result
 from .tools.registry import ExecutionMode, ToolRegistry
 from .tools.registry import registry as _runtime_tool_registry
 
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
+ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
+READ_TIMEOUT = object()
+
+
+@dataclass
+class ClientToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+    status: ToolCallStatus = "requested"
+    timeout_sec: float | None = None
 
 
 @dataclass
@@ -326,6 +339,26 @@ def client_tool_timeout_sec(item: dict[str, Any]) -> float | None:
     return None
 
 
+def normalized_client_tool_response(raw_result: Any) -> tuple[dict[str, Any], ToolCallStatus]:
+    if not isinstance(raw_result, dict):
+        return (
+            error_result(
+                "invalid-tool-response",
+                "tool response result must be an object",
+            ),
+            "failed",
+        )
+    if not isinstance(raw_result.get("ok"), bool):
+        return (
+            error_result(
+                "invalid-tool-response",
+                "tool response result must include boolean ok",
+            ),
+            "failed",
+        )
+    return cast(dict[str, Any], raw_result), "responded"
+
+
 def event_cursor_param(value: Any) -> EventCursor | None:
     if value is None:
         return None
@@ -388,6 +421,7 @@ class JsonRpcServer:
         self.tool_registry = tool_registry or _runtime_tool_registry
         self.event_reader = event_reader
         self.tool_responses: dict[str, dict[str, Any]] = {}
+        self.tool_calls: dict[str, ClientToolCall] = {}
         self.client_tools: set[str] = set()
 
     def serve(self) -> None:
@@ -407,6 +441,30 @@ class JsonRpcServer:
                 return cast(dict[str, Any], message)
             self.write_error(None, -32600, "JSON-RPC message must be an object")
         return None
+
+    def read_message_before(self, deadline: float | None) -> dict[str, Any] | object | None:
+        if deadline is None:
+            return self.read_message()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return READ_TIMEOUT
+        if not self.input_ready_before(remaining):
+            return READ_TIMEOUT
+        message = self.read_message()
+        if message is None and time.monotonic() >= deadline:
+            return READ_TIMEOUT
+        return message
+
+    def input_ready_before(self, timeout_sec: float) -> bool:
+        try:
+            self.input.fileno()
+        except (AttributeError, OSError, ValueError):
+            return True
+        try:
+            readable, _, _ = select.select([self.input], [], [], timeout_sec)
+        except (OSError, ValueError):
+            return True
+        return bool(readable)
 
     def handle_message(self, message: dict[str, Any]) -> None:
         request_id = message.get("id")
@@ -550,7 +608,12 @@ class JsonRpcServer:
         )
 
         def run(params: dict[str, Any]) -> dict[str, Any]:
-            return self.call_client_tool(str(uuid.uuid4()), name, params)
+            return self.call_client_tool(
+                str(uuid.uuid4()),
+                name,
+                params,
+                timeout_sec=spec.timeout_sec,
+            )
 
         stage = run if spec.staging_supported else None
         self.tool_registry.register(name, ToolImpl(spec, run, stage))
@@ -560,24 +623,56 @@ class JsonRpcServer:
         call_id = str(params.get("id") or "")
         if not call_id:
             return
-        result = params.get("result")
-        if not isinstance(result, dict):
-            result = {"ok": False, "error": {"code": "invalid-result"}}
-        self.tool_responses[call_id] = cast(dict[str, Any], result)
+        if params.get("cancelled") is True:
+            result = error_result(
+                "client-cancelled",
+                f"client cancelled tool call {call_id}",
+            )
+            status: ToolCallStatus = "cancelled"
+        else:
+            result, status = normalized_client_tool_response(params.get("result"))
+        call = self.tool_calls.get(call_id)
+        if call is not None:
+            call.status = status
+        self.tool_responses[call_id] = result
 
     def call_client_tool(
         self,
         call_id: str,
         name: str,
         arguments: dict[str, Any],
+        *,
+        timeout_sec: float | None = None,
     ) -> dict[str, Any]:
+        self.tool_calls[call_id] = ClientToolCall(
+            id=call_id,
+            name=name,
+            arguments=arguments,
+            timeout_sec=timeout_sec,
+        )
+        params: dict[str, Any] = {
+            "id": call_id,
+            "name": name,
+            "arguments": arguments,
+            "status": "requested",
+        }
+        if timeout_sec is not None:
+            params["timeout_sec"] = timeout_sec
         self.write_notification(
             "tools.call",
-            {"id": call_id, "name": name, "arguments": arguments},
+            params,
         )
+        deadline = time.monotonic() + timeout_sec if timeout_sec is not None else None
         while call_id not in self.tool_responses:
-            message = self.read_message()
+            message = self.read_message_before(deadline)
+            if message is READ_TIMEOUT:
+                self.tool_calls[call_id].status = "timed_out"
+                return error_result(
+                    "client-tool-timeout",
+                    f"client tool {name} timed out after {timeout_sec:g}s",
+                )
             if message is None:
+                self.tool_calls[call_id].status = "failed"
                 return {
                     "ok": False,
                     "error": {"code": "client-disconnected", "message": name},
