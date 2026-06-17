@@ -1,10 +1,11 @@
-"""Portable ledger bundles."""
+"""Portable turn-history bundles."""
 
 from __future__ import annotations
 
 from typing import Any
 
 from zeta.events import Event, timestamp_micros_from_time
+from zeta.history import HistoryIndex
 from zeta.trace import (
     Derivation,
     Object,
@@ -14,9 +15,8 @@ from zeta.trace import (
     zeta_sqlite_path,
 )
 
-from .ledger import LedgerIndex, ledger_index
 from .protocols import is_effect_record, is_turn_record
-from .state import sigil_event_store
+from .state import history_index, sigil_event_store
 
 BUNDLE_VERSION = 1
 
@@ -27,7 +27,7 @@ def export_bundle(
     session: str | None = None,
 ) -> dict[str, Any]:
     """Collect matching turns, their effects, and their trace closures."""
-    index = ledger_index()
+    index = history_index()
     records: list[dict[str, Any]] = []
     turn_ids_by_session: dict[str, list[str]] = {}
     for turn in index.query_turns(session=session, since=since):
@@ -51,7 +51,7 @@ def exported_session_graph(
     """Export one session's closure for the given turns, or None.
 
     A session whose trace store is gone (cleared, or never recorded)
-    still exports its ledger records; only the graph section is absent.
+    still exports its history records; only the graph section is absent.
     """
     try:
         available = available_session_ids()
@@ -92,14 +92,10 @@ def exported_session_graph(
 
 
 def import_bundle(payload: dict[str, Any]) -> dict[str, int]:
-    """Import a bundle, returning records/objects/sessions counts.
-
-    Already-indexed records are skipped, so re-importing the same
-    bundle neither bloats the event journal nor changes any answer.
-    """
+    """Import a bundle, returning records/objects/sessions counts."""
     if payload.get("sigil_bundle") != BUNDLE_VERSION:
         raise ValueError(f"not a sigil bundle (expected version {BUNDLE_VERSION})")
-    records = import_ledger_records(ledger_index(), payload.get("records") or [])
+    records = import_history_records(history_index(), payload.get("records") or [])
     objects = 0
     sessions = payload.get("sessions") or {}
     for session_id, graph in sessions.items():
@@ -107,25 +103,38 @@ def import_bundle(payload: dict[str, Any]) -> dict[str, int]:
     return {"records": records, "objects": objects, "sessions": len(sessions)}
 
 
-def import_ledger_records(
-    index: LedgerIndex,
+def import_history_records(
+    index: HistoryIndex,
     records: list[dict[str, Any]],
 ) -> int:
-    """Import new turn records and effect projection rows."""
+    """Import new turn/effect records."""
     imported = 0
+    imported_turn_ids: set[str] = set()
+    imported_effect_ids: set[str] = set()
     for record in records:
-        if not isinstance(record, dict) or not new_ledger_record(index, record):
+        if not isinstance(record, dict):
+            continue
+        if is_turn_record(record):
+            record_id = str(record.get("turn_id") or "")
+            if record_id in imported_turn_ids or not new_history_record(index, record):
+                continue
+            imported_turn_ids.add(record_id)
+        elif is_effect_record(record):
+            record_id = str(record.get("effect_id") or "")
+            if record_id in imported_effect_ids or not new_history_record(
+                index, record
+            ):
+                continue
+            imported_effect_ids.add(record_id)
+        else:
             continue
         if is_effect_record(record):
-            index.index_effect_record(
-                record,
-                timestamp=float(record.get("time") or 0.0),
-                session_id=(
-                    str(record["session"])
-                    if isinstance(record.get("session"), str)
-                    else None
-                ),
-            )
+            event = event_from_effect_record(record)
+            store = sigil_event_store()
+            try:
+                store.append(event)
+            finally:
+                store.close()
         else:
             event = event_from_record(record)
             store = sigil_event_store()
@@ -133,9 +142,33 @@ def import_ledger_records(
                 store.append(event)
             finally:
                 store.close()
-            index.index_event(event)
         imported += 1
     return imported
+
+
+def event_from_effect_record(record: dict[str, Any]) -> Event:
+    return Event(
+        id=str(record.get("id") or record["effect_id"]),
+        event_type="zeta.tool.called",
+        source="zeta",
+        payload={
+            "turn_id": record.get("turn_id"),
+            "effects": [record],
+        },
+        idempotency_key=None,
+        caused_by=(
+            str(record["caused_by"])
+            if isinstance(record.get("caused_by"), str)
+            else None
+        ),
+        session_id=(
+            str(record["session"]) if isinstance(record.get("session"), str) else None
+        ),
+        turn_id=(
+            str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
+        ),
+        timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
+    )
 
 
 def event_from_record(record: dict[str, Any]) -> Event:
@@ -165,7 +198,7 @@ def event_from_record(record: dict[str, Any]) -> Event:
     )
 
 
-def new_ledger_record(index: LedgerIndex, record: dict[str, Any]) -> bool:
+def new_history_record(index: HistoryIndex, record: dict[str, Any]) -> bool:
     """Return whether a record is an importable, not-yet-indexed one."""
     if is_turn_record(record):
         return index.turn(str(record.get("turn_id") or "")) is None

@@ -51,7 +51,7 @@ from .protocols import (
 from .session import session_id
 from .state import append_prompt_submitted_event
 from .tools import ensure_builtin_tools_registered
-from .turn import TurnLedger
+from .turn import TurnRecorder
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
@@ -106,7 +106,7 @@ class TurnEventRecorder:
     Subclasses set ``tag_fields``/``strip_fields`` for timeline tagging and
     override ``handle_tool_call``/``handle_tool_result`` for workflow behavior.
     ``handle_tool_result`` may return an exit status; the last one wins.
-    A ledger, when given, tags every persisted event with the turn id and
+    A turn recorder, when given, tags every persisted event with the turn id and
     receives tool results for effect recording.
     """
 
@@ -118,12 +118,12 @@ class TurnEventRecorder:
         renderer: TurnRenderer,
         *,
         render_output: TextIO,
-        ledger: TurnLedger | None = None,
+        turn_recorder: TurnRecorder | None = None,
         runtime_context: ZetaContext,
     ) -> None:
         self.renderer = renderer
         self.render_output = render_output
-        self.ledger = ledger
+        self.turn_recorder = turn_recorder
         self.runtime_context = runtime_context
         self.recorded_event_ids: set[int] = set()
         self.status: int | None = None
@@ -141,11 +141,11 @@ class TurnEventRecorder:
 
     def record_event(self, event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "")
-        if event_type == "tool_result" and self.ledger is not None:
-            self.ledger.attach_tool_result_effect(event)
+        if event_type == "tool_result" and self.turn_recorder is not None:
+            self.turn_recorder.attach_tool_result_effect(event)
         persisted = self.persist(event_type, event)
-        if self.ledger is not None:
-            self.ledger.note_runtime_event(persisted)
+        if self.turn_recorder is not None:
+            self.turn_recorder.note_runtime_event(persisted)
         if event_type == "tool_call":
             params = persisted.get("input")
             self.handle_tool_call(
@@ -165,8 +165,8 @@ class TurnEventRecorder:
             for key, value in event.items()
             if key != "type" and key not in self.strip_fields
         }
-        if self.ledger is not None:
-            fields["turn_id"] = self.ledger.turn_id
+        if self.turn_recorder is not None:
+            fields["turn_id"] = self.turn_recorder.turn_id
         return record_zeta_event(
             event_type,
             runtime_context=self.runtime_context,
@@ -269,7 +269,7 @@ def run_zeta_rpc_session(
         tool_registry=runtime_context.tool_registry,
     )
     execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
-    ledger = TurnLedger(
+    turn_recorder = TurnRecorder(
         runtime_context=runtime_context,
         workflow=workflow,
         objective=objective,
@@ -289,22 +289,22 @@ def run_zeta_rpc_session(
             "content": objective,
             "workflow": workflow,
             "runtime": "zeta-rpc",
-            "turn_id": ledger.turn_id,
+            "turn_id": turn_recorder.turn_id,
             "available_tools": list(enabled_tools),
         },
         runtime_context=runtime_context,
     )
-    ledger.note_root_event(user_event)
+    turn_recorder.note_root_event(user_event)
     append_prompt_submitted_event(user_event)
     publish_event(user_event)
 
     def sink(event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "")
         if event_type == "tool_result":
-            ledger.attach_tool_result_effect(event)
-        event["turn_id"] = ledger.turn_id
+            turn_recorder.attach_tool_result_effect(event)
+        event["turn_id"] = turn_recorder.turn_id
         persisted = record_event(event, runtime_context=runtime_context)
-        ledger.note_runtime_event(persisted)
+        turn_recorder.note_runtime_event(persisted)
         publish_event(persisted)
 
     try:
@@ -341,20 +341,20 @@ def run_zeta_rpc_session(
             event_sink=sink,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
-            caused_by=ledger.root_event_id,
+            caused_by=turn_recorder.root_event_id,
         )
     except AgentTurnAborted as error:
-        ledger.add_model_calls(error.result.model_telemetry_calls)
+        turn_recorder.add_model_calls(error.result.model_telemetry_calls)
         abort_event = error.result.events[-1] if error.event_recorded else None
         if isinstance(abort_event, dict):
-            ledger.note_runtime_event(abort_event)
-        turn = ledger.finish(
+            turn_recorder.note_runtime_event(abort_event)
+        turn = turn_recorder.finish(
             TURN_OUTCOME_ABORTED,
             prompt_traces=error.result.prompt_traces,
         )
         publish_event(turn)
         return {
-            "turn_id": ledger.turn_id,
+            "turn_id": turn_recorder.turn_id,
             "session_id": session_id(),
             "outcome": TURN_OUTCOME_ABORTED,
             "final_text": "",
@@ -364,11 +364,11 @@ def run_zeta_rpc_session(
             error,
             runtime_context=runtime_context,
             workflow=workflow,
-            caused_by=ledger.causal_parent_event_id(),
+            caused_by=turn_recorder.causal_parent_event_id(),
             reason="keyboard_interrupt",
         )
-        ledger.note_runtime_event(abort_event)
-        turn = ledger.finish(TURN_OUTCOME_ABORTED)
+        turn_recorder.note_runtime_event(abort_event)
+        turn = turn_recorder.finish(TURN_OUTCOME_ABORTED)
         publish_event(turn)
         raise
     except RuntimeError as error:
@@ -376,23 +376,25 @@ def run_zeta_rpc_session(
             error,
             runtime_context=runtime_context,
             workflow=workflow,
-            caused_by=ledger.causal_parent_event_id(),
+            caused_by=turn_recorder.causal_parent_event_id(),
         )
-        ledger.note_runtime_event(abort_event)
-        turn = ledger.finish(TURN_OUTCOME_ABORTED)
+        turn_recorder.note_runtime_event(abort_event)
+        turn = turn_recorder.finish(TURN_OUTCOME_ABORTED)
         publish_event(turn)
         raise
-    ledger.add_model_calls(result.model_telemetry_calls)
+    turn_recorder.add_model_calls(result.model_telemetry_calls)
     if result.staged_effect is not None:
         outcome = TURN_OUTCOME_STAGED
     elif result.final_text:
-        outcome = TURN_OUTCOME_EXECUTED if ledger.effect_ids else TURN_OUTCOME_ANSWERED
+        outcome = (
+            TURN_OUTCOME_EXECUTED if turn_recorder.effect_ids else TURN_OUTCOME_ANSWERED
+        )
     else:
         outcome = TURN_OUTCOME_FAILED
-    turn = ledger.finish(outcome, prompt_traces=result.prompt_traces)
+    turn = turn_recorder.finish(outcome, prompt_traces=result.prompt_traces)
     publish_event(turn)
     return {
-        "turn_id": ledger.turn_id,
+        "turn_id": turn_recorder.turn_id,
         "session_id": session_id(),
         "outcome": outcome,
         "final_text": result.final_text,

@@ -9,10 +9,9 @@ from _zeta_helpers import write_models_config
 from click.testing import CliRunner
 
 from sigil.cli import cli
-from sigil.ledger import ledger_index
 from sigil.protocols import effect_record, turn_contract, turn_record
 from sigil.session import record_turn
-from sigil.state import append_event, session_dir
+from sigil.state import append_effect_record, append_event, session_dir
 from sigil.status import current_status, format_status
 from zeta.models import set_active_model_profile
 
@@ -124,29 +123,24 @@ def test_status_cli_is_public_surface() -> None:
 def test_status_reports_last_delegation_and_today_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("SIGIL_SESSION_ID", "status-ledger")
-    index = ledger_index()
-    index.index_event(
-        append_event(
-            turn_record(
-                "turn-do-1111",
-                workflow="do",
-                objective="refactor the staging path",
-                contract=turn_contract("do", ("edit",), staged=False),
-                outcome="executed",
-                cost={"input_tokens": 1000, "output_tokens": 200, "model_calls": 3},
-            )
+    monkeypatch.setenv("SIGIL_SESSION_ID", "status-history")
+    append_event(
+        turn_record(
+            "turn-do-1111",
+            workflow="do",
+            objective="refactor the staging path",
+            contract=turn_contract("do", ("edit",), staged=False),
+            outcome="executed",
+            cost={"input_tokens": 1000, "output_tokens": 200, "model_calls": 3},
         )
     )
-    index.index_event(
-        append_event(
-            turn_record(
-                "turn-run-2222",
-                workflow="run",
-                objective="ls",
-                contract=turn_contract("run", (), staged=False),
-                outcome="executed",
-            )
+    append_event(
+        turn_record(
+            "turn-run-2222",
+            workflow="run",
+            objective="ls",
+            contract=turn_contract("run", (), staged=False),
+            outcome="executed",
         )
     )
 
@@ -164,8 +158,6 @@ def test_status_reports_pending_staged_handoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-pending")
-    from sigil.ledger import append_effect_record
-
     append_effect_record(
         effect_record(
             "effect-staged",
@@ -187,7 +179,7 @@ def test_status_reports_pending_staged_handoff(
     assert result.exit_code == 0
 
 
-def test_status_omits_ledger_lines_for_quiet_sessions(
+def test_status_omits_history_lines_for_quiet_sessions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-quiet")
@@ -199,19 +191,16 @@ def test_status_omits_ledger_lines_for_quiet_sessions(
     assert "today:" not in rendered
 
 
-def test_status_json_carries_ledger_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_json_carries_history_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-json")
-    index = ledger_index()
-    index.index_event(
-        append_event(
-            turn_record(
-                "turn-ask-1",
-                workflow="ask",
-                objective="why?",
-                contract=turn_contract("ask", (), staged=False),
-                outcome="answered",
-                cost={"input_tokens": 10, "output_tokens": 5, "model_calls": 1},
-            )
+    append_event(
+        turn_record(
+            "turn-ask-1",
+            workflow="ask",
+            objective="why?",
+            contract=turn_contract("ask", (), staged=False),
+            outcome="answered",
+            cost={"input_tokens": 10, "output_tokens": 5, "model_calls": 1},
         )
     )
 

@@ -5,8 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from sigil.ledger import close_ledger_indexes
-
 
 @pytest.fixture(autouse=True)
 def isolate_sigil_state(
@@ -27,4 +25,3 @@ def isolate_sigil_state(
     monkeypatch.delenv("SIGIL_SESSION_DIR", raising=False)
     monkeypatch.delenv("SIGIL_SESSION_ID", raising=False)
     yield
-    close_ledger_indexes()

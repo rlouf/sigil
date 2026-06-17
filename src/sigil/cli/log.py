@@ -1,4 +1,4 @@
-"""The `log` group: queries over the delegation ledger."""
+"""The `log` group: queries over turn/effect history."""
 
 from __future__ import annotations
 
@@ -53,19 +53,21 @@ def cmd_log(
     show_cost: bool,
     json_output: bool,
 ) -> int:
-    """List ledger turns across every session, newest first.
+    """List recorded turns across every session, newest first.
 
-    Every delegation and recorded shell command is one ledger turn;
-    --session narrows to one shell. Subcommands query deeper; `sigil
-    events` stays the raw event view underneath.
+    Every delegation and recorded shell command is one turn; --session narrows
+    to one shell. Subcommands query deeper; `sigil events` stays the raw event
+    view underneath.
     """
     if ctx.invoked_subcommand is not None:
         return 0
     # Imported lazily: `sigil.cli` must stay light at import time.
-    from ..display.summarize import format_turn_line
-    from ..ledger import ledger_index, touched_path_variants
+    from zeta.history import touched_path_variants
 
-    turns = ledger_index().query_turns(
+    from ..display.summarize import format_turn_line
+    from ..state import history_index
+
+    turns = history_index().query_turns(
         session=session_filter,
         workflow=workflow,
         since=since_epoch(since) if since else None,
@@ -92,7 +94,7 @@ def cmd_log(
 
 def since_epoch(value: str) -> float:
     """Parse a --since value, mapping parse errors onto CLI errors."""
-    from ..ledger import parse_since
+    from zeta.history import parse_since
 
     try:
         return parse_since(value)
@@ -123,12 +125,7 @@ def cmd_log_export(
     session_filter: str | None,
     output_path: str | None,
 ) -> int:
-    """Export turns and their trace closures as a portable bundle.
-
-    The bundle is self-contained JSON: ledger records plus each turn's
-    prompt and tool-result objects, ready for `sigil log import` on
-    another machine.
-    """
+    """Export turns and their trace closures as a portable bundle."""
     import json
 
     from ..bundle import export_bundle
@@ -164,13 +161,7 @@ def cmd_log_export(
     type=click.Path(exists=True, dir_okay=False),
 )
 def cmd_log_import(bundle_file: str) -> int:
-    """Import a bundle produced by `sigil log export`.
-
-    Records land in the global event journal and index; trace objects land
-    in per-session stores, so log/blame/trace queries answer here too.
-    Re-importing a bundle is a no-op, and imported turns survive
-    `sigil log reindex`.
-    """
+    """Import a bundle produced by `sigil log export`."""
     import json
     from pathlib import Path
 
@@ -194,20 +185,6 @@ def cmd_log_import(bundle_file: str) -> int:
 
 
 @cmd_log.command(
-    "reindex",
-    epilog=examples("sigil log reindex"),
-)
-def cmd_log_reindex() -> int:
-    """Rebuild the derived ledger projection from the event store."""
-    # Imported lazily: `sigil.cli` must stay light at import time.
-    from ..ledger import ledger_index, reindex
-
-    turns, effects = reindex(ledger_index())
-    click.echo(f"indexed {turns} turn record(s), {effects} effect record(s)")
-    return 0
-
-
-@cmd_log.command(
     "show",
     epilog=examples("sigil log show 4f9d01c2"),
 )
@@ -220,9 +197,9 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
     `sigil trace show`. TURN_ID may be a full id or a unique prefix.
     """
     from ..display.summarize import render_turn_record
-    from ..ledger import ledger_index
+    from ..state import history_index
 
-    index = ledger_index()
+    index = history_index()
     resolved = resolve_cli_turn_id(index, turn_id)
     turn = index.turn(resolved)
     if turn is None:
@@ -252,9 +229,11 @@ def cmd_blame(file: str) -> int:
     hashes. Bash commands record what ran, not which files it touched —
     find those with `sigil log` and the command text.
     """
-    from ..ledger import ledger_index, touched_path_variants
+    from zeta.history import touched_path_variants
 
-    index = ledger_index()
+    from ..state import history_index
+
+    index = history_index()
     effects: list[dict[str, Any]] = []
     seen: set[str] = set()
     for path in touched_path_variants(file):
@@ -276,7 +255,7 @@ def cmd_blame(file: str) -> int:
 
 def resolve_cli_turn_id(index: Any, token: str) -> str:
     """Resolve a turn id token, mapping resolver errors onto CLI errors."""
-    from ..ledger import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
+    from zeta.history import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
 
     try:
         return resolve_turn_id(index, token)

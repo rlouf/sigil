@@ -132,6 +132,13 @@ def read_events() -> list[Event]:
         store.close()
 
 
+def history_index(events: list[Event] | None = None) -> Any:
+    """Return a Zeta history view over Sigil's durable events."""
+    from zeta.history import HistoryIndex
+
+    return HistoryIndex(read_events() if events is None else events)
+
+
 def event_children(event_id: str, *, limit: int | None = None) -> list[Event]:
     store = sigil_event_store()
     try:
@@ -212,6 +219,37 @@ def append_prompt_submitted_event(event: dict[str, Any]) -> Event:
     prompt_event = dict(event)
     prompt_event["type"] = "sigil.prompt.submitted"
     return append_event(prompt_event)
+
+
+def append_turn_record(record: dict[str, Any]) -> Event:
+    """Append one durable turn record."""
+    from .protocols import turn_event_type
+
+    return append_event(
+        {
+            **record,
+            "type": turn_event_type(str(record.get("outcome") or "")),
+        }
+    )
+
+
+def append_effect_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Append one durable tool-effect event and return its history record."""
+    from zeta.history import effect_event_record, event_time
+
+    event = append_event(
+        {
+            "type": "zeta.tool.called",
+            "turn_id": record.get("turn_id"),
+            "effects": [record],
+        }
+    )
+    return effect_event_record(
+        record,
+        timestamp=event_time(event),
+        session_id=event.session_id or session_id(),
+        cwd=event.payload.get("cwd"),
+    )
 
 
 class DurableEventConstructors:

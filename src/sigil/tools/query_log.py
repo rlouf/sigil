@@ -1,4 +1,4 @@
-"""Query-log tool implementation: read the delegation ledger."""
+"""Query-log tool implementation: read turn/effect history."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from zeta.tools.base import ToolSpec, error_result
 
 if TYPE_CHECKING:
-    from ..ledger import LedgerIndex
+    from zeta.history import HistoryIndex
 
 DEFAULT_TURNS = 20
 MAX_TURNS = 50
@@ -63,7 +63,7 @@ SCHEMA: dict[str, Any] = {
 SPEC = ToolSpec(
     "query_log",
     (
-        "Query the user's delegation ledger: what ran, in which workflow, "
+        "Query the user's turn history: what ran, in which workflow, "
         "what it touched, what it cost, and how it ended. Searches every "
         "session by default. Cite the returned turn ids in your answer. "
         "Pass turn_id to expand one record."
@@ -77,11 +77,12 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily: the registry imports every tool module, and the
     # display layer reaches back into zeta.prompt — a module-level import
     # here closes that loop into a cycle.
-    from ..display.summarize import format_turn_line
-    from ..ledger import ledger_index, parse_since, touched_path_variants
-    from ..state import session_id
+    from zeta.history import parse_since, touched_path_variants
 
-    index = ledger_index()
+    from ..display.summarize import format_turn_line
+    from ..state import history_index, session_id
+
+    index = history_index()
     turn_token = str(params.get("turn_id") or "")
     if turn_token:
         return run_expand(index, turn_token)
@@ -125,9 +126,10 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_expand(index: LedgerIndex, token: str) -> dict[str, Any]:
+def run_expand(index: HistoryIndex, token: str) -> dict[str, Any]:
+    from zeta.history import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
+
     from ..display.summarize import render_turn_record
-    from ..ledger import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
 
     try:
         resolved = resolve_turn_id(index, token)

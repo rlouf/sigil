@@ -243,6 +243,8 @@ def run_ripgrep(pattern: str, path: str, limit: int) -> GrepResult:
                 "--with-filename",
                 "--color",
                 "never",
+                "--sort",
+                "path",
                 pattern,
                 path,
             ],

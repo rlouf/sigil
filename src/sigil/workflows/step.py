@@ -53,7 +53,7 @@ from ..protocols import (
 )
 from ..state import append_prompt_submitted_event
 from ..tools import ensure_builtin_tools_registered
-from ..turn import TurnLedger
+from ..turn import TurnRecorder
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]
@@ -122,7 +122,7 @@ def step(
         allowed_tools,
         tool_registry=runtime_context.tool_registry,
     )
-    ledger = TurnLedger(
+    turn_recorder = TurnRecorder(
         runtime_context=runtime_context,
         workflow=workflow,
         objective=objective,
@@ -142,13 +142,13 @@ def step(
         "runtime": "zeta",
         "system": system_prompt(system, allowed_tools=enabled_tools),
         "available_tools": list(enabled_tools),
-        "turn_id": ledger.turn_id,
+        "turn_id": turn_recorder.turn_id,
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
     prompt_event = record_event(user_event, runtime_context=runtime_context)
     append_prompt_submitted_event(prompt_event)
-    ledger.note_root_event(prompt_event)
+    turn_recorder.note_root_event(prompt_event)
     context = load_project_context()
     renderer = build_turn_renderer(output, objective=objective)
     recorder = AgentStepEventRecorder(
@@ -157,7 +157,7 @@ def step(
         handoff_path=handoff_path,
         handoff_output=handoff_output,
         render_output=output,
-        ledger=ledger,
+        turn_recorder=turn_recorder,
         runtime_context=runtime_context,
     )
     context_footer = renderer.context_footer
@@ -195,12 +195,12 @@ def step(
             stream_sink=renderer.stream_renderer,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
-            caused_by=ledger.root_event_id,
+            caused_by=turn_recorder.root_event_id,
         )
     except AgentTurnAborted as error:
         recorder.replay(error.result)
-        ledger.add_model_calls(error.result.model_telemetry_calls)
-        turn = ledger.finish(
+        turn_recorder.add_model_calls(error.result.model_telemetry_calls)
+        turn = turn_recorder.finish(
             TURN_OUTCOME_ABORTED,
             prompt_traces=error.result.prompt_traces,
         )
@@ -213,11 +213,11 @@ def step(
             error,
             runtime_context=runtime_context,
             workflow=workflow,
-            caused_by=ledger.causal_parent_event_id(),
+            caused_by=turn_recorder.causal_parent_event_id(),
             reason="keyboard_interrupt",
         )
-        ledger.note_runtime_event(abort_event)
-        turn = ledger.finish(TURN_OUTCOME_ABORTED)
+        turn_recorder.note_runtime_event(abort_event)
+        turn = turn_recorder.finish(TURN_OUTCOME_ABORTED)
         finalize_progress(renderer, turn)
         raise
     except RuntimeError as error:
@@ -225,14 +225,14 @@ def step(
             error,
             runtime_context=runtime_context,
             workflow=workflow,
-            caused_by=ledger.causal_parent_event_id(),
+            caused_by=turn_recorder.causal_parent_event_id(),
         )
-        ledger.note_runtime_event(abort_event)
-        turn = ledger.finish(TURN_OUTCOME_ABORTED)
+        turn_recorder.note_runtime_event(abort_event)
+        turn = turn_recorder.finish(TURN_OUTCOME_ABORTED)
         finalize_progress(renderer, turn)
         raise
     recorder.replay(result)
-    ledger.add_model_calls(result.model_telemetry_calls)
+    turn_recorder.add_model_calls(result.model_telemetry_calls)
     status = recorder.status
     if status is not None:
         record_agent_model_telemetry(
@@ -241,7 +241,9 @@ def step(
             prompt_traces=result.prompt_traces,
             runtime_context=runtime_context,
         )
-        turn = ledger.finish(TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces)
+        turn = turn_recorder.finish(
+            TURN_OUTCOME_STAGED, prompt_traces=result.prompt_traces
+        )
         finalize_progress(renderer, turn)
         if context_footer is not None:
             context_footer.finalize(result.model_telemetry)
@@ -255,8 +257,10 @@ def step(
             prompt_traces=result.prompt_traces,
             runtime_context=runtime_context,
         )
-        turn = ledger.finish(
-            TURN_OUTCOME_EXECUTED if ledger.effect_ids else TURN_OUTCOME_ANSWERED,
+        turn = turn_recorder.finish(
+            TURN_OUTCOME_EXECUTED
+            if turn_recorder.effect_ids
+            else TURN_OUTCOME_ANSWERED,
             prompt_traces=result.prompt_traces,
         )
         if context_footer is not None:
@@ -270,7 +274,7 @@ def step(
         if context_footer is not None:
             context_footer.finalize(result.model_telemetry)
         return 0
-    turn = ledger.finish(TURN_OUTCOME_FAILED, prompt_traces=result.prompt_traces)
+    turn = turn_recorder.finish(TURN_OUTCOME_FAILED, prompt_traces=result.prompt_traces)
     finalize_progress(renderer, turn)
     print("Zeta stopped without a final answer.", file=sys.stderr)
     return 1
@@ -287,13 +291,13 @@ class AgentStepEventRecorder(TurnEventRecorder):
         handoff_path: str | Path | None,
         handoff_output: HandoffOutput,
         render_output: TextIO,
-        ledger: TurnLedger | None = None,
+        turn_recorder: TurnRecorder | None = None,
         runtime_context: ZetaContext,
     ) -> None:
         super().__init__(
             renderer,
             render_output=render_output,
-            ledger=ledger,
+            turn_recorder=turn_recorder,
             runtime_context=runtime_context,
         )
         self.tag_fields = {"workflow": workflow}

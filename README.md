@@ -269,8 +269,8 @@ starting any process, and the CLI folds the spool in the next time any
 space is not recorded, and `SIGIL_RECORD=0` turns recording off; secrets
 typed into command arguments are exposed exactly as they are in
 `~/.zsh_history`, and the same escape hatches apply. Recording feeds the
-session log and the delegation ledger; prompts sent to the model only ever
-include a bounded window of recent commands.
+session log and turn history; prompts sent to the model only ever include a
+bounded window of recent commands.
 
 ## Glyph Reference
 
@@ -390,7 +390,7 @@ The glyphs are thin shell functions over a regular CLI:
 sigil ask [QUESTION]
 sigil status [--json]
 sigil log [--touched PATH] [--workflow W] [--since T] [--failed] [--session ID] [--cost] [--json]
-sigil log [show|reindex|export|import]
+sigil log [show|export|import]
 sigil blame FILE
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear|transcript] [--json]
@@ -444,15 +444,12 @@ how they resolved.
 Plain shell commands and `+` runs are recorded as `run` turns with a
 command effect.
 
-The ledger is also indexed into projection tables inside `events.sqlite3`: a
-derived SQLite view (`turns` and `effects`) written as records are appended and
-rebuildable at any time with `sigil log reindex`. Agent turns are
-additionally bridged into the session's trace graph as `turn` objects
-linking the prompts the model saw and the tool results behind each
-effect; the `turn/<turn_id>` ref makes them addressable through `sigil
-trace show`. Clearing a session removes its continuity files and
-trace store; the ledger index and event store are global and survive
-`sigil session clear`.
+History queries are derived from those durable events. Agent turns are also
+bridged into the session's trace graph as `turn` objects linking the prompts
+the model saw and the tool results behind each effect; the `turn/<turn_id>`
+ref makes them addressable through `sigil trace show`. Clearing a session
+removes its continuity files and trace store; the event store is global and
+survives `sigil session clear`.
 
 Installed zsh bindings set `SIGIL_SESSION_ID` once when the shell starts
 and tie it to the terminal's pty, so separate terminal windows — including
@@ -472,10 +469,9 @@ sigil events
 sigil events trace EVENT_ID
 sigil events descendants EVENT_ID
 sigil events turn TURN_ID
-sigil log reindex
 ```
 
-The ledger is the query surface over that record. `sigil log` lists
+The history view is the query surface over that record. `sigil log` lists
 your turns across every session newest first, each line carrying its
 session id (`--session ID` narrows to one shell and drops the column;
 `--touched PATH`, `--workflow`, `--since 2d`, `--failed`, and `--cost`
@@ -486,7 +482,7 @@ model, cost, effects with content hashes, and the prompt ids that feed
 or edited a file through the write/edit tools, with its objective and
 prompt ids; bash commands record what ran rather than which files they
 touched, so they appear in `sigil log`, not in blame. `?` reads the same
-ledger: it shows the last delegation outcome, a pending staged command,
+history: it shows the last delegation outcome, a pending staged command,
 and today's session cost next to the active model.
 
 ```sh
@@ -498,20 +494,20 @@ sigil log show 4f9d01c2
 `sigil events` stays the raw event view underneath all of this. Its `trace`,
 `root`, `descendants`, and `turn` subcommands inspect event causality directly.
 
-The ledger is also the unit of exchange. `sigil log export` writes a
+Turn history is also the unit of exchange. `sigil log export` writes a
 self-contained JSON bundle — the matching turn and effect records plus
 each turn's full trace closure (prompts, components, tool results,
 with their derivations and `turn/<id>` refs) — and `sigil log import`
-restores it on another machine: records join the global event journal (so
-they survive `log reindex`), objects land in per-session trace stores,
-and every query above answers there too. Re-importing is a no-op.
+restores it on another machine: records join the global event journal,
+objects land in per-session trace stores, and every query above answers there
+too. Re-importing is a no-op.
 
 ```sh
 sigil log export --since 2026-06-01 -o week.json
 sigil log import week.json
 ```
 
-The ask workflow can read the ledger too: `,` carries a read-only
+The ask workflow can read history too: `,` carries a read-only
 `query_log` tool, so `, what did I delegate yesterday?` answers from
 your real delegation history and cites turn ids you can check with
 `sigil log show`. The tool searches every session by default and never

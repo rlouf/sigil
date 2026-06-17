@@ -23,7 +23,6 @@ from .failure import (
     record_failure,
     truncate_snippet,
 )
-from .ledger import append_effect_record, append_turn_record
 from .protocols import (
     EFFECT_KIND_COMMAND,
     TURN_OUTCOME_EXECUTED,
@@ -33,7 +32,9 @@ from .protocols import (
     turn_record,
 )
 from .state import (
+    append_effect_record,
     append_jsonl_line,
+    append_turn_record,
     event_store_path,
     read_events,
     read_jsonl,
@@ -339,7 +340,7 @@ def record_turn(
     if stderr_text:
         entry["stderr_snippet"] = stderr_text
     _append_recent_turn(entry)
-    record_run_ledger(command, status, turn_cwd, duration_ms)
+    record_run_history(command, status, turn_cwd, duration_ms)
 
     if status != 0:
         record_failure(
@@ -351,7 +352,7 @@ def record_turn(
         )
 
 
-def record_run_ledger(
+def record_run_history(
     command: str,
     status: int,
     cwd: str,

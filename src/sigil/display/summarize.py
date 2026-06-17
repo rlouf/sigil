@@ -292,7 +292,7 @@ def format_turn_line(
     show_cost: bool,
     show_session: bool = False,
 ) -> str:
-    """Format one ledger turn as a log listing line."""
+    """Format one turn history record as a log listing line."""
     turn_id = str(turn.get("turn_id") or "")[:8]
     when = format_turn_time(turn.get("time"))
     workflow = str(turn.get("workflow") or "?")

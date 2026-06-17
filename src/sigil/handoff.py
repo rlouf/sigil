@@ -8,7 +8,6 @@ from typing import Any, cast
 from zeta.timeline import current_timeline, record_event
 from zeta.tools.base import proposed_effect
 
-from .ledger import append_effect_record
 from .protocols import (
     EFFECT_KIND_HANDOFF,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
@@ -23,6 +22,7 @@ from .protocols import (
     is_shell_prompt_handoff,
 )
 from .session import event_time, recent_turns
+from .state import append_effect_record
 
 
 def append_shell_result() -> dict[str, Any]:
@@ -82,7 +82,7 @@ def record_handoff_effect(
     handoff: dict[str, Any],
     result: dict[str, Any],
 ) -> None:
-    """Append the ledger effect linking a staged handoff to what actually ran."""
+    """Append the turn effect linking a staged handoff to what actually ran."""
     command = str(
         result.get("executed_command") or result.get("expected_command") or ""
     )

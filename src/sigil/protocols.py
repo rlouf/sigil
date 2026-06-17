@@ -123,7 +123,7 @@ def turn_record(
     prompt_object_ids: Iterable[str] = (),
     effect_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """Return one ledger turn record; the event envelope adds time/cwd/session."""
+    """Return one turn history record; the event envelope adds time/cwd/session."""
     record: dict[str, Any] = {
         "type": turn_event_type(outcome),
         "schema": TURN_RECORD_SCHEMA,
@@ -157,7 +157,7 @@ def effect_record(
     tool_call_id: str | None = None,
     resolved_outcome: str | None = None,
 ) -> dict[str, Any]:
-    """Return one ledger effect record; unset optional facts are omitted."""
+    """Return one turn effect record; unset optional facts are omitted."""
     record: dict[str, Any] = {
         "type": EFFECT_RECORD_TYPE,
         "schema": EFFECT_RECORD_SCHEMA,
@@ -181,10 +181,10 @@ def effect_record(
 
 
 def is_turn_record(value: object) -> bool:
-    """Return whether a value is a ledger turn record."""
+    """Return whether a value is a turn history record."""
     return _has_schema(value, TURN_RECORD_SCHEMA)
 
 
 def is_effect_record(value: object) -> bool:
-    """Return whether a value is a ledger effect record."""
+    """Return whether a value is a turn effect record."""
     return _has_schema(value, EFFECT_RECORD_SCHEMA)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -9,13 +10,13 @@ from typing import Any, Literal
 
 from zeta.models import resolve_active_model
 
-from .ledger import ledger_index, warn_ledger_failure_once
 from .session import latest_active_failure
-from .state import session_id
+from .state import history_index, session_id
 
 StatusState = Literal["clean", "attention"]
 DELEGATION_WORKFLOWS = ("ask", "propose", "do")
-LEDGER_SCAN_LIMIT = 50
+HISTORY_SCAN_LIMIT = 50
+LOGGER = logging.getLogger("sigil.status")
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ def current_status() -> Status:
     current_session = session_id()
     cwd = os.getcwd()
     model = active_model_fields()
-    last_turn, pending, today = ledger_status_fields(current_session)
+    last_turn, pending, today = history_status_fields(current_session)
 
     failure = latest_active_failure()
     if failure is not None:
@@ -122,13 +123,13 @@ def active_model_fields() -> dict[str, str]:
     return fields
 
 
-def ledger_status_fields(
+def history_status_fields(
     current_session: str,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, int]]:
-    """Read the session's ledger facts, failing open to empty values."""
+    """Read the session's history facts, failing open to empty values."""
     try:
-        index = ledger_index()
-        turns = index.query_turns(session=current_session, limit=LEDGER_SCAN_LIMIT)
+        index = history_index()
+        turns = index.query_turns(session=current_session, limit=HISTORY_SCAN_LIMIT)
         last_turn = next(
             (turn for turn in turns if turn.get("workflow") in DELEGATION_WORKFLOWS),
             None,
@@ -136,7 +137,7 @@ def ledger_status_fields(
         pending = index.pending_staged_command(current_session)
         today = index.cost_since(current_session, local_midnight())
     except Exception as exc:
-        warn_ledger_failure_once("status", exc)
+        LOGGER.warning("history query failed for status: %s", exc)
         return None, None, {}
     return last_turn, pending, today
 
@@ -153,7 +154,7 @@ def format_status(status: Status) -> str:
     """Render status as terse human-readable terminal text."""
     if status.state == "clean":
         return "\n".join(
-            ["clean", *ledger_status_lines(status), format_model_line(status.model)]
+            ["clean", *history_status_lines(status), format_model_line(status.model)]
         )
 
     lines = [f"attention: {status.reason}"]
@@ -171,7 +172,7 @@ def format_status(status: Status) -> str:
         lines.extend(["", "next"])
         lines.extend(f"  {action}" for action in status.actions)
 
-    extra = ledger_status_lines(status)
+    extra = history_status_lines(status)
     if extra:
         lines.extend(["", *extra])
         lines.append(format_model_line(status.model))
@@ -180,8 +181,8 @@ def format_status(status: Status) -> str:
     return "\n".join(lines)
 
 
-def ledger_status_lines(status: Status) -> list[str]:
-    """Render the session's ledger facts as status lines."""
+def history_status_lines(status: Status) -> list[str]:
+    """Render the session's history facts as status lines."""
     lines = []
     last = status.last_turn
     if last:

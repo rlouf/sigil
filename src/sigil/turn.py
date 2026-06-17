@@ -1,4 +1,4 @@
-"""Turn ledger bookkeeping and trace linkage."""
+"""Turn history bookkeeping and trace linkage."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from collections.abc import Iterable
 from typing import Any
 
 from zeta.context import ZetaContext
+from zeta.history import history_event_record
 from zeta.timeline import add_event_link
 from zeta.tools.base import proposed_effect
 from zeta.trace import Derivation, Object, PromptTrace, warn_trace_failure_once
 
-from .ledger import append_effect_record, append_turn_record, ledger_event_record
 from .protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_EDIT,
@@ -22,10 +22,11 @@ from .protocols import (
     turn_contract,
     turn_record,
 )
+from .state import append_effect_record, append_turn_record
 
 
-class TurnLedger:
-    """Accumulate one agent turn's ledger facts and append its records.
+class TurnRecorder:
+    """Accumulate one agent turn's history facts and append its records.
 
     Effects are attached to the matching tool result before it is persisted as
     a Zeta tool call event; ``finish`` appends the turn record referencing
@@ -118,7 +119,7 @@ class TurnLedger:
         if caused_by is not None:
             record["caused_by"] = caused_by
         event = append_turn_record(record)
-        payload = ledger_event_record(event)
+        payload = history_event_record(event)
         record_turn_trace_object(
             payload,
             self.effects,
@@ -159,7 +160,7 @@ def record_turn_trace_object(
     The turn object links the prompts the model saw and the tool results
     that evidence its effects, so `graph_closure` walks objective →
     prompt(s) → components → tool results in one pass, and the
-    `turn/<turn_id>` ref makes ledger ids resolve like trace ids.
+    `turn/<turn_id>` ref makes turn ids resolve like trace ids.
     """
     try:
         store = runtime_context.trace_store
@@ -203,7 +204,7 @@ def usage_tokens(usage: dict[str, Any], field_name: str) -> int:
 
 
 def tool_result_effect_fields(name: str, result: Any) -> dict[str, Any] | None:
-    """Map one tool result onto ledger effect fields, or None for no effect."""
+    """Map one tool result onto history effect fields, or None for no effect."""
     if not isinstance(result, dict):
         return None
     metadata = result.get("metadata")
