@@ -26,6 +26,7 @@ from .events import Event, EventCursor, EventReader, Filter
 from .timeline import current_timeline, record_event, timeline_event_from_durable_event
 from .tools.base import (
     EFFECT_KINDS,
+    READ_ONLY_EFFECT_KINDS,
     Capability,
     CapabilityId,
     CapabilityPolicy,
@@ -406,6 +407,137 @@ def client_tool_timeout_sec(item: dict[str, Any]) -> float | None:
     return None
 
 
+def client_tool_provider(item: dict[str, Any], name: str) -> str:
+    provider = item.get("provider")
+    if provider is None:
+        return "rpc"
+    if provider == "rpc":
+        return "rpc"
+    raise RpcError(
+        -32602,
+        "invalid_tool_provider",
+        "Invalid params",
+        {
+            "message": "client tools must use the rpc provider namespace",
+            "tool": name,
+        },
+    )
+
+
+def client_tool_schema(item: dict[str, Any], name: str) -> dict[str, Any]:
+    schema = item.get("schema")
+    if not isinstance(schema, dict):
+        raise RpcError(
+            -32602,
+            "missing_tool_schema",
+            "Invalid params",
+            {
+                "message": f"tool {name!r} must declare a JSON schema",
+                "tool": name,
+            },
+        )
+    try:
+        Draft202012Validator.check_schema(schema)
+    except SchemaError as exc:
+        raise RpcError(
+            -32602,
+            "invalid_tool_schema",
+            "Invalid params",
+            {
+                "message": exc.message,
+                "tool": name,
+            },
+        ) from exc
+    return schema
+
+
+def validate_client_tool_trust(item: dict[str, Any], name: str) -> None:
+    trust = item.get("trust")
+    if trust is None or trust == "client":
+        return
+    raise RpcError(
+        -32602,
+        "invalid_tool_trust",
+        "Invalid params",
+        {
+            "message": "client tools are always registered with client trust",
+            "tool": name,
+        },
+    )
+
+
+def client_tool_aliases(item: dict[str, Any], name: str) -> tuple[str, ...]:
+    aliases = item.get("aliases")
+    if not isinstance(aliases, list):
+        return (name,)
+    normalized = tuple(alias for alias in aliases if isinstance(alias, str) and alias)
+    return normalized or (name,)
+
+
+def client_tool_effects(item: dict[str, Any]) -> tuple[EffectKind, ...]:
+    raw_effects = item.get("effects")
+    if not isinstance(raw_effects, list):
+        return ()
+    return tuple(
+        cast(EffectKind, effect)
+        for effect in raw_effects
+        if isinstance(effect, str) and effect in EFFECT_KINDS
+    )
+
+
+def client_tool_supports_direct(
+    item: dict[str, Any],
+    effects: tuple[EffectKind, ...],
+) -> bool:
+    if "supports_direct" in item:
+        return item.get("supports_direct") is True
+    return bool(effects) and all(effect in READ_ONLY_EFFECT_KINDS for effect in effects)
+
+
+def client_capability_declaration(capability: Capability) -> dict[str, Any]:
+    declaration = capability.spec.metadata()
+    declaration["supports_staging"] = capability.policy.supports_staging
+    declaration["supports_direct"] = capability.policy.supports_direct
+    declaration["trust"] = capability.policy.trust
+    if capability.policy.timeout_seconds is not None:
+        declaration["timeout_sec"] = capability.policy.timeout_seconds
+    return declaration
+
+
+def client_tool_capability(
+    name: str,
+    item: dict[str, Any],
+    *,
+    call_client_tool: Callable[..., dict[str, Any]],
+) -> Capability:
+    provider = client_tool_provider(item, name)
+    schema = client_tool_schema(item, name)
+    validate_client_tool_trust(item, name)
+    effects = client_tool_effects(item)
+    timeout_seconds = client_tool_timeout_sec(item)
+    return Capability(
+        CapabilitySpec(
+            CapabilityId(provider, name),
+            str(item.get("description") or ""),
+            schema,
+            interactive=item.get("interactive") is not False,
+            effects=effects,
+            aliases=client_tool_aliases(item, name),
+        ),
+        CapabilityPolicy(
+            supports_staging=item.get("supports_staging") is True,
+            supports_direct=client_tool_supports_direct(item, effects),
+            trust="client",
+            timeout_seconds=timeout_seconds,
+        ),
+        RpcClientCapabilityExecutor(
+            call_client_tool,
+            name,
+            timeout_seconds=timeout_seconds,
+        ),
+    )
+
+
 def normalized_client_tool_response(
     raw_result: Any,
 ) -> tuple[dict[str, Any], ToolCallStatus]:
@@ -767,7 +899,7 @@ class JsonRpcServer:
             state.cancellation_event.set()
         return {"cancelled": True, "run_id": run_id}
 
-    def register_client_tools(self, tools: Any) -> list[str]:
+    def register_client_tools(self, tools: Any) -> list[dict[str, Any]]:
         if not isinstance(tools, list):
             return []
         registered = []
@@ -777,12 +909,16 @@ class JsonRpcServer:
             name = str(item.get("name") or "")
             if not name:
                 continue
-            self.register_client_tool(name, item)
-            registered.append(name)
+            registered.append(self.register_client_tool(name, item))
         return registered
 
-    def register_client_tool(self, name: str, item: dict[str, Any]) -> None:
-        capability_id = CapabilityId("rpc", name).canonical()
+    def register_client_tool(self, name: str, item: dict[str, Any]) -> dict[str, Any]:
+        capability = client_tool_capability(
+            name,
+            item,
+            call_client_tool=self.call_client_tool,
+        )
+        capability_id = capability.spec.id.canonical()
         existing = self.tool_registry.get(capability_id)
         if existing is not None:
             raise RpcError(
@@ -794,59 +930,20 @@ class JsonRpcServer:
                     "tool": name,
                 },
             )
-        schema = item.get("schema")
-        schema = schema if isinstance(schema, dict) else {"type": "object"}
         try:
-            Draft202012Validator.check_schema(schema)
-        except SchemaError as exc:
+            self.tool_registry.register(capability)
+        except ValueError as exc:
             raise RpcError(
                 -32602,
-                "invalid_tool_schema",
+                "invalid_tool_capability",
                 "Invalid params",
                 {
-                    "message": exc.message,
+                    "message": str(exc),
                     "tool": name,
                 },
             ) from exc
-        raw_effects = item.get("effects")
-        effects = (
-            tuple(
-                cast(EffectKind, effect)
-                for effect in raw_effects
-                if isinstance(effect, str) and effect in EFFECT_KINDS
-            )
-            if isinstance(raw_effects, list)
-            else ()
-        )
-        supports_staging = item.get("staging_supported") is True
-        supports_direct = item.get("direct_execution_allowed") is True
-        timeout_seconds = client_tool_timeout_sec(item)
-        spec = CapabilitySpec(
-            CapabilityId("rpc", name),
-            str(item.get("description") or ""),
-            schema,
-            interactive=True,
-            effects=effects,
-            aliases=(name,),
-        )
-
-        self.tool_registry.register(
-            Capability(
-                spec,
-                CapabilityPolicy(
-                    supports_staging=supports_staging,
-                    supports_direct=supports_direct,
-                    trust="client",
-                    timeout_seconds=timeout_seconds,
-                ),
-                RpcClientCapabilityExecutor(
-                    self.call_client_tool,
-                    name,
-                    timeout_seconds=timeout_seconds,
-                ),
-            )
-        )
         self.client_tools.add(name)
+        return client_capability_declaration(capability)
 
     def record_tool_response(self, params: dict[str, Any]) -> None:
         call_id = str(params.get("id") or "")

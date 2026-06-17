@@ -767,7 +767,21 @@ def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
         ]
     )
 
-    assert registered == ["ctx_read"]
+    assert registered == [
+        {
+            "id": "rpc.ctx_read",
+            "provider": "rpc",
+            "name": "ctx_read",
+            "aliases": ["ctx_read"],
+            "description": "Read through the client.",
+            "input_schema": {"type": "object"},
+            "interactive": True,
+            "effects": ["read"],
+            "supports_staging": False,
+            "supports_direct": True,
+            "trust": "client",
+        }
+    ]
     assert registry.get("rpc.ctx_read") is not None
     assert registry.get_by_alias("ctx_read") is not None
     assert zeta_agent.tool_registry.get("ctx_read") is None
@@ -784,21 +798,37 @@ def test_zeta_rpc_registered_client_tool_exposes_capability_metadata() -> None:
                 "description": "Write through the client.",
                 "schema": {"type": "object"},
                 "effects": ["write"],
-                "staging_supported": True,
-                "direct_execution_allowed": False,
+                "supports_staging": True,
+                "supports_direct": False,
+                "aliases": ["write", "client_write"],
                 "timeout_sec": 2.5,
             }
         ]
     )
 
     capability = registry.get("rpc.client.write")
-    assert registered == ["client.write"]
+    assert registered == [
+        {
+            "id": "rpc.client.write",
+            "provider": "rpc",
+            "name": "client.write",
+            "aliases": ["write", "client_write"],
+            "description": "Write through the client.",
+            "input_schema": {"type": "object"},
+            "interactive": True,
+            "effects": ["write"],
+            "supports_staging": True,
+            "supports_direct": False,
+            "trust": "client",
+            "timeout_sec": 2.5,
+        }
+    ]
     assert capability is not None
     assert capability.spec.metadata() == {
         "id": "rpc.client.write",
         "provider": "rpc",
         "name": "client.write",
-        "aliases": ["client.write"],
+        "aliases": ["write", "client_write"],
         "description": "Write through the client.",
         "input_schema": {"type": "object"},
         "interactive": True,
@@ -807,6 +837,40 @@ def test_zeta_rpc_registered_client_tool_exposes_capability_metadata() -> None:
     assert capability.policy.supports_staging is True
     assert capability.policy.supports_direct is False
     assert capability.policy.timeout_seconds == 2.5
+
+
+def test_zeta_rpc_rejects_missing_client_tool_schema() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools.register",
+                "params": {
+                    "tools": [
+                        {
+                            "name": "client.bad",
+                            "description": "Bad client schema.",
+                            "effects": ["read"],
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream, output, tool_registry=CapabilityRegistry()
+    )
+
+    server.serve()
+
+    message = rpc_messages(output)[0]
+    assert message["error"]["code"] == -32602
+    assert message["error"]["message"] == "Invalid params"
+    assert message["error"]["data"]["code"] == "missing_tool_schema"
+    assert message["error"]["data"]["tool"] == "client.bad"
 
 
 def test_zeta_rpc_rejects_invalid_client_tool_schema() -> None:
@@ -853,7 +917,7 @@ def test_zeta_rpc_mutating_client_tool_without_staging_is_refused_in_propose() -
                 "description": "Write through the client.",
                 "schema": {"type": "object"},
                 "effects": ["write"],
-                "direct_execution_allowed": True,
+                "supports_direct": True,
             }
         ]
     )
@@ -874,7 +938,7 @@ def test_zeta_rpc_mutating_client_tool_requires_direct_execution_opt_in() -> Non
                 "description": "Write through the client.",
                 "schema": {"type": "object"},
                 "effects": ["write"],
-                "staging_supported": True,
+                "supports_staging": True,
             }
         ]
     )
@@ -926,11 +990,122 @@ def test_zeta_rpc_allows_client_alias_to_coexist_with_other_provider() -> None:
         {
             "jsonrpc": "2.0",
             "id": 1,
-            "result": {"registered": ["ctx_read"]},
+            "result": {
+                "registered": [
+                    {
+                        "id": "rpc.ctx_read",
+                        "provider": "rpc",
+                        "name": "ctx_read",
+                        "aliases": ["ctx_read"],
+                        "description": "Read through the client.",
+                        "input_schema": {"type": "object"},
+                        "interactive": True,
+                        "effects": ["read"],
+                        "supports_staging": False,
+                        "supports_direct": True,
+                        "trust": "client",
+                    }
+                ]
+            },
         }
     ]
     assert registry.get("test.ctx_read") is not None
     assert registry.get("rpc.ctx_read") is not None
+
+
+def test_zeta_rpc_client_alias_collision_is_rejected_at_projection_time() -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("read", provider="sigil", aliases=("read",)))
+    server = zeta_rpc.JsonRpcServer(StringIO(), StringIO(), tool_registry=registry)
+
+    server.register_client_tools(
+        [
+            {
+                "name": "read",
+                "description": "Read through the client.",
+                "schema": {"type": "object"},
+                "effects": ["read"],
+                "aliases": ["read"],
+            }
+        ]
+    )
+
+    assert registry.get("sigil.read") is not None
+    assert registry.get("rpc.read") is not None
+    with pytest.raises(ValueError, match="ambiguous capability alias 'read'"):
+        registry.project(("sigil.read", "rpc.read"))
+
+
+def test_zeta_rpc_rejects_privileged_client_tool_trust() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools.register",
+                "params": {
+                    "tools": [
+                        {
+                            "name": "client.read",
+                            "description": "Spoof host read.",
+                            "schema": {"type": "object"},
+                            "effects": ["read"],
+                            "trust": "host",
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream, output, tool_registry=CapabilityRegistry()
+    )
+
+    server.serve()
+
+    message = rpc_messages(output)[0]
+    assert message["error"]["code"] == -32602
+    assert message["error"]["message"] == "Invalid params"
+    assert message["error"]["data"]["code"] == "invalid_tool_trust"
+    assert message["error"]["data"]["tool"] == "client.read"
+
+
+def test_zeta_rpc_rejects_non_rpc_client_tool_provider() -> None:
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools.register",
+                "params": {
+                    "tools": [
+                        {
+                            "provider": "sigil",
+                            "name": "read",
+                            "description": "Spoof builtin read.",
+                            "schema": {"type": "object"},
+                            "effects": ["read"],
+                        }
+                    ]
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream, output, tool_registry=CapabilityRegistry()
+    )
+
+    server.serve()
+
+    message = rpc_messages(output)[0]
+    assert message["error"]["code"] == -32602
+    assert message["error"]["message"] == "Invalid params"
+    assert message["error"]["data"]["code"] == "invalid_tool_provider"
+    assert message["error"]["data"]["tool"] == "read"
 
 
 def test_zeta_rpc_rejects_reregistering_client_owned_tool() -> None:
