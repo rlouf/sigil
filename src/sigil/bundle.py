@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from zeta.events import Event, timestamp_micros_from_time
-from zeta.history import HistoryIndex
+from zeta.history import import_history_records
 from zeta.trace import (
     Derivation,
     Object,
@@ -15,8 +14,7 @@ from zeta.trace import (
     zeta_sqlite_path,
 )
 
-from .protocols import is_effect_record, is_turn_record
-from .state import history_index, sigil_event_store
+from .state import event_store_path, history_view
 
 BUNDLE_VERSION = 1
 
@@ -27,13 +25,13 @@ def export_bundle(
     session: str | None = None,
 ) -> dict[str, Any]:
     """Collect matching turns, their effects, and their trace closures."""
-    index = history_index()
+    history = history_view()
     records: list[dict[str, Any]] = []
     turn_ids_by_session: dict[str, list[str]] = {}
-    for turn in index.query_turns(session=session, since=since):
+    for turn in history.query_turns(session=session, since=since):
         turn_id = str(turn.get("turn_id") or "")
         records.append(turn)
-        records.extend(index.effects_for_turn(turn_id))
+        records.extend(history.effects_for_turn(turn_id))
         session_id = str(turn.get("session") or "")
         turn_ids_by_session.setdefault(session_id, []).append(turn_id)
     sessions: dict[str, dict[str, Any]] = {}
@@ -95,116 +93,16 @@ def import_bundle(payload: dict[str, Any]) -> dict[str, int]:
     """Import a bundle, returning records/objects/sessions counts."""
     if payload.get("sigil_bundle") != BUNDLE_VERSION:
         raise ValueError(f"not a sigil bundle (expected version {BUNDLE_VERSION})")
-    records = import_history_records(history_index(), payload.get("records") or [])
+    records = import_history_records(
+        history_view(),
+        payload.get("records") or [],
+        path=event_store_path(),
+    )
     objects = 0
     sessions = payload.get("sessions") or {}
     for session_id, graph in sessions.items():
         objects += import_session_graph(session_id, graph)
     return {"records": records, "objects": objects, "sessions": len(sessions)}
-
-
-def import_history_records(
-    index: HistoryIndex,
-    records: list[dict[str, Any]],
-) -> int:
-    """Import new turn/effect records."""
-    imported = 0
-    imported_turn_ids: set[str] = set()
-    imported_effect_ids: set[str] = set()
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        if is_turn_record(record):
-            record_id = str(record.get("turn_id") or "")
-            if record_id in imported_turn_ids or not new_history_record(index, record):
-                continue
-            imported_turn_ids.add(record_id)
-        elif is_effect_record(record):
-            record_id = str(record.get("effect_id") or "")
-            if record_id in imported_effect_ids or not new_history_record(
-                index, record
-            ):
-                continue
-            imported_effect_ids.add(record_id)
-        else:
-            continue
-        if is_effect_record(record):
-            event = event_from_effect_record(record)
-            store = sigil_event_store()
-            try:
-                store.append(event)
-            finally:
-                store.close()
-        else:
-            event = event_from_record(record)
-            store = sigil_event_store()
-            try:
-                store.append(event)
-            finally:
-                store.close()
-        imported += 1
-    return imported
-
-
-def event_from_effect_record(record: dict[str, Any]) -> Event:
-    return Event(
-        id=str(record.get("id") or record["effect_id"]),
-        event_type="zeta.tool.called",
-        source="zeta",
-        payload={
-            "turn_id": record.get("turn_id"),
-            "effects": [record],
-        },
-        idempotency_key=None,
-        caused_by=(
-            str(record["caused_by"])
-            if isinstance(record.get("caused_by"), str)
-            else None
-        ),
-        session_id=(
-            str(record["session"]) if isinstance(record.get("session"), str) else None
-        ),
-        turn_id=(
-            str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
-        ),
-        timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
-    )
-
-
-def event_from_record(record: dict[str, Any]) -> Event:
-    payload = {
-        key: value
-        for key, value in record.items()
-        if key not in {"id", "type", "time", "session", "source", "caused_by"}
-    }
-    return Event(
-        id=str(record["id"]),
-        event_type=str(record["type"]),
-        source=str(record.get("source") or "sigil"),
-        payload=payload,
-        idempotency_key=None,
-        caused_by=(
-            str(record["caused_by"])
-            if isinstance(record.get("caused_by"), str)
-            else None
-        ),
-        session_id=(
-            str(record["session"]) if isinstance(record.get("session"), str) else None
-        ),
-        turn_id=(
-            str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
-        ),
-        timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
-    )
-
-
-def new_history_record(index: HistoryIndex, record: dict[str, Any]) -> bool:
-    """Return whether a record is an importable, not-yet-indexed one."""
-    if is_turn_record(record):
-        return index.turn(str(record.get("turn_id") or "")) is None
-    if is_effect_record(record):
-        return index.effect(str(record.get("effect_id") or "")) is None
-    return False
 
 
 def import_session_graph(session_id: str, graph: dict[str, Any]) -> int:

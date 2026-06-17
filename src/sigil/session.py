@@ -16,6 +16,12 @@ from pathlib import Path
 from typing import Any
 
 from zeta.events import Event, time_from_timestamp_micros
+from zeta.history import (
+    effect_record,
+    publish_effect_record,
+    publish_turn_record,
+    turn_record,
+)
 
 from .failure import (
     failure_context_prompt,
@@ -27,14 +33,10 @@ from .protocols import (
     EFFECT_KIND_COMMAND,
     TURN_OUTCOME_EXECUTED,
     TURN_OUTCOME_FAILED,
-    effect_record,
     turn_contract,
-    turn_record,
 )
 from .state import (
-    append_effect_record,
     append_jsonl_line,
-    append_turn_record,
     event_store_path,
     read_events,
     read_jsonl,
@@ -361,7 +363,7 @@ def record_run_history(
     """Append the run-workflow turn and command effect for one shell command."""
     turn_id = str(uuid.uuid4())
     effect_id = str(uuid.uuid4())
-    append_effect_record(
+    publish_effect_record(
         effect_record(
             effect_id,
             turn_id=turn_id,
@@ -370,7 +372,9 @@ def record_run_history(
             command=command,
             exit_status=status,
             duration_ms=duration_ms,
-        )
+        ),
+        path=event_store_path(),
+        session_id=session_id(),
     )
     turn = turn_record(
         turn_id,
@@ -381,7 +385,7 @@ def record_run_history(
         effect_ids=[effect_id],
     )
     turn["cwd"] = cwd
-    append_turn_record(turn)
+    publish_turn_record(turn, path=event_store_path(), session_id=session_id())
 
 
 SHELL_TURN_SPOOL_FILE = "shell-turns.spool"

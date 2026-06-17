@@ -11,7 +11,7 @@ from typing import Any, Literal
 from zeta.models import resolve_active_model
 
 from .session import latest_active_failure
-from .state import history_index, session_id
+from .state import history_view, session_id
 
 StatusState = Literal["clean", "attention"]
 DELEGATION_WORKFLOWS = ("ask", "propose", "do")
@@ -128,14 +128,14 @@ def history_status_fields(
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, dict[str, int]]:
     """Read the session's history facts, failing open to empty values."""
     try:
-        index = history_index()
-        turns = index.query_turns(session=current_session, limit=HISTORY_SCAN_LIMIT)
+        history = history_view()
+        turns = history.query_turns(session=current_session, limit=HISTORY_SCAN_LIMIT)
         last_turn = next(
             (turn for turn in turns if turn.get("workflow") in DELEGATION_WORKFLOWS),
             None,
         )
-        pending = index.pending_staged_command(current_session)
-        today = index.cost_since(current_session, local_midnight())
+        pending = history.pending_staged_command(current_session)
+        today = history.cost_since(current_session, local_midnight())
     except Exception as exc:
         LOGGER.warning("history query failed for status: %s", exc)
         return None, None, {}

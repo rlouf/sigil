@@ -62,17 +62,18 @@ def cmd_log(
     if ctx.invoked_subcommand is not None:
         return 0
     # Imported lazily: `sigil.cli` must stay light at import time.
-    from zeta.history import touched_path_variants
+    from zeta.history import query_history
 
     from ..display.summarize import format_turn_line
-    from ..state import history_index
+    from ..state import history_view
 
-    turns = history_index().query_turns(
+    turns = query_history(
+        history_view(),
         session=session_filter,
         workflow=workflow,
-        since=since_epoch(since) if since else None,
+        since=since,
         failed=failed,
-        touched=touched_path_variants(touched) if touched else None,
+        touched=touched,
         limit=limit,
     )
     if json_output:
@@ -197,14 +198,14 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
     `sigil trace show`. TURN_ID may be a full id or a unique prefix.
     """
     from ..display.summarize import render_turn_record
-    from ..state import history_index
+    from ..state import history_view
 
-    index = history_index()
-    resolved = resolve_cli_turn_id(index, turn_id)
-    turn = index.turn(resolved)
+    history = history_view()
+    resolved = resolve_cli_turn_id(history, turn_id)
+    turn = history.turn(resolved)
     if turn is None:
         raise click.ClickException(f"turn not found: {turn_id}")
-    effects = index.effects_for_turn(resolved)
+    effects = history.effects_for_turn(resolved)
     if json_output:
         pretty_print_json({"turn": turn, "effects": effects})
         return 0
@@ -231,13 +232,13 @@ def cmd_blame(file: str) -> int:
     """
     from zeta.history import touched_path_variants
 
-    from ..state import history_index
+    from ..state import history_view
 
-    index = history_index()
+    history = history_view()
     effects: list[dict[str, Any]] = []
     seen: set[str] = set()
     for path in touched_path_variants(file):
-        for effect in index.effects_touching(path):
+        for effect in history.effects_touching(path):
             effect_id = str(effect.get("effect_id") or "")
             if effect_id not in seen:
                 seen.add(effect_id)
@@ -247,18 +248,18 @@ def cmd_blame(file: str) -> int:
         click.echo(f"no recorded writes touch {file}", err=True)
         return 0
     for effect in effects:
-        turn = index.turn(str(effect.get("turn_id") or ""))
+        turn = history.turn(str(effect.get("turn_id") or ""))
         for line in render_blame_block(effect, turn):
             click.echo(line)
     return 0
 
 
-def resolve_cli_turn_id(index: Any, token: str) -> str:
+def resolve_cli_turn_id(history: Any, token: str) -> str:
     """Resolve a turn id token, mapping resolver errors onto CLI errors."""
     from zeta.history import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
 
     try:
-        return resolve_turn_id(index, token)
+        return resolve_turn_id(history, token)
     except AmbiguousTurnError as error:
         candidates = "\n  ".join(error.candidates)
         raise click.ClickException(

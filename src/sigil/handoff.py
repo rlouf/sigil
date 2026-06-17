@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, cast
 
+from zeta.history import effect_record, publish_effect_record
 from zeta.timeline import current_timeline, record_event
 from zeta.tools.base import proposed_effect
 
@@ -17,12 +18,11 @@ from .protocols import (
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
     SHELL_HANDOFF_RESULT_SCHEMA,
     SHELL_HANDOFF_RESULT_TYPE,
-    effect_record,
     is_shell_handoff_result,
     is_shell_prompt_handoff,
 )
 from .session import event_time, recent_turns
-from .state import append_effect_record
+from .state import event_store_path, session_id
 
 
 def append_shell_result() -> dict[str, Any]:
@@ -87,7 +87,7 @@ def record_handoff_effect(
         result.get("executed_command") or result.get("expected_command") or ""
     )
     status = result.get("status")
-    append_effect_record(
+    publish_effect_record(
         effect_record(
             str(uuid.uuid4()),
             turn_id=str(handoff.get("turn_id") or ""),
@@ -97,7 +97,9 @@ def record_handoff_effect(
             exit_status=status if isinstance(status, int) else None,
             tool_call_id=str(handoff.get("tool_call_id") or "") or None,
             resolved_outcome=str(result.get("outcome") or ""),
-        )
+        ),
+        path=event_store_path(),
+        session_id=session_id(),
     )
 
 

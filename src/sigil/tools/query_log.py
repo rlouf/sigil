@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 from zeta.tools.base import ToolSpec, error_result
 
 if TYPE_CHECKING:
-    from zeta.history import HistoryIndex
+    from zeta.history import HistoryView
 
 DEFAULT_TURNS = 20
 MAX_TURNS = 50
@@ -77,36 +77,32 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily: the registry imports every tool module, and the
     # display layer reaches back into zeta.prompt — a module-level import
     # here closes that loop into a cycle.
-    from zeta.history import parse_since, touched_path_variants
+    from zeta.history import query_history
 
     from ..display.summarize import format_turn_line
-    from ..state import history_index, session_id
+    from ..state import history_view, session_id
 
-    index = history_index()
+    history = history_view()
     turn_token = str(params.get("turn_id") or "")
     if turn_token:
-        return run_expand(index, turn_token)
-    since_raw = str(params.get("since") or "")
-    since = None
-    if since_raw:
-        try:
-            since = parse_since(since_raw)
-        except ValueError:
-            return error_result(
-                "invalid-since",
-                "since must be YYYY-MM-DD or an age like 2d, 6h, 30m",
-            )
+        return run_expand(history, turn_token)
     session = session_id() if params.get("current_session") is True else None
-    touched = str(params.get("touched") or "")
     limit = min(int(params.get("limit") or DEFAULT_TURNS), MAX_TURNS)
-    turns = index.query_turns(
-        session=session,
-        workflow=str(params.get("workflow") or "") or None,
-        since=since,
-        failed=params.get("failed") is True,
-        touched=touched_path_variants(touched) if touched else None,
-        limit=limit,
-    )
+    try:
+        turns = query_history(
+            history,
+            session=session,
+            workflow=str(params.get("workflow") or "") or None,
+            since=str(params.get("since") or "") or None,
+            failed=params.get("failed") is True,
+            touched=str(params.get("touched") or "") or None,
+            limit=limit,
+        )
+    except ValueError:
+        return error_result(
+            "invalid-since",
+            "since must be YYYY-MM-DD or an age like 2d, 6h, 30m",
+        )
     if not turns:
         return {
             "ok": True,
@@ -126,13 +122,13 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_expand(index: HistoryIndex, token: str) -> dict[str, Any]:
+def run_expand(history: HistoryView, token: str) -> dict[str, Any]:
     from zeta.history import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
 
     from ..display.summarize import render_turn_record
 
     try:
-        resolved = resolve_turn_id(index, token)
+        resolved = resolve_turn_id(history, token)
     except AmbiguousTurnError as error:
         return error_result(
             "ambiguous-turn-id",
@@ -140,10 +136,10 @@ def run_expand(index: HistoryIndex, token: str) -> dict[str, Any]:
         )
     except UnknownTurnError:
         return error_result("unknown-turn-id", f"no turn matches '{token}'")
-    turn = index.turn(resolved)
+    turn = history.turn(resolved)
     if turn is None:
         return error_result("unknown-turn-id", f"no turn matches '{token}'")
-    text = "\n".join(render_turn_record(turn, index.effects_for_turn(resolved)))
+    text = "\n".join(render_turn_record(turn, history.effects_for_turn(resolved)))
     return {
         "ok": True,
         "content": [{"type": "text", "text": text}],

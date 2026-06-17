@@ -15,9 +15,7 @@ from sigil.protocols import (
     TURN_OUTCOME_ABORTED,
     TURN_OUTCOME_EXECUTED,
     TURN_OUTCOME_FAILED,
-    effect_record,
     turn_contract,
-    turn_record,
 )
 from sigil.session import clear_current_session, read_events
 from sigil.state import (
@@ -31,7 +29,7 @@ from zeta.events import DraftEvent, publish_event
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:
-    record = turn_record(
+    record = zeta_history.turn_record(
         turn_id,
         workflow="run",
         objective="ls",
@@ -47,7 +45,7 @@ def sample_effect_record(
     turn_id: str = "turn-1",
     **overrides: Any,
 ) -> dict[str, Any]:
-    record = effect_record(
+    record = zeta_history.effect_record(
         effect_id,
         turn_id=turn_id,
         kind=EFFECT_KIND_COMMAND,
@@ -61,7 +59,11 @@ def sample_effect_record(
 
 def append_history_record(record: dict[str, Any]) -> dict[str, Any]:
     if record.get("type") == "sigil.effect":
-        return sigil_state.append_effect_record(record)
+        return zeta_history.publish_effect_record(
+            record,
+            path=sigil_state.event_store_path(),
+            session_id=sigil_state.session_id(),
+        )
     event = append_event(record)
     return zeta_history.history_event_record(event)
 
@@ -74,8 +76,12 @@ def publish_sigil_draft(draft: DraftEvent) -> None:
         store.close()
 
 
-def test_history_append_turn_record_writes_log_and_history() -> None:
-    event = sigil_state.append_turn_record(sample_turn_record(caused_by="prompt-event"))
+def test_history_publish_turn_record_writes_log_and_history() -> None:
+    event = zeta_history.publish_turn_record(
+        sample_turn_record(caused_by="prompt-event"),
+        path=sigil_state.event_store_path(),
+        session_id=sigil_state.session_id(),
+    )
     payload = zeta_history.history_event_record(event)
 
     (stored_event,) = read_events()
@@ -83,29 +89,37 @@ def test_history_append_turn_record_writes_log_and_history() -> None:
     assert event.caused_by == "prompt-event"
     assert payload["caused_by"] == "prompt-event"
     assert stored_event == event
-    assert sigil_state.history_index().turn("turn-1") == payload
+    assert sigil_state.history_view().turn("turn-1") == payload
 
 
-def test_history_append_turn_record_uses_outcome_event_names() -> None:
-    failed = sigil_state.append_turn_record(
-        sample_turn_record("turn-failed", outcome=TURN_OUTCOME_FAILED)
+def test_history_publish_turn_record_uses_outcome_event_names() -> None:
+    failed = zeta_history.publish_turn_record(
+        sample_turn_record("turn-failed", outcome=TURN_OUTCOME_FAILED),
+        path=sigil_state.event_store_path(),
+        session_id=sigil_state.session_id(),
     )
-    aborted = sigil_state.append_turn_record(
-        sample_turn_record("turn-aborted", outcome=TURN_OUTCOME_ABORTED)
+    aborted = zeta_history.publish_turn_record(
+        sample_turn_record("turn-aborted", outcome=TURN_OUTCOME_ABORTED),
+        path=sigil_state.event_store_path(),
+        session_id=sigil_state.session_id(),
     )
 
     assert failed.event_type == "sigil.turn.failed"
     assert aborted.event_type == "sigil.turn.aborted"
 
 
-def test_history_append_effect_record_writes_durable_tool_event() -> None:
-    payload = sigil_state.append_effect_record(sample_effect_record())
+def test_history_publish_effect_record_writes_durable_tool_event() -> None:
+    payload = zeta_history.publish_effect_record(
+        sample_effect_record(),
+        path=sigil_state.event_store_path(),
+        session_id=sigil_state.session_id(),
+    )
 
     (event,) = read_events()
     assert event.event_type == "zeta.tool.called"
     assert event.payload["effects"][0]["effect_id"] == "effect-1"
-    index = sigil_state.history_index()
-    assert index.effects_for_turn("turn-1") == [payload]
+    history = sigil_state.history_view()
+    assert history.effects_for_turn("turn-1") == [payload]
 
 
 def test_history_uses_latest_turn_record_per_id() -> None:
@@ -117,24 +131,24 @@ def test_history_uses_latest_turn_record_per_id() -> None:
         )
     )
 
-    (row,) = sigil_state.history_index().turns()
+    (row,) = sigil_state.history_view().turns()
     assert row["outcome"] == TURN_OUTCOME_FAILED
 
 
-def test_history_index_ignores_non_history_events() -> None:
+def test_history_view_ignores_non_history_events() -> None:
     append_event({"type": "user_message", "content": "hi"})
 
-    assert sigil_state.history_index().turns() == []
+    assert sigil_state.history_view().turns() == []
 
 
 def test_history_turns_lists_newest_first_and_honors_limit() -> None:
     append_history_record(sample_turn_record("turn-old", time=100.0))
     append_history_record(sample_turn_record("turn-new", time=200.0))
 
-    index = sigil_state.history_index()
-    listed = index.turns()
+    history = sigil_state.history_view()
+    listed = history.turns()
     assert [row["turn_id"] for row in listed] == ["turn-new", "turn-old"]
-    assert [row["turn_id"] for row in index.turns(limit=1)] == ["turn-new"]
+    assert [row["turn_id"] for row in history.turns(limit=1)] == ["turn-new"]
 
 
 def test_history_effects_touching_filters_by_exact_path() -> None:
@@ -153,9 +167,9 @@ def test_history_effects_touching_filters_by_exact_path() -> None:
         )
     )
 
-    index = sigil_state.history_index()
-    assert index.effects_touching("a.txt") == [touched]
-    assert index.effects_touching("missing.txt") == []
+    history = sigil_state.history_view()
+    assert history.effects_touching("a.txt") == [touched]
+    assert history.effects_touching("missing.txt") == []
 
 
 def test_history_history_reads_durable_events() -> None:
@@ -173,10 +187,10 @@ def test_history_history_reads_durable_events() -> None:
     )
     append_event(sample_turn_record("turn-new", time=200.0))
     append_event({"type": "user_message", "content": "not a history record"})
-    index = sigil_state.history_index()
+    history = sigil_state.history_view()
 
-    assert [row["turn_id"] for row in index.turns()] == ["turn-new", "turn-old"]
-    assert index.effects_for_turn("turn-old")[0]["effect_id"] == "effect-old"
+    assert [row["turn_id"] for row in history.turns()] == ["turn-new", "turn-old"]
+    assert history.effects_for_turn("turn-old")[0]["effect_id"] == "effect-old"
 
 
 def test_history_history_uses_event_metadata() -> None:
@@ -199,7 +213,7 @@ def test_history_history_uses_event_metadata() -> None:
         )
     )
 
-    turn = sigil_state.history_index().turn("turn-meta")
+    turn = sigil_state.history_view().turn("turn-meta")
     assert turn is not None
     assert turn["time"] == 2.0
     assert turn["session"] == "event-session"
@@ -217,11 +231,15 @@ def test_history_query_turns_filters_workflow_outcome_and_since() -> None:
     )
     append_history_record(sample_turn_record("turn-run", workflow="run", time=300.0))
 
-    index = sigil_state.history_index()
-    assert [row["turn_id"] for row in index.query_turns(workflow="ask")] == ["turn-ask"]
-    assert [row["turn_id"] for row in index.query_turns(failed=True)] == ["turn-broken"]
-    assert [row["turn_id"] for row in index.query_turns(since=250.0)] == ["turn-run"]
-    assert [row["turn_id"] for row in index.query_turns(limit=2)] == [
+    history = sigil_state.history_view()
+    assert [row["turn_id"] for row in history.query_turns(workflow="ask")] == [
+        "turn-ask"
+    ]
+    assert [row["turn_id"] for row in history.query_turns(failed=True)] == [
+        "turn-broken"
+    ]
+    assert [row["turn_id"] for row in history.query_turns(since=250.0)] == ["turn-run"]
+    assert [row["turn_id"] for row in history.query_turns(limit=2)] == [
         "turn-run",
         "turn-broken",
     ]
@@ -239,14 +257,14 @@ def test_history_query_turns_scopes_by_session_and_touched_path() -> None:
         )
     )
 
-    index = sigil_state.history_index()
-    assert [row["turn_id"] for row in index.query_turns(session="there")] == [
+    history = sigil_state.history_view()
+    assert [row["turn_id"] for row in history.query_turns(session="there")] == [
         "turn-there"
     ]
-    assert [row["turn_id"] for row in index.query_turns(touched=("notes.txt",))] == [
+    assert [row["turn_id"] for row in history.query_turns(touched=("notes.txt",))] == [
         "turn-here"
     ]
-    assert index.query_turns(touched=("missing.txt",)) == []
+    assert history.query_turns(touched=("missing.txt",)) == []
 
 
 def test_history_turn_ids_with_prefix_lists_matches_sorted() -> None:
@@ -254,10 +272,10 @@ def test_history_turn_ids_with_prefix_lists_matches_sorted() -> None:
     append_event(sample_turn_record("aaaa-2222"))
     append_event(sample_turn_record("bbbb-3333"))
 
-    index = sigil_state.history_index()
-    assert index.turn_ids_with_prefix("aaaa") == ["aaaa-1111", "aaaa-2222"]
-    assert index.turn_ids_with_prefix("bbbb-3333") == ["bbbb-3333"]
-    assert index.turn_ids_with_prefix("cccc") == []
+    history = sigil_state.history_view()
+    assert history.turn_ids_with_prefix("aaaa") == ["aaaa-1111", "aaaa-2222"]
+    assert history.turn_ids_with_prefix("bbbb-3333") == ["bbbb-3333"]
+    assert history.turn_ids_with_prefix("cccc") == []
 
 
 def test_history_pending_staged_command_clears_on_resolution(monkeypatch) -> None:
@@ -271,11 +289,11 @@ def test_history_pending_staged_command_clears_on_resolution(monkeypatch) -> Non
         )
     )
 
-    index = sigil_state.history_index()
-    pending = index.pending_staged_command("pending-test")
+    history = sigil_state.history_view()
+    pending = history.pending_staged_command("pending-test")
     assert pending is not None
     assert pending["command"] == "uv run pytest"
-    assert index.pending_staged_command("other-session") is None
+    assert history.pending_staged_command("other-session") is None
 
     append_history_record(
         sample_effect_record(
@@ -286,7 +304,7 @@ def test_history_pending_staged_command_clears_on_resolution(monkeypatch) -> Non
         )
     )
 
-    assert sigil_state.history_index().pending_staged_command("pending-test") is None
+    assert sigil_state.history_view().pending_staged_command("pending-test") is None
 
 
 def test_history_cost_since_sums_session_turns(monkeypatch) -> None:
@@ -306,15 +324,15 @@ def test_history_cost_since_sums_session_turns(monkeypatch) -> None:
         )
     )
 
-    index = sigil_state.history_index()
-    today = index.cost_since("cost-test", 200.0)
+    history = sigil_state.history_view()
+    today = history.cost_since("cost-test", 200.0)
     assert today == {
         "input_tokens": 100,
         "output_tokens": 50,
         "model_calls": 2,
         "turns": 1,
     }
-    everything = index.cost_since("cost-test", 0.0)
+    everything = history.cost_since("cost-test", 0.0)
     assert everything["turns"] == 2
     assert everything["input_tokens"] == 110
 
@@ -446,7 +464,7 @@ def test_sigil_log_empty_history_prints_friendly_line(monkeypatch) -> None:
 
 def seed_show_and_blame_history(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "show-cli")
-    record = turn_record(
+    record = zeta_history.turn_record(
         "turn-do-1111",
         workflow="do",
         objective="refactor the staging path",
@@ -733,7 +751,11 @@ def test_sigil_log_export_and_import_round_trip_via_cli(
 
 
 def test_history_survives_session_clear() -> None:
-    sigil_state.append_turn_record(sample_turn_record())
+    zeta_history.publish_turn_record(
+        sample_turn_record(),
+        path=sigil_state.event_store_path(),
+        session_id=sigil_state.session_id(),
+    )
     root = session_dir()
     root.mkdir(parents=True, exist_ok=True)
     (root / "recent-turns.jsonl").write_text("", encoding="utf-8")
@@ -742,4 +764,4 @@ def test_history_survives_session_clear() -> None:
 
     assert not root.exists()
     assert (state_dir() / "events.sqlite3").exists()
-    assert sigil_state.history_index().turn("turn-1") is not None
+    assert sigil_state.history_view().turn("turn-1") is not None

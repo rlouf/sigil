@@ -9,10 +9,11 @@ from _zeta_helpers import write_models_config
 from click.testing import CliRunner
 
 from sigil.cli import cli
-from sigil.protocols import effect_record, turn_contract, turn_record
+from sigil.protocols import turn_contract
 from sigil.session import record_turn
-from sigil.state import append_effect_record, append_event, session_dir
+from sigil.state import append_event, event_store_path, session_dir, session_id
 from sigil.status import current_status, format_status
+from zeta.history import effect_record, publish_effect_record, turn_record
 from zeta.models import set_active_model_profile
 
 
@@ -158,7 +159,7 @@ def test_status_reports_pending_staged_handoff(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "status-pending")
-    append_effect_record(
+    publish_effect_record(
         effect_record(
             "effect-staged",
             turn_id="turn-1",
@@ -166,7 +167,9 @@ def test_status_reports_pending_staged_handoff(
             staged=True,
             command="uv run pytest",
             tool_call_id="call-1",
-        )
+        ),
+        path=event_store_path(),
+        session_id=session_id(),
     )
 
     status = current_status()

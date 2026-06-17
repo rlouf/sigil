@@ -5,13 +5,26 @@ from __future__ import annotations
 import os
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any, cast
 
-from .events import Event, time_from_timestamp_micros
+from .events import (
+    DraftEvent,
+    Event,
+    Filter,
+    SqliteEventStore,
+    time_from_timestamp_micros,
+    timestamp_micros_from_time,
+)
 
 SINCE_PATTERN = re.compile(r"(\d+)([dhm])")
 SINCE_SCALES = {"d": 86400, "h": 3600, "m": 60}
+TURN_EVENT_COMPLETED = "sigil.turn.completed"
+TURN_EVENT_FAILED = "sigil.turn.failed"
+TURN_EVENT_ABORTED = "sigil.turn.aborted"
+TURN_RECORD_SCHEMA = "sigil.turn"
+EFFECT_RECORD_TYPE = "sigil.effect"
 EFFECT_RECORD_SCHEMA = "sigil.effect"
 
 
@@ -49,11 +62,11 @@ def touched_path_variants(path: str) -> tuple[str, ...]:
     return tuple(variants)
 
 
-def resolve_turn_id(index: HistoryIndex, token: str) -> str:
+def resolve_turn_id(history: HistoryView, token: str) -> str:
     """Resolve a full turn id or unique prefix, or raise with candidates."""
-    if index.turn(token) is not None:
+    if history.turn(token) is not None:
         return token
-    matches = index.turn_ids_with_prefix(token)
+    matches = history.turn_ids_with_prefix(token)
     if len(matches) == 1:
         return matches[0]
     if matches:
@@ -61,44 +74,20 @@ def resolve_turn_id(index: HistoryIndex, token: str) -> str:
     raise UnknownTurnError(token)
 
 
-class HistoryIndex:
+class HistoryView:
     """Derived turn/effect history over durable events."""
 
     def __init__(self, events: list[Event]) -> None:
-        self._events = events
+        self._turns_by_id = turns_by_id(events)
+        self._effects_by_id = effects_by_id(events)
 
-    def _turns_by_id(self) -> dict[str, dict[str, Any]]:
-        turns: dict[str, dict[str, Any]] = {}
-        for event in self._events:
-            if not event.event_type.startswith("sigil.turn."):
-                continue
-            record = history_event_record(event)
-            turn_id = str(record.get("turn_id") or "")
-            if turn_id:
-                turns[turn_id] = record
-        return turns
-
-    def _effects_by_id(self) -> dict[str, dict[str, Any]]:
-        effects: dict[str, dict[str, Any]] = {}
-        for event in self._events:
-            if event.event_type != "zeta.tool.called":
-                continue
-            raw_effects = event.payload.get("effects")
-            if not isinstance(raw_effects, list):
-                continue
-            for effect in raw_effects:
-                if not is_effect_record(effect):
-                    continue
-                record = effect_event_record(
-                    effect,
-                    timestamp=event_time(event),
-                    session_id=event.session_id,
-                    cwd=event.payload.get("cwd"),
-                )
-                effect_id = str(record.get("effect_id") or "")
-                if effect_id:
-                    effects[effect_id] = record
-        return effects
+    @classmethod
+    def from_store(cls, path: str | Path) -> HistoryView:
+        store = SqliteEventStore(path)
+        try:
+            return cls(store.list_events(Filter()))
+        finally:
+            store.close()
 
     def query_turns(
         self,
@@ -114,7 +103,7 @@ class HistoryIndex:
         touched_turns = self._touched_turn_ids(touched)
         turns = [
             turn
-            for turn in self._turns_by_id().values()
+            for turn in self._turns_by_id.values()
             if turn_matches_filters(
                 turn,
                 session=session,
@@ -132,20 +121,20 @@ class HistoryIndex:
             return None
         return {
             str(effect.get("turn_id") or "")
-            for effect in self._effects_by_id().values()
+            for effect in self._effects_by_id.values()
             if effect.get("path") in touched
         }
 
     def turn_ids_with_prefix(self, prefix: str, limit: int = 16) -> list[str]:
         """Return turn ids starting with a prefix, sorted, bounded."""
         matches = [
-            turn_id for turn_id in self._turns_by_id() if turn_id.startswith(prefix)
+            turn_id for turn_id in self._turns_by_id if turn_id.startswith(prefix)
         ]
         return sorted(matches)[:limit]
 
     def pending_staged_command(self, session: str) -> dict[str, Any] | None:
         """Return the newest staged command effect awaiting resolution."""
-        effects = list(self._effects_by_id().values())
+        effects = list(self._effects_by_id.values())
         resolved_calls = resolved_tool_call_ids(effects)
         candidates = [
             effect
@@ -173,23 +162,23 @@ class HistoryIndex:
         return totals
 
     def turn(self, turn_id: str) -> dict[str, Any] | None:
-        return self._turns_by_id().get(turn_id)
+        return self._turns_by_id.get(turn_id)
 
     def effect(self, effect_id: str) -> dict[str, Any] | None:
-        return self._effects_by_id().get(effect_id)
+        return self._effects_by_id.get(effect_id)
 
     def turns(self, limit: int | None = None) -> list[dict[str, Any]]:
         return self.query_turns(limit=limit)
 
     def effects(self) -> list[dict[str, Any]]:
-        effects = list(self._effects_by_id().values())
+        effects = list(self._effects_by_id.values())
         effects.sort(key=effect_sort_key)
         return effects
 
     def effects_for_turn(self, turn_id: str) -> list[dict[str, Any]]:
         effects = [
             effect
-            for effect in self._effects_by_id().values()
+            for effect in self._effects_by_id.values()
             if effect.get("turn_id") == turn_id
         ]
         effects.sort(key=effect_sort_key)
@@ -198,18 +187,286 @@ class HistoryIndex:
     def effects_touching(self, path: str) -> list[dict[str, Any]]:
         effects = [
             effect
-            for effect in self._effects_by_id().values()
+            for effect in self._effects_by_id.values()
             if effect.get("path") == path
         ]
         effects.sort(key=effect_sort_key)
         return effects
 
 
+def turns_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
+    turns: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if not event.event_type.startswith("sigil.turn."):
+            continue
+        record = history_event_record(event)
+        turn_id = str(record.get("turn_id") or "")
+        if turn_id:
+            turns[turn_id] = record
+    return turns
+
+
+def effects_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
+    effects: dict[str, dict[str, Any]] = {}
+    for event in events:
+        if event.event_type != "zeta.tool.called":
+            continue
+        raw_effects = event.payload.get("effects")
+        if not isinstance(raw_effects, list):
+            continue
+        for effect in raw_effects:
+            if not is_effect_record(effect):
+                continue
+            record = effect_event_record(
+                effect,
+                timestamp=event_time(event),
+                session_id=event.session_id,
+                cwd=event.payload.get("cwd"),
+            )
+            effect_id = str(record.get("effect_id") or "")
+            if effect_id:
+                effects[effect_id] = record
+    return effects
+
+
+def turn_record(
+    turn_id: str,
+    *,
+    workflow: str,
+    objective: str,
+    contract: Mapping[str, Any],
+    outcome: str,
+    agent: Mapping[str, str] | None = None,
+    cost: Mapping[str, int] | None = None,
+    prompt_object_ids: Iterable[str] = (),
+    effect_ids: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Return one turn history record; the event envelope adds time/cwd/session."""
+    record: dict[str, Any] = {
+        "type": turn_event_type(outcome),
+        "schema": TURN_RECORD_SCHEMA,
+        "turn_id": turn_id,
+        "workflow": workflow,
+        "objective": objective,
+        "contract": dict(contract),
+        "outcome": outcome,
+        "prompt_object_ids": list(prompt_object_ids),
+        "effect_ids": list(effect_ids),
+    }
+    if agent is not None:
+        record["agent"] = dict(agent)
+    if cost is not None:
+        record["cost"] = dict(cost)
+    return record
+
+
+def effect_record(
+    effect_id: str,
+    *,
+    turn_id: str,
+    kind: str,
+    staged: bool,
+    path: str | None = None,
+    before_hash: str | None = None,
+    after_hash: str | None = None,
+    command: str | None = None,
+    exit_status: int | None = None,
+    duration_ms: int | None = None,
+    tool_call_id: str | None = None,
+    resolved_outcome: str | None = None,
+) -> dict[str, Any]:
+    """Return one turn effect record; unset optional facts are omitted."""
+    record: dict[str, Any] = {
+        "type": EFFECT_RECORD_TYPE,
+        "schema": EFFECT_RECORD_SCHEMA,
+        "effect_id": effect_id,
+        "turn_id": turn_id,
+        "kind": kind,
+        "staged": staged,
+    }
+    optionals: dict[str, Any] = {
+        "path": path,
+        "before_hash": before_hash,
+        "after_hash": after_hash,
+        "command": command,
+        "exit_status": exit_status,
+        "duration_ms": duration_ms,
+        "tool_call_id": tool_call_id,
+        "resolved_outcome": resolved_outcome,
+    }
+    record.update({key: value for key, value in optionals.items() if value is not None})
+    return record
+
+
+def turn_event_type(outcome: str) -> str:
+    """Return the durable event type for a turn outcome."""
+    if outcome == "failed":
+        return TURN_EVENT_FAILED
+    if outcome == "aborted":
+        return TURN_EVENT_ABORTED
+    return TURN_EVENT_COMPLETED
+
+
+def is_turn_record(value: object) -> bool:
+    return has_schema(value, TURN_RECORD_SCHEMA)
+
+
 def is_effect_record(value: object) -> bool:
+    return has_schema(value, EFFECT_RECORD_SCHEMA)
+
+
+def has_schema(value: object, schema: str) -> bool:
     if not isinstance(value, Mapping):
         return False
     record = cast(Mapping[str, Any], value)
-    return record.get("schema") == EFFECT_RECORD_SCHEMA
+    return record.get("schema") == schema
+
+
+def publish_turn_record(
+    record: dict[str, Any],
+    *,
+    path: str | Path,
+    session_id: str,
+    cwd: str | None = None,
+) -> Event:
+    """Append one durable turn record to a Zeta event store."""
+    event_type = turn_event_type(str(record.get("outcome") or ""))
+    payload = domain_payload({"cwd": cwd or os.getcwd(), **record, "type": event_type})
+    return append_draft(
+        path,
+        DraftEvent(
+            event_type=event_type,
+            source=str(record.get("source") or "sigil"),
+            payload=payload,
+            caused_by=(
+                str(record["caused_by"])
+                if isinstance(record.get("caused_by"), str)
+                else None
+            ),
+            session_id=session_id,
+            turn_id=(
+                str(record["turn_id"])
+                if isinstance(record.get("turn_id"), str)
+                else None
+            ),
+            timestamp_micros=timestamp_micros_from_time(record.get("time")),
+            event_id=(str(record["id"]) if isinstance(record.get("id"), str) else None),
+        ),
+    )
+
+
+def publish_effect_record(
+    record: dict[str, Any],
+    *,
+    path: str | Path,
+    session_id: str,
+    cwd: str | None = None,
+) -> dict[str, Any]:
+    """Append one durable tool-effect event and return its history record."""
+    appended = append_draft(
+        path,
+        DraftEvent(
+            event_type="zeta.tool.called",
+            source="zeta",
+            payload={
+                "cwd": cwd or os.getcwd(),
+                "turn_id": record.get("turn_id"),
+                "effects": [record],
+            },
+            session_id=session_id,
+            turn_id=(
+                str(record["turn_id"])
+                if isinstance(record.get("turn_id"), str)
+                else None
+            ),
+            timestamp_micros=timestamp_micros_from_time(record.get("time")),
+            event_id=(str(record["id"]) if isinstance(record.get("id"), str) else None),
+        ),
+    )
+    return effect_event_record(
+        record,
+        timestamp=event_time(appended),
+        session_id=appended.session_id or session_id,
+        cwd=appended.payload.get("cwd"),
+    )
+
+
+def append_draft(path: str | Path, draft: DraftEvent) -> Event:
+    store = SqliteEventStore(path)
+    try:
+        return store.accept(draft).event
+    finally:
+        store.close()
+
+
+def append_event(path: str | Path, event: Event) -> Event:
+    store = SqliteEventStore(path)
+    try:
+        return store.append(event).event
+    finally:
+        store.close()
+
+
+def import_history_records(
+    history: HistoryView,
+    records: list[dict[str, Any]],
+    *,
+    path: str | Path,
+) -> int:
+    """Import new turn/effect records into a Zeta event store."""
+    imported = 0
+    imported_turn_ids: set[str] = set()
+    imported_effect_ids: set[str] = set()
+    store = SqliteEventStore(path)
+    try:
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            if is_turn_record(record):
+                record_id = str(record.get("turn_id") or "")
+                if (
+                    record_id in imported_turn_ids
+                    or history.turn(record_id) is not None
+                ):
+                    continue
+                imported_turn_ids.add(record_id)
+                store.append(event_from_record(record))
+                imported += 1
+                continue
+            if is_effect_record(record):
+                record_id = str(record.get("effect_id") or "")
+                if (
+                    record_id in imported_effect_ids
+                    or history.effect(record_id) is not None
+                ):
+                    continue
+                imported_effect_ids.add(record_id)
+                store.append(event_from_effect_record(record))
+                imported += 1
+    finally:
+        store.close()
+    return imported
+
+
+def query_history(
+    history: HistoryView,
+    *,
+    session: str | None = None,
+    workflow: str | None = None,
+    since: str | None = None,
+    failed: bool = False,
+    touched: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Parse user-facing filters and return matching turn records."""
+    return history.query_turns(
+        session=session,
+        workflow=workflow,
+        since=parse_since(since) if since else None,
+        failed=failed,
+        touched=touched_path_variants(touched) if touched else None,
+        limit=limit,
+    )
 
 
 def turn_matches_filters(
@@ -300,3 +557,59 @@ def effect_event_record(
 
 def event_time(event: Event) -> float:
     return time_from_timestamp_micros(event.timestamp_micros)
+
+
+def event_from_effect_record(record: dict[str, Any]) -> Event:
+    return Event(
+        id=str(record.get("id") or record["effect_id"]),
+        event_type="zeta.tool.called",
+        source="zeta",
+        payload={
+            "cwd": record.get("cwd"),
+            "turn_id": record.get("turn_id"),
+            "effects": [record],
+        },
+        idempotency_key=None,
+        caused_by=(
+            str(record["caused_by"])
+            if isinstance(record.get("caused_by"), str)
+            else None
+        ),
+        session_id=(
+            str(record["session"]) if isinstance(record.get("session"), str) else None
+        ),
+        turn_id=(
+            str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
+        ),
+        timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
+    )
+
+
+def event_from_record(record: dict[str, Any]) -> Event:
+    return Event(
+        id=str(record["id"]),
+        event_type=str(record["type"]),
+        source=str(record.get("source") or "sigil"),
+        payload=domain_payload(record),
+        idempotency_key=None,
+        caused_by=(
+            str(record["caused_by"])
+            if isinstance(record.get("caused_by"), str)
+            else None
+        ),
+        session_id=(
+            str(record["session"]) if isinstance(record.get("session"), str) else None
+        ),
+        turn_id=(
+            str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
+        ),
+        timestamp_micros=timestamp_micros_from_time(record.get("time")) or 0,
+    )
+
+
+def domain_payload(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+    }

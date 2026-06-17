@@ -8,7 +8,14 @@ from collections.abc import Iterable
 from typing import Any
 
 from zeta.context import ZetaContext
-from zeta.history import history_event_record
+from zeta.history import (
+    TURN_RECORD_SCHEMA,
+    effect_record,
+    history_event_record,
+    publish_effect_record,
+    publish_turn_record,
+    turn_record,
+)
 from zeta.timeline import add_event_link
 from zeta.tools.base import proposed_effect
 from zeta.trace import Derivation, Object, PromptTrace, warn_trace_failure_once
@@ -17,12 +24,9 @@ from .protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_EDIT,
     EFFECT_KIND_FILE_WRITE,
-    TURN_RECORD_SCHEMA,
-    effect_record,
     turn_contract,
-    turn_record,
 )
-from .state import append_effect_record, append_turn_record
+from .state import event_store_path, session_id
 
 
 class TurnRecorder:
@@ -88,7 +92,11 @@ class TurnRecorder:
             **fields,
         )
         event["effects"] = [*event.get("effects", []), payload]
-        payload = append_effect_record(payload)
+        payload = publish_effect_record(
+            payload,
+            path=event_store_path(),
+            session_id=session_id(),
+        )
         self.effect_ids.append(effect_id)
         self.effects.append(payload)
         object_id = str(event.get("tool_result_object_id") or "")
@@ -118,7 +126,11 @@ class TurnRecorder:
         caused_by = self.causal_parent_event_id()
         if caused_by is not None:
             record["caused_by"] = caused_by
-        event = append_turn_record(record)
+        event = publish_turn_record(
+            record,
+            path=event_store_path(),
+            session_id=session_id(),
+        )
         payload = history_event_record(event)
         record_turn_trace_object(
             payload,

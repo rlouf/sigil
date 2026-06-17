@@ -68,13 +68,6 @@ def is_shell_handoff_result(value: object) -> bool:
     return _has_schema(value, SHELL_HANDOFF_RESULT_SCHEMA)
 
 
-TURN_EVENT_COMPLETED = "sigil.turn.completed"
-TURN_EVENT_FAILED = "sigil.turn.failed"
-TURN_EVENT_ABORTED = "sigil.turn.aborted"
-TURN_RECORD_SCHEMA = "sigil.turn"
-EFFECT_RECORD_TYPE = "sigil.effect"
-EFFECT_RECORD_SCHEMA = "sigil.effect"
-
 TURN_OUTCOME_ANSWERED = "answered"
 TURN_OUTCOME_STAGED = "staged"
 TURN_OUTCOME_EXECUTED = "executed"
@@ -100,91 +93,3 @@ def turn_contract(
         "allowed_tools": list(allowed_tools),
         "staged": staged,
     }
-
-
-def turn_event_type(outcome: str) -> str:
-    """Return the durable event type for a turn outcome."""
-    if outcome == TURN_OUTCOME_FAILED:
-        return TURN_EVENT_FAILED
-    if outcome == TURN_OUTCOME_ABORTED:
-        return TURN_EVENT_ABORTED
-    return TURN_EVENT_COMPLETED
-
-
-def turn_record(
-    turn_id: str,
-    *,
-    workflow: str,
-    objective: str,
-    contract: Mapping[str, Any],
-    outcome: str,
-    agent: Mapping[str, str] | None = None,
-    cost: Mapping[str, int] | None = None,
-    prompt_object_ids: Iterable[str] = (),
-    effect_ids: Iterable[str] = (),
-) -> dict[str, Any]:
-    """Return one turn history record; the event envelope adds time/cwd/session."""
-    record: dict[str, Any] = {
-        "type": turn_event_type(outcome),
-        "schema": TURN_RECORD_SCHEMA,
-        "turn_id": turn_id,
-        "workflow": workflow,
-        "objective": objective,
-        "contract": dict(contract),
-        "outcome": outcome,
-        "prompt_object_ids": list(prompt_object_ids),
-        "effect_ids": list(effect_ids),
-    }
-    if agent is not None:
-        record["agent"] = dict(agent)
-    if cost is not None:
-        record["cost"] = dict(cost)
-    return record
-
-
-def effect_record(
-    effect_id: str,
-    *,
-    turn_id: str,
-    kind: str,
-    staged: bool,
-    path: str | None = None,
-    before_hash: str | None = None,
-    after_hash: str | None = None,
-    command: str | None = None,
-    exit_status: int | None = None,
-    duration_ms: int | None = None,
-    tool_call_id: str | None = None,
-    resolved_outcome: str | None = None,
-) -> dict[str, Any]:
-    """Return one turn effect record; unset optional facts are omitted."""
-    record: dict[str, Any] = {
-        "type": EFFECT_RECORD_TYPE,
-        "schema": EFFECT_RECORD_SCHEMA,
-        "effect_id": effect_id,
-        "turn_id": turn_id,
-        "kind": kind,
-        "staged": staged,
-    }
-    optionals: dict[str, Any] = {
-        "path": path,
-        "before_hash": before_hash,
-        "after_hash": after_hash,
-        "command": command,
-        "exit_status": exit_status,
-        "duration_ms": duration_ms,
-        "tool_call_id": tool_call_id,
-        "resolved_outcome": resolved_outcome,
-    }
-    record.update({key: value for key, value in optionals.items() if value is not None})
-    return record
-
-
-def is_turn_record(value: object) -> bool:
-    """Return whether a value is a turn history record."""
-    return _has_schema(value, TURN_RECORD_SCHEMA)
-
-
-def is_effect_record(value: object) -> bool:
-    """Return whether a value is a turn effect record."""
-    return _has_schema(value, EFFECT_RECORD_SCHEMA)

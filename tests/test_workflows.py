@@ -35,21 +35,23 @@ from sigil.protocols import (
     TURN_OUTCOME_EXECUTED,
     TURN_OUTCOME_FAILED,
     TURN_OUTCOME_STAGED,
-    effect_record,
-    is_effect_record,
-    is_turn_record,
     turn_contract,
-    turn_record,
 )
 from sigil.session import read_events, record_turn
-from sigil.state import history_index, session_dir
+from sigil.state import history_view, session_dir
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from zeta import agent as zeta_agent
 from zeta import timeline as zeta_timeline
 from zeta import trace as zeta_trace
 from zeta.events import Filter, SqliteEventStore, event_store_path
-from zeta.history import history_event_record
+from zeta.history import (
+    effect_record,
+    history_event_record,
+    is_effect_record,
+    is_turn_record,
+    turn_record,
+)
 from zeta.models import profiles as zeta_models
 from zeta.trace import PromptTrace
 
@@ -1952,7 +1954,7 @@ def history_turns() -> list[dict[str, Any]]:
 
 
 def history_effects() -> list[dict[str, Any]]:
-    return history_index().effects()
+    return history_view().effects()
 
 
 def zeta_tool_events() -> list[Any]:
@@ -2115,9 +2117,9 @@ def test_zeta_step_records_staged_turn_record(monkeypatch) -> None:
         }
     ]
     assert all(event.event_type != "sigil.effect" for event in read_events())
-    index = history_index()
-    assert index.turn(turn["turn_id"]) == turn
-    assert index.effects_for_turn(turn["turn_id"]) == [effect]
+    history = history_view()
+    assert history.turn(turn["turn_id"]) == turn
+    assert history.effects_for_turn(turn["turn_id"]) == [effect]
 
 
 def test_do_step_records_executed_turn_with_file_effect(monkeypatch) -> None:
@@ -2402,9 +2404,9 @@ def test_record_turn_emits_run_turn_and_command_effect() -> None:
     assert effect["exit_status"] == 1
     assert effect["duration_ms"] == 42
     assert effect["staged"] is False
-    index = history_index()
-    assert index.turn(turn["turn_id"]) == turn
-    assert index.effects_for_turn(turn["turn_id"]) == [effect]
+    history = history_view()
+    assert history.turn(turn["turn_id"]) == turn
+    assert history.effects_for_turn(turn["turn_id"]) == [effect]
 
 
 def test_record_turn_marks_clean_exit_executed() -> None:
@@ -2454,7 +2456,7 @@ def test_shell_handoff_resolution_emits_handoff_effect() -> None:
     assert effect["command"] == "uv run pytest"
     assert effect["exit_status"] == 2
     assert effect["staged"] is True
-    assert history_index().effects_for_turn("turn-stage-1") == [effect]
+    assert history_view().effects_for_turn("turn-stage-1") == [effect]
 
 
 def test_cancelled_handoff_resolution_emits_cancelled_effect() -> None:
