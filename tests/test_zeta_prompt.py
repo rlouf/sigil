@@ -20,8 +20,12 @@ from _zeta_helpers import (
     write_skill,
 )
 
+from sigil import (
+    MAX_CONTEXT_FILE_CHARS,
+    MAX_CONTEXT_TOTAL_CHARS,
+    load_project_context,
+)
 from sigil.tools import ensure_builtin_tools_registered
-from zeta import context as zeta_context
 from zeta import models as zeta_models_api
 from zeta import prompt as zeta_prompt
 from zeta import skills as zeta_skills
@@ -1057,7 +1061,7 @@ def test_zeta_project_context_loads_global_to_local(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(child)
 
-    context = zeta_context.load_project_context()
+    context = load_project_context()
 
     assert context.index("global instructions") < context.index("root instructions")
     assert context.index("root instructions") < context.index("child instructions")
@@ -1077,7 +1081,7 @@ def test_zeta_project_context_requires_exact_agents_filename(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    context = zeta_context.load_project_context()
+    context = load_project_context()
 
     assert "uppercase ignored" not in context
 
@@ -1093,7 +1097,7 @@ def test_zeta_project_context_ignores_missing_global_directory(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    context = zeta_context.load_project_context()
+    context = load_project_context()
 
     assert "project instructions" in context
 
@@ -1769,11 +1773,11 @@ def test_zeta_project_context_caps_oversized_files(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    context = zeta_context.load_project_context()
+    context = load_project_context()
 
     assert "start marker" in context
     assert "... truncated ..." in context
-    assert len(context) <= zeta_context.MAX_CONTEXT_FILE_CHARS + 200
+    assert len(context) <= MAX_CONTEXT_FILE_CHARS + 200
 
 
 def test_zeta_project_context_total_cap_drops_broadest_first(
@@ -1794,9 +1798,9 @@ def test_zeta_project_context_total_cap_drops_broadest_first(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    context = zeta_context.load_project_context()
+    context = load_project_context()
 
-    assert len(context) <= zeta_context.MAX_CONTEXT_TOTAL_CHARS + 200
+    assert len(context) <= MAX_CONTEXT_TOTAL_CHARS + 200
     assert "global rules" not in context
     assert "parent rules" in context
     assert "local rules" in context

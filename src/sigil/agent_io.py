@@ -20,7 +20,7 @@ from zeta.agent import (
     registered_capabilities,
     run_agent_turn,
 )
-from zeta.context import ZetaContext, load_project_context
+from zeta.context import ZetaContext
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelSelection,
@@ -31,6 +31,7 @@ from zeta.models import (
 from zeta.timeline import current_timeline, record_event
 from zeta.tools.registry import ExecutionMode
 
+from . import load_project_context
 from .display.render import render_tool_start
 from .display.state import (
     PROGRESS_MODE_TRACE,

@@ -21,7 +21,7 @@ from .agent import (
     registered_capabilities,
     run_agent_turn,
 )
-from .context import ZetaContext, default_context, load_project_context
+from .context import ZetaContext, default_context
 from .events import Event, EventCursor, EventReader, Filter
 from .timeline import current_timeline, record_event, timeline_event_from_durable_event
 from .tools.base import (
@@ -381,7 +381,7 @@ def rpc_agent_config(
 
 def rpc_context(params: dict[str, Any]) -> str:
     context = params.get("context")
-    return str(context) if isinstance(context, str) else load_project_context()
+    return str(context) if isinstance(context, str) else ""
 
 
 def optional_str_param(params: dict[str, Any], key: str) -> str | None:

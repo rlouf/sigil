@@ -1776,6 +1776,44 @@ Verification:
   returns no matches; the remaining `sigil.read` capability id in
   `src/zeta/prompt/system.py` is an intentional host-capability boundary.
 
+### Slice 2: project context loading boundary - complete
+
+Moved project instruction discovery out of Zeta and into Sigil:
+
+- `sigil.load_project_context()` now owns `AGENTS.md` discovery and prompt
+  context caps;
+- Sigil workflows and `agent_io` load project context at the product boundary
+  before calling Zeta;
+- Zeta RPC now uses only an explicit `context` parameter and defaults to an
+  empty context when none is supplied;
+- `src/zeta/context.py` now only builds runtime contexts and state paths.
+
+Tradeoff:
+
+- Zeta is cleaner and easier to embed as a product-neutral runtime.
+- Pure Zeta RPC callers no longer get implicit local project context; hosts must
+  pass context explicitly, which is the intended ownership boundary.
+
+Verification:
+
+- `uv run ripple src/zeta/context.py load_project_context` and
+  `uv run ripple src/zeta/rpc.py rpc_context` could not run because `ripple` is
+  not installed in this checkout.
+- `uv run pytest tests/test_zeta_prompt.py -q -k project_context` passed with
+  6 tests.
+- `uv run pytest tests/test_zeta_agent.py -q -k pure_session_without_sigil_turn`
+  passed with 1 test.
+- `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_agent.py tests/test_workflows.py -q`
+  passed with 235 tests.
+- `uv run pytest -q` passed with 829 tests and 4 skipped.
+- `uv run coverage run -m pytest` and `uv run coverage report` passed with
+  93% total coverage.
+- `uv run ty check src tests` passed.
+- `uvx --with radon radon cc src/sigil/__init__.py src/zeta/context.py src/zeta/rpc.py src/sigil/agent_io.py src/sigil/workflows/step.py tests/test_zeta_prompt.py -s`
+  passed.
+- `rg 'load_project_context|MAX_CONTEXT_FILE_CHARS|MAX_CONTEXT_TOTAL_CHARS|AGENTS\\.md|_agents_file|_context_directories' src/zeta`
+  returns no matches.
+
 ## Cross-cutting risks
 
 1. **Synchronous stdio blocks cancellation and timeouts.** Worker execution must

@@ -17,7 +17,7 @@ from zeta.agent import (
     registered_capabilities,
     run_agent_turn,
 )
-from zeta.context import ZetaContext, load_project_context
+from zeta.context import ZetaContext
 from zeta.models import (
     active_model_selection,
     model_selection_event,
@@ -30,6 +30,7 @@ from zeta.tools.registry import CapabilityRegistry, ExecutionMode
 from zeta.tools.registry import registry as _default_tool_registry
 from zeta.trace import latest_prompt_trace_fields
 
+from .. import load_project_context
 from ..agent_io import (
     TurnEventRecorder,
     TurnRenderer,
