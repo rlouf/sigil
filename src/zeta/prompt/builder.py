@@ -479,12 +479,29 @@ def payload_sha256(payload: dict[str, Any]) -> str:
 class ReconstructedPrompt:
     """A model request rebuilt from a prompt object's component closure."""
 
-    messages: list[dict[str, Any]]
-    tools: list[dict[str, Any]]
-    max_tokens: int
-    selected_model: str | None
-    thinking: str | None
+    plan: PromptPlan
+    model_input: ModelInput
     payload_verified: bool
+
+    @property
+    def messages(self) -> list[dict[str, Any]]:
+        return self.model_input.messages
+
+    @property
+    def tools(self) -> list[dict[str, Any]]:
+        return self.model_input.tools or []
+
+    @property
+    def max_tokens(self) -> int:
+        return self.model_input.max_tokens or DEFAULT_MAX_COMPLETION_TOKENS
+
+    @property
+    def selected_model(self) -> str | None:
+        return self.model_input.selected_model
+
+    @property
+    def thinking(self) -> str | None:
+        return self.model_input.thinking
 
 
 def reconstructed_prompt_request(
@@ -501,7 +518,7 @@ def reconstructed_prompt_request(
     prompt = store.get_object(prompt_id)
     if prompt is None or prompt.kind != "prompt":
         return None
-    messages: list[dict[str, Any]] = []
+    components: list[PromptComponent] = []
     tools: list[dict[str, Any]] = []
     for component_id in prompt.links:
         component = store.get_object(component_id)
@@ -509,27 +526,40 @@ def reconstructed_prompt_request(
             continue
         message = component.data.get("message")
         if isinstance(message, dict):
-            messages.append(message)
+            components.append(
+                PromptComponent(
+                    kind=component.kind,
+                    data=dict(component.data),
+                    message=message,
+                    source_object_id=component_id,
+                )
+            )
         if component.kind == "tool_descriptor_set":
             raw_tools = component.data.get("tools")
             if isinstance(raw_tools, list):
                 tools = raw_tools
     max_tokens, selected_model, thinking = prompt_builder_params(store, prompt_id)
-    payload = chat_completion_request_body(
-        messages,
-        tools=tools,
+    plan = PromptPlan(
+        components=tuple(components),
+        tools=tuple(tools),
         tool_choice="auto",
         max_tokens=max_tokens,
         selected_model=selected_model,
         thinking=thinking,
     )
+    model_input = render_model_input(plan)
+    payload = chat_completion_request_body(
+        model_input.messages,
+        tools=model_input.tools or [],
+        tool_choice=model_input.tool_choice,
+        max_tokens=model_input.max_tokens or DEFAULT_MAX_COMPLETION_TOKENS,
+        selected_model=model_input.selected_model,
+        thinking=model_input.thinking,
+    )
     expected = str(prompt.data.get("payload_sha256") or "")
     return ReconstructedPrompt(
-        messages=messages,
-        tools=tools,
-        max_tokens=max_tokens,
-        selected_model=selected_model,
-        thinking=thinking,
+        plan=plan,
+        model_input=model_input,
         payload_verified=bool(expected) and payload_sha256(payload) == expected,
     )
 

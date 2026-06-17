@@ -1125,6 +1125,29 @@ Verification:
 - `uvx --with radon radon cc src/zeta/prompt src/zeta/agent.py tests/test_zeta_prompt.py -s`
   passed.
 
+### Slice 2: reconstruction renders through plans - complete
+
+Updated stored prompt reconstruction to rebuild a `PromptPlan` from the prompt
+component closure before rendering provider-neutral `ModelInput`.
+
+Behavior preserved:
+
+- Existing `ReconstructedPrompt` accessors keep working for current callers.
+- Payload verification still compares the stored prompt hash against the
+  rendered Chat Completions request body.
+- Legacy no-thinking prompts still reconstruct with `thinking=None`.
+
+Verification:
+
+- `uv run ripple src/zeta/prompt/builder.py reconstructed_prompt_request`
+  could not run because `ripple` is not installed in this checkout.
+- `uv run pytest tests/test_zeta_prompt.py tests/test_zeta_trace.py -q` passed
+  with 147 tests.
+- `uv run pytest -q` passed with 823 tests and 4 skipped.
+- `uv run ruff check src tests` passed.
+- `uvx --with radon radon cc src/zeta/prompt src/zeta/agent.py tests/test_zeta_prompt.py -s`
+  passed.
+
 ## 6. Resumable step engine
 
 ### Current read

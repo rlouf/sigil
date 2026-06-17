@@ -289,6 +289,16 @@ def test_zeta_prompt_request_reconstructs_and_verifies() -> None:
     assert reconstructed.tools == prepared.tools
     assert reconstructed.selected_model == "unit-model"
     assert reconstructed.payload_verified
+    assert reconstructed.plan.selected_model == "unit-model"
+    assert zeta_prompt.render_model_input(
+        reconstructed.plan
+    ) == zeta_models_api.ModelInput(
+        messages=prepared.messages,
+        tools=prepared.tools,
+        tool_choice="auto",
+        max_tokens=zeta_model.DEFAULT_MAX_COMPLETION_TOKENS,
+        selected_model="unit-model",
+    )
 
 
 def test_zeta_prompt_plan_is_pure_and_repeatable() -> None:
