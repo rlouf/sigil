@@ -277,6 +277,44 @@ def test_zeta_model_runtime_event_round_trips_to_current_dict_shape() -> None:
     }
 
 
+def test_zeta_model_called_draft_sets_durable_metadata() -> None:
+    draft = zeta_agent.model_called_draft(
+        payload={"content": "done"},
+        turn_id="turn-1",
+        session_id="session-1",
+        caused_by="prompt-1",
+        event_id="model-1",
+    )
+
+    assert draft.event_type == "zeta.model.called"
+    assert draft.source == "zeta"
+    assert draft.payload == {"content": "done"}
+    assert draft.turn_id == "turn-1"
+    assert draft.session_id == "session-1"
+    assert draft.caused_by == "prompt-1"
+    assert draft.idempotency_key == "zeta.model.called:model-1"
+
+
+def test_zeta_model_durable_object_links_extract_trace_refs() -> None:
+    used_objects, returned_objects = zeta_agent.model_durable_object_links(
+        {
+            "prompt_trace": {
+                "prompt_object_id": "sha256:prompt",
+                "assistant_message_object_id": "sha256:assistant",
+            },
+            "tool_call_object_ids": ["sha256:call-1"],
+            "tool_call_object_id": "sha256:call-2",
+        }
+    )
+
+    assert used_objects == [{"kind": "prompt", "id": "sha256:prompt"}]
+    assert returned_objects == [
+        {"kind": "assistant_message", "id": "sha256:assistant"},
+        {"kind": "tool_call", "id": "sha256:call-1"},
+        {"kind": "tool_call", "id": "sha256:call-2"},
+    ]
+
+
 def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> None:
     model_tool_call = zeta_agent.ModelToolCall(
         call_id="call-1",
@@ -300,6 +338,36 @@ def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> Non
         "arguments": "{}",
         "caused_by": "assistant-1",
     }
+
+
+def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
+    draft = zeta_agent.tool_called_draft(
+        payload={"name": "read"},
+        turn_id="turn-1",
+        session_id="session-1",
+        caused_by="model-1",
+        event_id="tool-1",
+    )
+
+    assert draft.event_type == "zeta.tool.called"
+    assert draft.source == "zeta"
+    assert draft.payload == {"name": "read"}
+    assert draft.turn_id == "turn-1"
+    assert draft.session_id == "session-1"
+    assert draft.caused_by == "model-1"
+    assert draft.idempotency_key == "zeta.tool.called:tool-1"
+
+
+def test_zeta_tool_result_durable_object_links_extract_trace_refs() -> None:
+    used_objects, returned_objects = zeta_agent.tool_result_durable_object_links(
+        {
+            "tool_call_object_id": "sha256:call",
+            "tool_result_object_id": "sha256:result",
+        }
+    )
+
+    assert used_objects == [{"kind": "tool_call", "id": "sha256:call"}]
+    assert returned_objects == [{"kind": "tool_result", "id": "sha256:result"}]
 
 
 def test_zeta_tool_result_runtime_event_round_trips_to_current_dict_shape() -> None:

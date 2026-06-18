@@ -272,6 +272,26 @@ def durable_event_from_timeline(
 ) -> DraftEvent | None:
     durable_type = durable_type_from_timeline_type(event_type)
     if durable_type:
+        if durable_type == "zeta.model.called":
+            from zeta.loop import model_called_draft
+
+            return model_called_draft(
+                payload=payload,
+                turn_id=turn_id,
+                session_id=session_id,
+                caused_by=caused_by,
+                event_id=event_id,
+            )
+        if durable_type == "zeta.tool.called":
+            from zeta.loop import tool_called_draft
+
+            return tool_called_draft(
+                payload=payload,
+                turn_id=turn_id,
+                session_id=session_id,
+                caused_by=caused_by,
+                event_id=event_id,
+            )
         return durable_event_for_type(
             durable_type,
             payload=payload,
@@ -330,73 +350,15 @@ def durable_event_object_links(
     event: dict[str, Any],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     event_type = str(event.get("type") or "")
-    used_objects: list[dict[str, str]] = []
-    returned_objects: list[dict[str, str]] = []
     if event_type == "model":
-        prompt_trace = event.get("prompt_trace")
-        if isinstance(prompt_trace, dict):
-            add_object_link(
-                used_objects,
-                "prompt",
-                trace_object_id(prompt_trace, "prompt_object_id"),
-            )
-            add_object_link(
-                returned_objects,
-                "assistant_message",
-                trace_object_id(prompt_trace, "assistant_message_object_id"),
-            )
-        add_object_links(
-            returned_objects,
-            "tool_call",
-            event.get("tool_call_object_ids"),
-        )
-        add_object_link(
-            returned_objects,
-            "tool_call",
-            trace_object_id(event, "tool_call_object_id"),
-        )
+        from zeta.loop import model_durable_object_links
+
+        return model_durable_object_links(event)
     if event_type == "tool_result":
-        add_object_link(
-            used_objects,
-            "tool_call",
-            trace_object_id(event, "tool_call_object_id"),
-        )
-        add_object_link(
-            returned_objects,
-            "tool_result",
-            trace_object_id(event, "tool_result_object_id"),
-        )
-    return used_objects, returned_objects
+        from zeta.loop import tool_result_durable_object_links
 
-
-def add_object_links(
-    links: list[dict[str, str]],
-    kind: str,
-    object_ids: Any,
-) -> None:
-    if not isinstance(object_ids, (list, tuple)):
-        return
-    for object_id in object_ids:
-        add_object_link(links, kind, object_id if isinstance(object_id, str) else None)
-
-
-def add_object_link(
-    links: list[dict[str, str]],
-    kind: str,
-    object_id: str | None,
-) -> None:
-    if not object_id:
-        return
-    link = {"kind": kind, "id": object_id}
-    if link not in links:
-        links.append(link)
-
-
-def trace_object_id(event: dict[str, Any], field: str) -> str | None:
-    value = event.get(field)
-    if isinstance(value, str) and value.startswith("sha256:"):
-        return value
-    return None
+        return tool_result_durable_object_links(event)
+    return [], []
 
 
 def durable_event_id(event_type: str, event: dict[str, Any]) -> str | None:

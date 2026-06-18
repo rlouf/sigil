@@ -24,6 +24,7 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace, prompt_trace_payload
+from zeta.events import DraftEvent
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelInput,
@@ -36,6 +37,7 @@ from zeta.store.substrate import Store
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 DEFAULT_MAX_TURNS = 25
+EVENT_IDEMPOTENT_TYPES = frozenset({"zeta.model.called", "zeta.tool.called"})
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
 StepName = Literal[
@@ -879,6 +881,150 @@ class TurnAbortedRuntimeEvent:
 
 def model_event(assistant: dict[str, Any]) -> dict[str, Any]:
     return ModelRuntimeEvent.from_assistant(assistant).to_event()
+
+
+def model_called_draft(
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None = None,
+    event_id: str | None = None,
+) -> DraftEvent:
+    return durable_event_draft(
+        "zeta.model.called",
+        payload=payload,
+        turn_id=turn_id,
+        session_id=session_id,
+        caused_by=caused_by,
+        event_id=event_id,
+    )
+
+
+def tool_called_draft(
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None = None,
+    event_id: str | None = None,
+) -> DraftEvent:
+    return durable_event_draft(
+        "zeta.tool.called",
+        payload=payload,
+        turn_id=turn_id,
+        session_id=session_id,
+        caused_by=caused_by,
+        event_id=event_id,
+    )
+
+
+def durable_event_draft(
+    event_type: str,
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None,
+    event_id: str | None,
+) -> DraftEvent:
+    return DraftEvent(
+        event_type=event_type,
+        source="zeta",
+        payload=payload,
+        idempotency_key=event_idempotency_key(event_type, event_id),
+        caused_by=caused_by,
+        session_id=session_id,
+        turn_id=turn_id,
+    )
+
+
+def event_idempotency_key(event_type: str, event_id: str | None) -> str | None:
+    if event_type not in EVENT_IDEMPOTENT_TYPES or not event_id:
+        return None
+    return f"{event_type}:{event_id}"
+
+
+def model_durable_object_links(
+    event: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    used_objects: list[dict[str, str]] = []
+    returned_objects: list[dict[str, str]] = []
+    prompt_trace = event.get("prompt_trace")
+    if isinstance(prompt_trace, dict):
+        add_durable_object_link(
+            used_objects,
+            "prompt",
+            trace_object_id(prompt_trace, "prompt_object_id"),
+        )
+        add_durable_object_link(
+            returned_objects,
+            "assistant_message",
+            trace_object_id(prompt_trace, "assistant_message_object_id"),
+        )
+    add_durable_object_links(
+        returned_objects,
+        "tool_call",
+        event.get("tool_call_object_ids"),
+    )
+    add_durable_object_link(
+        returned_objects,
+        "tool_call",
+        trace_object_id(event, "tool_call_object_id"),
+    )
+    return used_objects, returned_objects
+
+
+def tool_result_durable_object_links(
+    event: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    used_objects: list[dict[str, str]] = []
+    returned_objects: list[dict[str, str]] = []
+    add_durable_object_link(
+        used_objects,
+        "tool_call",
+        trace_object_id(event, "tool_call_object_id"),
+    )
+    add_durable_object_link(
+        returned_objects,
+        "tool_result",
+        trace_object_id(event, "tool_result_object_id"),
+    )
+    return used_objects, returned_objects
+
+
+def add_durable_object_links(
+    links: list[dict[str, str]],
+    kind: str,
+    object_ids: Any,
+) -> None:
+    if not isinstance(object_ids, (list, tuple)):
+        return
+    for object_id in object_ids:
+        add_durable_object_link(
+            links,
+            kind,
+            object_id if isinstance(object_id, str) else None,
+        )
+
+
+def add_durable_object_link(
+    links: list[dict[str, str]],
+    kind: str,
+    object_id: str | None,
+) -> None:
+    if not object_id:
+        return
+    link = {"kind": kind, "id": object_id}
+    if link not in links:
+        links.append(link)
+
+
+def trace_object_id(event: dict[str, Any], field: str) -> str | None:
+    value = event.get(field)
+    if isinstance(value, str) and value.startswith("sha256:"):
+        return value
+    return None
 
 
 def ensure_event_id(event: dict[str, Any]) -> str:
