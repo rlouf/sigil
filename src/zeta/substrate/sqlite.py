@@ -207,6 +207,10 @@ def _table_columns(connection: sqlite3.Connection, table: str) -> set[str]:
     return {str(row["name"]) for row in rows}
 
 
+def optional_session_id(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _object_from_row(row: sqlite3.Row) -> Object:
     return Object(
         kind=str(row["kind"]),
@@ -302,7 +306,7 @@ class SqliteStore(StoreBase):
                   PRIMARY KEY (scope, name)
                 );
                 CREATE TABLE IF NOT EXISTS derivations (
-                  id TEXT PRIMARY KEY,
+                  id TEXT NOT NULL,
                   session_id TEXT,
                   producer TEXT NOT NULL,
                   output_id TEXT NOT NULL,
@@ -315,16 +319,25 @@ class SqliteStore(StoreBase):
             self._migrate_legacy_schema()
             self.connection.executescript(
                 """
+                CREATE UNIQUE INDEX IF NOT EXISTS derivations_scope_id_idx
+                  ON derivations(COALESCE(session_id, ''), id);
                 CREATE INDEX IF NOT EXISTS derivations_session_output_id_idx
                   ON derivations(session_id, output_id, created_at);
                 CREATE INDEX IF NOT EXISTS derivations_output_id_idx
                   ON derivations(output_id, created_at);
                 CREATE TABLE IF NOT EXISTS derivation_inputs (
+                  session_id TEXT,
                   derivation_id TEXT NOT NULL,
                   input_id TEXT NOT NULL,
-                  position INTEGER NOT NULL,
-                  PRIMARY KEY (derivation_id, position)
+                  position INTEGER NOT NULL
                 );
+                """
+            )
+            self._migrate_derivation_inputs_schema()
+            self.connection.executescript(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS derivation_inputs_scope_position_idx
+                  ON derivation_inputs(COALESCE(session_id, ''), derivation_id, position);
                 CREATE INDEX IF NOT EXISTS derivation_inputs_input_id_idx
                   ON derivation_inputs(input_id);
                 """
@@ -355,6 +368,47 @@ class SqliteStore(StoreBase):
             self.connection.execute(
                 "ALTER TABLE derivations ADD COLUMN session_id TEXT"
             )
+        if self._derivations_id_is_primary_key():
+            self.connection.executescript(
+                """
+                ALTER TABLE derivations RENAME TO derivations_old;
+                CREATE TABLE derivations (
+                  id TEXT NOT NULL,
+                  session_id TEXT,
+                  producer TEXT NOT NULL,
+                  output_id TEXT NOT NULL,
+                  input_ids_json TEXT NOT NULL,
+                  params_json TEXT NOT NULL,
+                  created_at REAL NOT NULL
+                );
+                INSERT OR IGNORE INTO derivations
+                  (id, session_id, producer, output_id, input_ids_json,
+                   params_json, created_at)
+                  SELECT id, session_id, producer, output_id, input_ids_json,
+                         params_json, created_at
+                  FROM derivations_old;
+                DROP TABLE derivations_old;
+                """
+            )
+
+    def _derivations_id_is_primary_key(self) -> bool:
+        rows = self.connection.execute("PRAGMA table_info(derivations)").fetchall()
+        return any(str(row["name"]) == "id" and int(row["pk"]) for row in rows)
+
+    def _migrate_derivation_inputs_schema(self) -> None:
+        columns = _table_columns(self.connection, "derivation_inputs")
+        if columns and "session_id" not in columns:
+            self.connection.executescript(
+                """
+                DROP TABLE derivation_inputs;
+                CREATE TABLE derivation_inputs (
+                  session_id TEXT,
+                  derivation_id TEXT NOT NULL,
+                  input_id TEXT NOT NULL,
+                  position INTEGER NOT NULL
+                );
+                """
+            )
 
     def _backfill_derivation_inputs(self) -> None:
         """Index pre-existing derivations whose inputs predate the table."""
@@ -365,10 +419,11 @@ class SqliteStore(StoreBase):
             if int(indexed["n"]):
                 return
             rows = self.connection.execute(
-                "SELECT id, input_ids_json FROM derivations"
+                "SELECT session_id, id, input_ids_json FROM derivations"
             ).fetchall()
             for row in rows:
                 self._index_derivation_inputs(
+                    optional_session_id(row["session_id"]),
                     str(row["id"]),
                     tuple(json.loads(str(row["input_ids_json"]))),
                 )
@@ -376,17 +431,18 @@ class SqliteStore(StoreBase):
 
     def _index_derivation_inputs(
         self,
+        session_id: str | None,
         derivation_id_value: str,
         input_ids: tuple[ObjectId, ...],
     ) -> None:
         self.connection.executemany(
             """
             INSERT OR IGNORE INTO derivation_inputs
-              (derivation_id, input_id, position)
-            VALUES (?, ?, ?)
+              (session_id, derivation_id, input_id, position)
+            VALUES (?, ?, ?, ?)
             """,
             [
-                (derivation_id_value, input_id, position)
+                (session_id, derivation_id_value, input_id, position)
                 for position, input_id in enumerate(input_ids)
             ],
         )
@@ -490,7 +546,7 @@ class SqliteStore(StoreBase):
     def record_derivation(self, derivation: Derivation) -> str:
         self._ensure_writable()
         stored = derivation.normalized()
-        id_value = stored.content_id(session_id=self.session_id)
+        id_value = stored.content_id()
         with self._write_lock:
             self.connection.execute(
                 """
@@ -509,7 +565,7 @@ class SqliteStore(StoreBase):
                     time.time(),
                 ),
             )
-            self._index_derivation_inputs(id_value, stored.input_ids)
+            self._index_derivation_inputs(self.session_id, id_value, stored.input_ids)
             self._commit()
         return id_value
 
@@ -591,11 +647,9 @@ class SqliteStore(StoreBase):
         """Insert an exported derivation, preserving its original timestamp."""
         self._ensure_writable()
         stored = derivation.normalized()
-        stored_id = (
-            stored.content_id(session_id=self.session_id)
-            if self.session_id is not None
-            else derivation_id_value
-        )
+        stored_id = stored.content_id()
+        if self.session_id is None:
+            stored_id = derivation_id_value
         with self._write_lock:
             self.connection.execute(
                 """
@@ -614,13 +668,21 @@ class SqliteStore(StoreBase):
                     created_at,
                 ),
             )
-            self._index_derivation_inputs(stored_id, stored.input_ids)
+            self._index_derivation_inputs(
+                self.session_id,
+                stored_id,
+                stored.input_ids,
+            )
             self._commit()
 
     def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]:
-        session_filter, params = self._session_filter(
-            "derivation_inputs.input_id = ?", input_id
-        )
+        session_filter = "derivation_inputs.input_id = ?"
+        params: tuple[Any, ...] = (input_id,)
+        if self.session_id is not None:
+            session_filter = (
+                "derivations.session_id = ? AND derivation_inputs.input_id = ?"
+            )
+            params = (self.session_id, input_id)
         rows = self.connection.execute(
             f"""
             SELECT derivations.producer, derivations.output_id,
@@ -628,8 +690,9 @@ class SqliteStore(StoreBase):
             FROM derivations
             JOIN derivation_inputs
               ON derivation_inputs.derivation_id = derivations.id
+             AND derivation_inputs.session_id IS derivations.session_id
             WHERE {session_filter}
-            GROUP BY derivations.id
+            GROUP BY derivations.session_id, derivations.id
             ORDER BY derivations.created_at, derivations.id
             """,
             params,
@@ -681,6 +744,7 @@ class SqliteStore(StoreBase):
               FROM derivations
               JOIN derivation_inputs
                 ON derivation_inputs.derivation_id = derivations.id
+               AND derivation_inputs.session_id IS derivations.session_id
               WHERE derivations.session_id = ?
             ) AS session_objects ON session_objects.object_id = objects.id
             """
@@ -725,19 +789,10 @@ class SqliteStore(StoreBase):
         if target is None:
             raise ValueError("session id is required")
         with self._write_lock:
-            derivation_ids = [
-                str(row["id"])
-                for row in self.connection.execute(
-                    "SELECT id FROM derivations WHERE session_id = ?",
-                    (target,),
-                ).fetchall()
-            ]
-            if derivation_ids:
-                placeholders = ", ".join("?" for _ in derivation_ids)
-                self.connection.execute(
-                    f"DELETE FROM derivation_inputs WHERE derivation_id IN ({placeholders})",
-                    derivation_ids,
-                )
+            self.connection.execute(
+                "DELETE FROM derivation_inputs WHERE session_id = ?",
+                (target,),
+            )
             self.connection.execute(
                 "DELETE FROM derivations WHERE session_id = ?",
                 (target,),

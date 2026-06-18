@@ -1275,6 +1275,33 @@ def test_zeta_trace_dedupes_forward_rows_for_repeated_derivations(
     store.close()
 
 
+def test_zeta_trace_derivation_ids_are_content_scoped_across_sessions(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "trace.sqlite3"
+    first = zeta_trace.SqliteStore(path, session_id="first")
+    second = zeta_trace.SqliteStore(path, session_id="second")
+    derivation = zeta_trace.Derivation(
+        producer="test:v1",
+        output_id="sha256:out",
+        input_ids=("sha256:in",),
+    )
+
+    first_id = first.record_derivation(derivation)
+    second_id = second.record_derivation(derivation)
+
+    assert first_id == second_id == derivation.content_id()
+    assert first.derivations_for_input("sha256:in") == [derivation]
+    assert second.derivations_for_input("sha256:in") == [derivation]
+
+    first.clear_session()
+
+    assert first.derivations_for_input("sha256:in") == []
+    assert second.derivations_for_input("sha256:in") == [derivation]
+    first.close()
+    second.close()
+
+
 def test_zeta_trace_backfills_derivation_inputs_on_open(tmp_path: Path) -> None:
     path = tmp_path / "trace.sqlite3"
     store = zeta_trace.SqliteStore(path)

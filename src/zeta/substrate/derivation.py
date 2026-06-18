@@ -27,7 +27,7 @@ class Derivation:
             params=normalize_json(self.params),
         )
 
-    def content_id(self, *, session_id: str | None = None) -> str:
+    def content_id(self) -> str:
         """Return the deterministic content address for this derivation."""
         payload: dict[str, Any] = {
             "producer": self.producer,
@@ -35,7 +35,5 @@ class Derivation:
             "input_ids": self.input_ids,
             "params": self.params,
         }
-        if session_id is not None:
-            payload = {"session_id": session_id, **payload}
         digest = hashlib.sha256(canonical_json(payload).encode()).hexdigest()
         return f"derivation:{digest}"
