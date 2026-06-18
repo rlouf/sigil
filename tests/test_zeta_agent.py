@@ -128,6 +128,40 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
     assert result.events[0]["content"] == "done"
 
 
+def test_zeta_agent_turn_can_emit_direct_durable_model_event(monkeypatch) -> None:
+    drafts: list[DraftEvent] = []
+
+    class Sink:
+        def accept(self, draft: DraftEvent) -> AppendOutcome:
+            drafts.append(draft)
+            return AppendOutcome(Event.from_draft(draft), inserted=True)
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        lambda *args, **kwargs: {"content": "done"},
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "answer",
+        [],
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
+        durable_event_sink=Sink(),
+        session_id="session-1",
+        turn_id="turn-1",
+        caused_by="prompt-1",
+    )
+
+    assert result.events[0]["content"] == "done"
+    assert len(drafts) == 1
+    assert drafts[0].event_type == "zeta.model.called"
+    assert drafts[0].payload == {"content": "done", "_timeline_type": "model"}
+    assert drafts[0].session_id == "session-1"
+    assert drafts[0].turn_id == "turn-1"
+    assert drafts[0].caused_by == "prompt-1"
+
+
 def test_zeta_tool_result_event_records_error_for_failed_content_result() -> None:
     event = zeta_agent.tool_result_event(
         "call-1",
