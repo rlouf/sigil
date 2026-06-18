@@ -17,7 +17,6 @@ from sigil.agent_io import (
     model_server_ready,
     model_telemetry_fields,
     record_turn_abort,
-    record_zeta_event,
     render_final_text,
 )
 from sigil.display.render import render_tool_result_summary
@@ -456,11 +455,16 @@ def record_agent_model_telemetry(
     if not fields:
         return
     fields.update(latest_prompt_trace_fields(prompt_traces))
-    record_zeta_event(
-        "model_usage",
-        runtime_context=runtime_context,
-        **fields,
-        workflow=workflow,
+    runtime_context.event_sink.accept(
+        DraftEvent(
+            event_type="zeta.model_usage",
+            source="zeta",
+            payload={**fields, "workflow": workflow, "_timeline_type": "model_usage"},
+            idempotency_key=None,
+            caused_by=None,
+            session_id=runtime_context.session_id,
+            turn_id=None,
+        )
     )
 
 
