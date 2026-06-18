@@ -194,7 +194,15 @@ class TurnAbortedRuntimeEvent:
         )
 
 
-def runtime_event_from_event(event: dict[str, Any]) -> Any:
+RuntimeEvent = (
+    ModelRuntimeEvent
+    | ToolCallRuntimeEvent
+    | ToolResultRuntimeEvent
+    | TurnAbortedRuntimeEvent
+)
+
+
+def runtime_event_from_event(event: dict[str, Any]) -> RuntimeEvent | None:
     event_type = str(event.get("type") or "")
     if event_type == "model":
         return ModelRuntimeEvent.from_event(event)

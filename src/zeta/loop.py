@@ -759,31 +759,34 @@ def emit_tool_event(
     *,
     ctx: TurnContext,
 ) -> None:
-    publish_tool_draft(
-        event,
+    record_runtime_event(
+        events,
+        runtime_events.runtime_event_from_event(event),
+        event=event,
         ctx=ctx,
     )
-    emit_event(events, event, ctx.event_sink)
 
 
-def publish_tool_draft(
-    event: dict[str, Any],
+def record_runtime_event(
+    events: list[dict[str, Any]],
+    runtime_event: runtime_events.RuntimeEvent | None,
     *,
+    event: dict[str, Any] | None = None,
     ctx: TurnContext,
-) -> None:
-    if ctx.durable_event_sink is None or ctx.session_id is None:
-        return
-    ctx.durable_event_sink.accept(
-        tool_called_draft(
-            payload=tool_durable_payload(event),
-            turn_id=ctx.turn_id,
-            session_id=ctx.session_id,
-            caused_by=event.get("caused_by")
-            if isinstance(event.get("caused_by"), str)
-            else None,
-            event_id=event.get("id") if isinstance(event.get("id"), str) else None,
-        )
+) -> dict[str, Any]:
+    recorded = (
+        runtime_event.to_event() if runtime_event is not None else dict(event or {})
     )
+    if (
+        runtime_event is not None
+        and ctx.durable_event_sink is not None
+        and ctx.session_id is not None
+    ):
+        ctx.durable_event_sink.accept(
+            runtime_event.to_durable(session_id=ctx.session_id, turn_id=ctx.turn_id)
+        )
+    emit_event(events, recorded, ctx.event_sink)
+    return recorded
 
 
 def tool_durable_payload(event: dict[str, Any]) -> dict[str, Any]:
@@ -893,33 +896,12 @@ def record_model_event(
     if tool_call_object_ids:
         event["tool_call_object_ids"] = tool_call_object_ids
     if event:
-        publish_model_draft(
-            event,
+        record_runtime_event(
+            events,
+            runtime_events.ModelRuntimeEvent.from_event(event),
             ctx=ctx,
         )
-        emit_event(events, event, ctx.event_sink)
     return event_id, tool_calls
-
-
-def publish_model_draft(
-    event: dict[str, Any],
-    *,
-    ctx: TurnContext,
-) -> None:
-    if ctx.durable_event_sink is None or ctx.session_id is None:
-        return
-    payload = model_durable_payload(event)
-    ctx.durable_event_sink.accept(
-        model_called_draft(
-            payload=payload,
-            turn_id=ctx.turn_id,
-            session_id=ctx.session_id,
-            caused_by=event.get("caused_by")
-            if isinstance(event.get("caused_by"), str)
-            else None,
-            event_id=event.get("id") if isinstance(event.get("id"), str) else None,
-        )
-    )
 
 
 def model_durable_payload(event: dict[str, Any]) -> dict[str, Any]:
