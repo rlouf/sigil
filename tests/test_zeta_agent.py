@@ -501,6 +501,65 @@ def test_zeta_record_model_event_can_emit_direct_durable_draft() -> None:
     assert drafts[0].idempotency_key == f"zeta.model.called:{event_id}"
 
 
+def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
+    drafts: list[DraftEvent] = []
+
+    class Sink:
+        def accept(self, draft: DraftEvent) -> AppendOutcome:
+            drafts.append(draft)
+            return AppendOutcome(Event.from_draft(draft), inserted=True)
+
+    registry = CapabilityRegistry()
+    registry.register(
+        _test_capability(
+            "read",
+            run_result={"ok": True, "content": [{"type": "text", "text": "done"}]},
+        )
+    )
+    allowed_capabilities = ("test.read",)
+
+    result = zeta_agent.handle_tool_call(
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "read", "arguments": '{"path": "README.md"}'},
+        },
+        allowed_capabilities=allowed_capabilities,
+        projection=registry.project(allowed_capabilities),
+        index=0,
+        execution_mode="direct",
+        event_sink=None,
+        durable_event_sink=Sink(),
+        session_id="session-1",
+        turn_id="turn-1",
+        tool_registry=registry,
+        caused_by="model-1",
+    )
+
+    assert [event["type"] for event in result.events] == ["tool_call", "tool_result"]
+    assert [draft.event_type for draft in drafts] == [
+        "zeta.tool.called",
+        "zeta.tool.called",
+    ]
+    assert drafts[0].payload == {
+        "_timeline_type": "tool_call",
+        "arguments": '{"path": "README.md"}',
+        "capability_id": "test.read",
+        "input": {"path": "README.md"},
+        "name": "read",
+        "status": "pending",
+        "tool_call_id": "call-1",
+    }
+    assert drafts[1].payload["_timeline_type"] == "tool_result"
+    assert drafts[1].payload["result"] == {
+        "ok": True,
+        "content": [{"type": "text", "text": "done"}],
+    }
+    assert [draft.session_id for draft in drafts] == ["session-1", "session-1"]
+    assert [draft.turn_id for draft in drafts] == ["turn-1", "turn-1"]
+    assert [draft.caused_by for draft in drafts] == ["model-1", "model-1"]
+
+
 def test_zeta_assistant_message_round_trips_content_to_model_event() -> None:
     assistant = zeta_agent.AssistantMessage.from_provider({"content": "done"})
 

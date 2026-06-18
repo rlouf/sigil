@@ -272,6 +272,9 @@ def run_agent_steps(
             prompt_trace=turn.prompt_trace,
             builder=builder,
             event_sink=event_sink,
+            durable_event_sink=durable_event_sink,
+            session_id=session_id,
+            turn_id=turn_id,
             tool_registry=tool_registry,
             assistant_event_id=assistant_event_id,
             state=state,
@@ -440,6 +443,9 @@ def run_capability_calls(
     prompt_trace: PromptTrace | None,
     builder: PromptBuilder,
     event_sink: AgentEventSink | None,
+    durable_event_sink: EventSink | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
     tool_registry: CapabilityRegistry,
     assistant_event_id: str | None,
     state: AgentTurnState,
@@ -457,6 +463,9 @@ def run_capability_calls(
             prompt_trace=prompt_trace,
             builder=builder,
             event_sink=event_sink,
+            durable_event_sink=durable_event_sink,
+            session_id=session_id,
+            turn_id=turn_id,
             tool_registry=tool_registry,
             assistant_event_id=assistant_event_id,
             state=state,
@@ -485,6 +494,9 @@ def run_capability_step(
     prompt_trace: PromptTrace | None,
     builder: PromptBuilder,
     event_sink: AgentEventSink | None,
+    durable_event_sink: EventSink | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
     tool_registry: CapabilityRegistry,
     assistant_event_id: str | None,
     state: RunState,
@@ -519,6 +531,9 @@ def run_capability_step(
         prompt_trace=prompt_trace,
         prompt_builder=builder,
         event_sink=event_sink,
+        durable_event_sink=durable_event_sink,
+        session_id=session_id,
+        turn_id=turn_id,
         tool_registry=tool_registry,
         caused_by=assistant_event_id,
     )
@@ -786,6 +801,90 @@ def emit_event(
     events.append(event)
     if event_sink is not None:
         event_sink(event)
+
+
+def emit_tool_event(
+    events: list[dict[str, Any]],
+    event: dict[str, Any],
+    *,
+    event_sink: AgentEventSink | None,
+    durable_event_sink: EventSink | None,
+    session_id: str | None,
+    turn_id: str | None,
+) -> None:
+    publish_tool_draft(
+        event,
+        event_sink=durable_event_sink,
+        session_id=session_id,
+        turn_id=turn_id,
+    )
+    emit_event(events, event, event_sink)
+
+
+def publish_tool_draft(
+    event: dict[str, Any],
+    *,
+    event_sink: EventSink | None,
+    session_id: str | None,
+    turn_id: str | None,
+) -> None:
+    if event_sink is None or session_id is None:
+        return
+    event_sink.accept(
+        tool_called_draft(
+            payload=tool_durable_payload(event),
+            turn_id=turn_id,
+            session_id=session_id,
+            caused_by=event.get("caused_by")
+            if isinstance(event.get("caused_by"), str)
+            else None,
+            event_id=event.get("id") if isinstance(event.get("id"), str) else None,
+        )
+    )
+
+
+def tool_durable_payload(event: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        key: value
+        for key, value in event.items()
+        if key
+        not in {
+            "id",
+            "type",
+            "time",
+            "session",
+            "source",
+            "caused_by",
+            "prompt_trace",
+            "tool_call_object_id",
+            "tool_call_object_ids",
+            "tool_result_object_id",
+        }
+    }
+    payload["_timeline_type"] = str(event.get("type") or "")
+    used_objects, returned_objects = tool_durable_object_links(event)
+    if used_objects:
+        payload["used_objects"] = used_objects
+    if returned_objects:
+        payload["returned_objects"] = returned_objects
+    return payload
+
+
+def tool_durable_object_links(
+    event: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    event_type = str(event.get("type") or "")
+    if event_type == "tool_result":
+        return tool_result_durable_object_links(event)
+    if event_type != "tool_call":
+        return [], []
+    returned_objects: list[dict[str, str]] = []
+    add_durable_object_link(
+        returned_objects,
+        "tool_call",
+        trace_object_id(event, "tool_call_object_id"),
+    )
+    return [], returned_objects
 
 
 @dataclass(frozen=True)
@@ -1302,6 +1401,9 @@ def handle_tool_call(
     prompt_trace: PromptTrace | None = None,
     prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
+    durable_event_sink: EventSink | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
     tool_registry: CapabilityRegistry | None = None,
     caused_by: str | None = None,
 ) -> CapabilityCallResult:
@@ -1319,6 +1421,9 @@ def handle_tool_call(
             prompt_trace=prompt_trace,
             prompt_builder=prompt_builder,
             event_sink=event_sink,
+            durable_event_sink=durable_event_sink,
+            session_id=session_id,
+            turn_id=turn_id,
             caused_by=caused_by,
         )
     validation = validate_tool_call(
@@ -1337,6 +1442,9 @@ def handle_tool_call(
             prompt_trace=prompt_trace,
             prompt_builder=prompt_builder,
             event_sink=event_sink,
+            durable_event_sink=durable_event_sink,
+            session_id=session_id,
+            turn_id=turn_id,
         )
     return run_valid_tool_call(
         invocation,
@@ -1346,6 +1454,9 @@ def handle_tool_call(
         prompt_trace=prompt_trace,
         prompt_builder=prompt_builder,
         event_sink=event_sink,
+        durable_event_sink=durable_event_sink,
+        session_id=session_id,
+        turn_id=turn_id,
         tool_registry=active_tool_registry,
     )
 
@@ -1411,6 +1522,9 @@ def reject_tool_call(
     prompt_trace: PromptTrace | None,
     prompt_builder: PromptBuilder | None,
     event_sink: AgentEventSink | None,
+    durable_event_sink: EventSink | None,
+    session_id: str | None,
+    turn_id: str | None,
 ) -> CapabilityCallResult:
     return invalid_tool_result(
         invocation.call_id,
@@ -1423,6 +1537,9 @@ def reject_tool_call(
         prompt_trace=prompt_trace,
         prompt_builder=prompt_builder,
         event_sink=event_sink,
+        durable_event_sink=durable_event_sink,
+        session_id=session_id,
+        turn_id=turn_id,
     )
 
 
@@ -1435,6 +1552,9 @@ def run_valid_tool_call(
     prompt_trace: PromptTrace | None,
     prompt_builder: PromptBuilder | None,
     event_sink: AgentEventSink | None,
+    durable_event_sink: EventSink | None,
+    session_id: str | None,
+    turn_id: str | None,
     tool_registry: CapabilityRegistry,
 ) -> CapabilityCallResult:
     events: list[dict[str, Any]] = []
@@ -1445,7 +1565,14 @@ def run_valid_tool_call(
         prompt_trace=prompt_trace,
         prompt_builder=prompt_builder,
     )
-    emit_event(events, call_event, event_sink)
+    emit_tool_event(
+        events,
+        call_event,
+        event_sink=event_sink,
+        durable_event_sink=durable_event_sink,
+        session_id=session_id,
+        turn_id=turn_id,
+    )
     try:
         result = invoke_capability(
             capability_id,
@@ -1469,7 +1596,7 @@ def run_valid_tool_call(
         and invocation.name == "edit"
         and result.get("ok") is True
     )
-    emit_event(
+    emit_tool_event(
         events,
         traced_tool_result_event(
             invocation.call_id,
@@ -1481,7 +1608,10 @@ def run_valid_tool_call(
             prompt_trace=prompt_trace,
             prompt_builder=prompt_builder,
         ),
-        event_sink,
+        event_sink=event_sink,
+        durable_event_sink=durable_event_sink,
+        session_id=session_id,
+        turn_id=turn_id,
     )
     return CapabilityCallResult(
         events=events,
@@ -1516,6 +1646,9 @@ def invalid_tool_result(
     prompt_trace: PromptTrace | None = None,
     prompt_builder: PromptBuilder | None = None,
     event_sink: AgentEventSink | None = None,
+    durable_event_sink: EventSink | None = None,
+    session_id: str | None = None,
+    turn_id: str | None = None,
     caused_by: str | None = None,
 ) -> CapabilityCallResult:
     event = call_event or {
@@ -1548,11 +1681,21 @@ def invalid_tool_result(
         prompt_trace=prompt_trace,
         prompt_builder=prompt_builder,
     )
-    emit_event(events, event, event_sink)
-    emit_event(
+    emit_tool_event(
+        events,
+        event,
+        event_sink=event_sink,
+        durable_event_sink=durable_event_sink,
+        session_id=session_id,
+        turn_id=turn_id,
+    )
+    emit_tool_event(
         events,
         result_event,
-        event_sink,
+        event_sink=event_sink,
+        durable_event_sink=durable_event_sink,
+        session_id=session_id,
+        turn_id=turn_id,
     )
     return CapabilityCallResult(events=events)
 
