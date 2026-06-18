@@ -18,7 +18,6 @@ from .object import (
     ObjectId,
 )
 from .refs import (
-    REF_EXPECTED_UNSET,
     Ref,
     RefUpdate,
     UnknownSessionError,
@@ -183,7 +182,9 @@ def import_trace_graph(
                     float(row["created_at"]),
                 )
             for name, object_id_value in (graph.get("refs") or {}).items():
-                store.set_ref(str(name), str(object_id_value))
+                current = store.get_ref(str(name))
+                expected = current.object_id if current is not None else None
+                store.move_ref(str(name), expected, str(object_id_value))
     finally:
         store.close()
     return count
@@ -484,39 +485,29 @@ class SqliteStore(StoreBase):
         ).fetchall()
         return [str(row["id"]) for row in rows]
 
-    def set_ref(
+    def move_ref(
         self,
         name: str,
-        object_id: ObjectId,
-        *,
-        expected: ObjectId | None | object = REF_EXPECTED_UNSET,
+        expected: ObjectId | None,
+        new: ObjectId,
     ) -> RefUpdate:
         self._ensure_writable()
         with self._write_lock:
             old_object_id = self._ref_object_id(name)
-            if expected is not REF_EXPECTED_UNSET and old_object_id != expected:
+            if old_object_id != expected:
                 return RefUpdate(
                     name=name,
                     old_object_id=old_object_id,
-                    new_object_id=object_id,
+                    new_object_id=new,
                     updated=False,
                 )
-            if expected is REF_EXPECTED_UNSET:
-                self.connection.execute(
-                    """
-                    INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
-                    ON CONFLICT(scope, name) DO UPDATE
-                    SET object_id = excluded.object_id
-                    """,
-                    (self.scope, name, object_id),
-                )
-            elif expected is None:
+            if expected is None:
                 self.connection.execute(
                     """
                     INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
                     ON CONFLICT(scope, name) DO NOTHING
                     """,
-                    (self.scope, name, object_id),
+                    (self.scope, name, new),
                 )
             else:
                 self.connection.execute(
@@ -525,13 +516,13 @@ class SqliteStore(StoreBase):
                     SET object_id = ?
                     WHERE scope = ? AND name = ? AND object_id = ?
                     """,
-                    (object_id, self.scope, name, expected),
+                    (new, self.scope, name, expected),
                 )
             self._commit()
             return RefUpdate(
                 name=name,
                 old_object_id=old_object_id,
-                new_object_id=object_id,
+                new_object_id=new,
                 updated=True,
             )
 

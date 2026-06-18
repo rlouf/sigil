@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 from typing import Any
 
-from ..substrate import durable_event_object_links
 from .event import DraftEvent, Event, timestamp_micros_from_time
 
 EVENT_IDEMPOTENT_TYPES = frozenset(
@@ -119,6 +118,79 @@ def durable_event_payload(event: dict[str, Any]) -> dict[str, Any]:
     if returned_objects:
         payload["returned_objects"] = returned_objects
     return payload
+
+
+def durable_event_object_links(
+    event: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    event_type = str(event.get("type") or "")
+    used_objects: list[dict[str, str]] = []
+    returned_objects: list[dict[str, str]] = []
+    if event_type == "model":
+        prompt_trace = event.get("prompt_trace")
+        if isinstance(prompt_trace, dict):
+            add_object_link(
+                used_objects,
+                "prompt",
+                trace_object_id(prompt_trace, "prompt_object_id"),
+            )
+            add_object_link(
+                returned_objects,
+                "assistant_message",
+                trace_object_id(prompt_trace, "assistant_message_object_id"),
+            )
+        add_object_links(
+            returned_objects,
+            "tool_call",
+            event.get("tool_call_object_ids"),
+        )
+        add_object_link(
+            returned_objects,
+            "tool_call",
+            trace_object_id(event, "tool_call_object_id"),
+        )
+    if event_type == "tool_result":
+        add_object_link(
+            used_objects,
+            "tool_call",
+            trace_object_id(event, "tool_call_object_id"),
+        )
+        add_object_link(
+            returned_objects,
+            "tool_result",
+            trace_object_id(event, "tool_result_object_id"),
+        )
+    return used_objects, returned_objects
+
+
+def add_object_links(
+    links: list[dict[str, str]],
+    kind: str,
+    object_ids: Any,
+) -> None:
+    if not isinstance(object_ids, (list, tuple)):
+        return
+    for object_id in object_ids:
+        add_object_link(links, kind, object_id if isinstance(object_id, str) else None)
+
+
+def add_object_link(
+    links: list[dict[str, str]],
+    kind: str,
+    object_id: str | None,
+) -> None:
+    if not object_id:
+        return
+    link = {"kind": kind, "id": object_id}
+    if link not in links:
+        links.append(link)
+
+
+def trace_object_id(event: dict[str, Any], field: str) -> str | None:
+    value = event.get(field)
+    if isinstance(value, str) and value.startswith("sha256:"):
+        return value
+    return None
 
 
 def durable_event_id(event_type: str, event: dict[str, Any]) -> str | None:

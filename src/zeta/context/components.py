@@ -13,8 +13,6 @@ from ..skills import Skill, available_skills, expand_skill_directive
 from ..substrate import (
     Object,
     ObjectId,
-    add_event_link,
-    trace_object_id,
 )
 from .system import (
     can_read_skill_files,
@@ -485,6 +483,18 @@ def timeline_message_component_links(event: dict[str, Any]) -> tuple[ObjectId, .
     for trace_field in ("tool_result_object_id", "tool_call_object_id"):
         add_event_link(links, trace_object_id(event, trace_field))
     return tuple(links)
+
+
+def add_event_link(links: list[ObjectId], object_id: ObjectId | None) -> None:
+    if object_id and object_id not in links:
+        links.append(object_id)
+
+
+def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
+    value = event.get(field)
+    if isinstance(value, str) and value.startswith("sha256:"):
+        return value
+    return None
 
 
 def assistant_message_object_id(event: dict[str, Any]) -> ObjectId | None:

@@ -15,7 +15,6 @@ from .object import (
     ObjectId,
 )
 from .refs import (
-    REF_EXPECTED_UNSET,
     AmbiguousIdError,
     Ref,
     RefUpdate,
@@ -73,12 +72,11 @@ class Store(Protocol):
     def object_ids_with_prefix(
         self, prefix: str, limit: int = 16
     ) -> list[ObjectId]: ...
-    def set_ref(
+    def move_ref(
         self,
         name: str,
-        object_id: ObjectId,
-        *,
-        expected: ObjectId | None | object = REF_EXPECTED_UNSET,
+        expected: ObjectId | None,
+        new: ObjectId,
     ) -> RefUpdate: ...
     def get_ref(self, name: str) -> Ref | None: ...
     def batch(self) -> AbstractContextManager[None]: ...
@@ -203,27 +201,21 @@ class InMemoryStore(StoreBase):
         ]
         return listed if limit is None else listed[:limit]
 
-    def set_ref(
+    def move_ref(
         self,
         name: str,
-        object_id: ObjectId,
-        *,
-        expected: ObjectId | None | object = REF_EXPECTED_UNSET,
+        expected: ObjectId | None,
+        new: ObjectId,
     ) -> RefUpdate:
         old_object_id = self._refs.get(name)
-        if expected is not REF_EXPECTED_UNSET and old_object_id != expected:
-            return RefUpdate(
-                name=name,
-                old_object_id=old_object_id,
-                new_object_id=object_id,
-                updated=False,
-            )
-        self._refs[name] = object_id
+        updated = old_object_id == expected
+        if updated:
+            self._refs[name] = new
         return RefUpdate(
             name=name,
             old_object_id=old_object_id,
-            new_object_id=object_id,
-            updated=True,
+            new_object_id=new,
+            updated=updated,
         )
 
     def get_ref(self, name: str) -> Ref | None:

@@ -21,7 +21,7 @@ from zeta.session import Session
 from zeta.substrate import (
     Derivation,
     Object,
-    add_event_link,
+    ObjectId,
     warn_trace_failure_once,
 )
 
@@ -166,6 +166,12 @@ class TurnRecorder:
         }
 
 
+def add_event_link(links: list[ObjectId], object_id: object) -> None:
+    if isinstance(object_id, str) and object_id.startswith("sha256:"):
+        if object_id not in links:
+            links.append(object_id)
+
+
 def record_turn_trace_object(
     payload: dict[str, Any],
     effects: list[dict[str, Any]],
@@ -209,7 +215,10 @@ def record_turn_trace_object(
                     },
                 )
             )
-            store.set_ref(f"turn/{payload.get('turn_id')}", turn_object_id)
+            ref_name = f"turn/{payload.get('turn_id')}"
+            current = store.get_ref(ref_name)
+            expected = current.object_id if current is not None else None
+            store.move_ref(ref_name, expected, turn_object_id)
     except Exception as exc:
         warn_trace_failure_once("record_turn_trace_object", exc)
 

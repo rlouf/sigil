@@ -3,19 +3,11 @@
 from __future__ import annotations
 
 from .derivation import Derivation
-from .links import (
-    add_event_link,
-    add_object_link,
-    add_object_links,
-    durable_event_object_links,
-    trace_object_id,
-)
 from .object import (
     Object,
     ObjectId,
 )
 from .refs import (
-    REF_EXPECTED_UNSET,
     AmbiguousIdError,
     Ref,
     RefName,
@@ -48,8 +40,6 @@ from .store import (
     warn_trace_failure_once,
 )
 
-_REF_EXPECTED_UNSET = REF_EXPECTED_UNSET
-
 __all__ = [
     "AmbiguousIdError",
     "DEFAULT_SQLITE_NAME",
@@ -57,7 +47,6 @@ __all__ = [
     "InMemoryStore",
     "Object",
     "ObjectId",
-    "REF_EXPECTED_UNSET",
     "Ref",
     "RefName",
     "RefUpdate",
@@ -68,14 +57,9 @@ __all__ = [
     "UnknownIdError",
     "UnknownSessionError",
     "ZETA_SQLITE_NAME",
-    "_REF_EXPECTED_UNSET",
-    "add_event_link",
-    "add_object_link",
-    "add_object_links",
     "available_session_ids",
     "canonical_json",
     "default_sqlite_path",
-    "durable_event_object_links",
     "escape_like",
     "export_trace_refs",
     "import_trace_graph",
@@ -84,7 +68,6 @@ __all__ = [
     "open_trace_store",
     "resolve_object_id",
     "trace_state_dir",
-    "trace_object_id",
     "warn_trace_failure_once",
     "zeta_sqlite_path",
 ]

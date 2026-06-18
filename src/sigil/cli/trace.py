@@ -291,7 +291,10 @@ def import_legacy_refs(
         params = (f"session/{session_id_value}",)
     imported = 0
     for row in source.execute(query, params):
-        target.set_ref(str(row["name"]), str(row["object_id"]))
+        name = str(row["name"])
+        current = target.get_ref(name)
+        expected = current.object_id if current is not None else None
+        target.move_ref(name, expected, str(row["object_id"]))
         imported += 1
     return imported
 

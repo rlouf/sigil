@@ -606,7 +606,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
             input_ids=(prompt_id,),
         )
     )
-    store.set_ref("turn/turn-bundle-1", turn_object_id)
+    store.move_ref("turn/turn-bundle-1", None, turn_object_id)
     store.close()
     return {"prompt_id": prompt_id, "turn_object_id": turn_object_id}
 

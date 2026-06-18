@@ -81,12 +81,12 @@ def assert_no_trace_timeline_chain(
         pytest.param(None, id="sqlite"),
     ],
 )
-def test_zeta_trace_set_ref_compares_expected_value(
+def test_zeta_trace_move_ref_compares_expected_value(
     tmp_path: Path,
     store: zeta_trace.Store | None,
 ) -> None:
     trace_store = store or zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
-    created = trace_store.set_ref("run/test/head", "sha256:first")
+    created = trace_store.move_ref("run/test/head", None, "sha256:first")
 
     assert created == zeta_trace.RefUpdate(
         name="run/test/head",
@@ -94,9 +94,7 @@ def test_zeta_trace_set_ref_compares_expected_value(
         new_object_id="sha256:first",
         updated=True,
     )
-    updated = trace_store.set_ref(
-        "run/test/head", "sha256:second", expected="sha256:first"
-    )
+    updated = trace_store.move_ref("run/test/head", "sha256:first", "sha256:second")
 
     assert updated == zeta_trace.RefUpdate(
         name="run/test/head",
@@ -107,9 +105,7 @@ def test_zeta_trace_set_ref_compares_expected_value(
     assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
         name="run/test/head", object_id="sha256:second"
     )
-    stale = trace_store.set_ref(
-        "run/test/head", "sha256:third", expected="sha256:first"
-    )
+    stale = trace_store.move_ref("run/test/head", "sha256:first", "sha256:third")
 
     assert stale == zeta_trace.RefUpdate(
         name="run/test/head",
@@ -129,18 +125,18 @@ def test_zeta_trace_set_ref_compares_expected_value(
         pytest.param(None, id="sqlite"),
     ],
 )
-def test_zeta_trace_set_ref_expected_none_creates_only_when_absent(
+def test_zeta_trace_move_ref_expected_none_creates_only_when_absent(
     tmp_path: Path,
     store: zeta_trace.Store | None,
 ) -> None:
     trace_store = store or zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
 
-    trace_store.set_ref("run/test/head", "sha256:first", expected=None)
+    trace_store.move_ref("run/test/head", None, "sha256:first")
 
     assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
         name="run/test/head", object_id="sha256:first"
     )
-    stale = trace_store.set_ref("run/test/head", "sha256:second", expected=None)
+    stale = trace_store.move_ref("run/test/head", None, "sha256:second")
 
     assert stale == zeta_trace.RefUpdate(
         name="run/test/head",
@@ -217,7 +213,7 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
             links=(parent_id,),
         )
     )
-    store.set_ref("prompt/current", child_id)
+    store.move_ref("prompt/current", None, child_id)
     store.record_derivation(
         zeta_trace.Derivation(
             producer="test:v1",
@@ -472,7 +468,7 @@ def test_sigil_zeta_trace_cli_smoke_with_in_memory_store(monkeypatch) -> None:
             input_ids=(parent_id,),
         )
     )
-    store.set_ref("prompt/current", prompt_id)
+    store.move_ref("prompt/current", None, prompt_id)
     monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 
     runner = CliRunner()
@@ -1385,7 +1381,7 @@ def test_zeta_trace_resolves_refs_full_ids_and_prefixes(tmp_path: Path) -> None:
     object_id = store.put_object(
         zeta_trace.Object(kind="prompt", schema="v1", data={"text": "target"})
     )
-    store.set_ref("prompt/current", object_id)
+    store.move_ref("prompt/current", None, object_id)
     digest = object_id.removeprefix("sha256:")
 
     assert zeta_trace.resolve_object_id(store, "prompt/current") == object_id
@@ -1400,7 +1396,7 @@ def test_zeta_trace_resolver_prefers_refs_over_prefixes() -> None:
     obj = zeta_trace.Object(kind="prompt", schema="v1", data={"text": "x"})
     store._objects["sha256:aaaa1111"] = obj
     store._objects["sha256:bbbb2222"] = obj
-    store.set_ref("aaaa", "sha256:bbbb2222")
+    store.move_ref("aaaa", None, "sha256:bbbb2222")
 
     assert zeta_trace.resolve_object_id(store, "aaaa") == "sha256:bbbb2222"
 
@@ -2300,7 +2296,7 @@ def test_sigil_zeta_trace_cli_resolves_refs_and_prefixes(monkeypatch) -> None:
     prompt_id = store.put_object(
         zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={"n": 1})
     )
-    store.set_ref("prompt/current", prompt_id)
+    store.move_ref("prompt/current", None, prompt_id)
     digest_prefix = prompt_id.removeprefix("sha256:")[:8]
     monkeypatch.setattr("sigil.cli.trace.current_store", lambda: store)
 

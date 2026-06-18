@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from .object import ObjectId
 
-REF_EXPECTED_UNSET = object()
 RefName = str
 
 

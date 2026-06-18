@@ -430,7 +430,9 @@ def store_prompt_object(
             },
         )
     )
-    store.set_ref("prompt/current", prompt_id)
+    current = store.get_ref("prompt/current")
+    expected = current.object_id if current is not None else None
+    store.move_ref("prompt/current", expected, prompt_id)
     return prompt_id
 
 
