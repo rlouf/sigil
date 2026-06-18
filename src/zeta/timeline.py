@@ -2,13 +2,9 @@
 
 from __future__ import annotations
 
-import os
-import time
-import uuid
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any
 
-from zeta.events import DraftEvent, Event, EventSink, publish_event
+from zeta.events import DraftEvent, Event, EventSink
 from zeta.store.events import EventReader, Filter, SqliteEventStore
 from zeta.store.substrate import Store, warn_trace_failure_once
 
@@ -32,30 +28,6 @@ TURN_IDEMPOTENT_TYPES = frozenset(
         "zeta.turn.aborted",
     }
 )
-SUPPORTED_DURABLE_EVENT_TYPES = EVENT_IDEMPOTENT_TYPES | TURN_IDEMPOTENT_TYPES
-
-
-@runtime_checkable
-class EventAppender(Protocol):
-    def append(self, event: Event) -> object: ...
-
-
-def record_event(
-    event: dict[str, Any],
-    *,
-    runtime_context: Session,
-) -> dict[str, Any]:
-    """Record a Zeta event in the durable event log."""
-    scoped_event = dict(event)
-    if "session" not in scoped_event:
-        scoped_event["session"] = runtime_context.session_id
-    payload = event_payload(scoped_event)
-    record_durable_event(
-        payload,
-        event_sink=runtime_context.event_sink,
-        session_id=runtime_context.session_id,
-    )
-    return payload
 
 
 def current_timeline(*, runtime_context: Session) -> list[dict[str, Any]]:
@@ -67,69 +39,6 @@ def current_timeline(*, runtime_context: Session) -> list[dict[str, Any]]:
     except Exception as exc:
         warn_trace_failure_once("current_timeline", exc)
         return []
-
-
-def event_payload(event: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(event)
-    payload["id"] = str(payload.get("id") or uuid.uuid4())
-    payload["time"] = event_time_value(payload.get("time"))
-    payload["cwd"] = str(payload.get("cwd") or os.getcwd())
-    payload["session"] = str(payload.get("session") or timeline_session_id())
-    return payload
-
-
-def event_time_value(value: Any) -> float:
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return float(value)
-    return time.time()
-
-
-def record_durable_event(
-    event: dict[str, Any],
-    *,
-    event_sink: EventSink | None = None,
-    session_id: str | None = None,
-) -> None:
-    event_type = str(event.get("type") or "event")
-    payload = durable_event_payload(event)
-    draft = durable_event_from_timeline(
-        event_type,
-        payload=payload,
-        turn_id=optional_str(event.get("turn_id")),
-        session_id=str(event.get("session") or session_id or timeline_session_id()),
-        caused_by=optional_str(event.get("caused_by")),
-        event_id=durable_event_id(event_type, event),
-    )
-    if draft is None:
-        return
-    if event_sink is None:
-        return
-    try:
-        appender = event_sink if isinstance(event_sink, EventAppender) else None
-        if appender is not None:
-            appender.append(timeline_durable_event(event, draft))
-        else:
-            publish_event(draft, sink=event_sink)
-    except Exception as exc:
-        warn_trace_failure_once("record_durable_event", exc)
-
-
-def timeline_durable_event(event: dict[str, Any], draft: DraftEvent) -> Event:
-    return Event(
-        id=str(event.get("id") or uuid.uuid4()),
-        event_type=draft.event_type,
-        source=draft.source,
-        payload=draft.payload,
-        idempotency_key=normalized_idempotency_key(draft.idempotency_key),
-        caused_by=draft.caused_by,
-        session_id=draft.session_id,
-        turn_id=draft.turn_id,
-        timestamp_micros=timestamp_micros_from_time(event.get("time")),
-    )
-
-
-def timeline_session_id() -> str:
-    return os.environ.get("ZETA_SESSION_ID") or ""
 
 
 def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
@@ -259,128 +168,6 @@ def durable_event_draft(
         session_id=session_id,
         turn_id=turn_id,
     )
-
-
-def durable_event_from_timeline(
-    event_type: str,
-    *,
-    payload: dict[str, Any],
-    turn_id: str | None,
-    session_id: str,
-    caused_by: str | None,
-    event_id: str | None,
-) -> DraftEvent | None:
-    durable_type = durable_type_from_timeline_type(event_type)
-    if durable_type:
-        if durable_type == "zeta.model.called":
-            from zeta.loop import model_called_draft
-
-            return model_called_draft(
-                payload=payload,
-                turn_id=turn_id,
-                session_id=session_id,
-                caused_by=caused_by,
-                event_id=event_id,
-            )
-        if durable_type == "zeta.tool.called":
-            from zeta.loop import tool_called_draft
-
-            return tool_called_draft(
-                payload=payload,
-                turn_id=turn_id,
-                session_id=session_id,
-                caused_by=caused_by,
-                event_id=event_id,
-            )
-        return durable_event_for_type(
-            durable_type,
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-        )
-    return None
-
-
-def durable_type_from_timeline_type(event_type: str) -> str:
-    return {
-        "model": "zeta.model.called",
-        "tool_call": "zeta.tool.called",
-        "tool_result": "zeta.tool.called",
-        "user_message": "zeta.user_message",
-        "turn_aborted": "zeta.turn_aborted",
-        "model_usage": "zeta.model_usage",
-    }.get(event_type, "")
-
-
-def durable_event_payload(event: dict[str, Any]) -> dict[str, Any]:
-    event_type = str(event.get("type") or "event")
-    payload = {
-        key: value
-        for key, value in event.items()
-        if key
-        not in {
-            "id",
-            "type",
-            "time",
-            "session",
-            "source",
-            "caused_by",
-            "prompt_trace",
-            "tool_call_object_id",
-            "tool_call_object_ids",
-            "tool_result_object_id",
-        }
-    }
-    payload["_timeline_type"] = event_type
-    if isinstance(event.get("time"), int | float) and not isinstance(
-        event.get("time"), bool
-    ):
-        payload["_time"] = float(event["time"])
-    used_objects, returned_objects = durable_event_object_links(event)
-    if used_objects:
-        payload["used_objects"] = used_objects
-    if returned_objects:
-        payload["returned_objects"] = returned_objects
-    return payload
-
-
-def durable_event_object_links(
-    event: dict[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    event_type = str(event.get("type") or "")
-    if event_type == "model":
-        from zeta.loop import model_durable_object_links
-
-        return model_durable_object_links(event)
-    if event_type == "tool_result":
-        from zeta.loop import tool_result_durable_object_links
-
-        return tool_result_durable_object_links(event)
-    return [], []
-
-
-def durable_event_id(event_type: str, event: dict[str, Any]) -> str | None:
-    del event_type
-    event_id = event.get("id")
-    return event_id if isinstance(event_id, str) and event_id else None
-
-
-def optional_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def timestamp_micros_from_time(value: object) -> int:
-    if isinstance(value, int | float) and not isinstance(value, bool):
-        return int(float(value) * 1_000_000)
-    return time.time_ns() // 1_000
-
-
-def normalized_idempotency_key(value: str | None) -> str | None:
-    if value is None:
-        return None
-    return value.strip() or None
 
 
 def event_idempotency_key(event_type: str, event_id: str | None) -> str | None:
@@ -564,91 +351,6 @@ class DurableEventConstructors:
 
 
 durable_event = DurableEventConstructors()
-
-
-def durable_draft_from_payload(
-    *,
-    event_type: str,
-    payload: dict[str, Any],
-    turn_id: str | None,
-    session_id: str,
-    caused_by: str | None,
-    event_id: str | None,
-) -> DraftEvent | None:
-    if event_type in SUPPORTED_DURABLE_EVENT_TYPES:
-        return durable_event_for_type(
-            event_type,
-            payload=payload,
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-        )
-    return None
-
-
-def event_payload_draft(
-    event: dict[str, Any],
-    *,
-    session_id: str,
-    cwd: str | None = None,
-) -> DraftEvent:
-    payload = {"cwd": cwd or os.getcwd(), **event}
-    event_id = optional_str(payload.get("id"))
-    event_type = str(payload.get("type") or "event")
-    turn_id = optional_str(payload.get("turn_id"))
-    event_session_id = str(payload.get("session") or session_id)
-    caused_by = optional_str(payload.get("caused_by"))
-    domain_payload = {
-        key: value
-        for key, value in payload.items()
-        if key not in {"id", "type", "time", "session", "source", "caused_by"}
-    }
-    draft = durable_draft_from_payload(
-        event_type=event_type,
-        payload=domain_payload,
-        turn_id=turn_id,
-        session_id=event_session_id,
-        caused_by=caused_by,
-        event_id=event_id,
-    )
-    if draft is not None:
-        return draft
-    return DraftEvent(
-        event_type=event_type,
-        source=str(payload.get("source") or "zeta"),
-        payload=domain_payload,
-        caused_by=caused_by,
-        session_id=event_session_id,
-        turn_id=turn_id,
-    )
-
-
-def publish_event_payload_to_log(
-    path: Path | str,
-    event: dict[str, Any],
-    *,
-    session_id: str,
-    cwd: str | None = None,
-) -> Event:
-    from zeta.store.events import append_event_to_log
-
-    payload = {"cwd": cwd or os.getcwd(), **event}
-    draft = event_payload_draft(payload, session_id=session_id, cwd=cwd)
-    return append_event_to_log(
-        path,
-        Event(
-            id=optional_str(payload.get("id")) or f"evt_{uuid.uuid4().hex}",
-            event_type=draft.event_type,
-            source=draft.source,
-            payload=draft.payload,
-            idempotency_key=normalized_idempotency_key(draft.idempotency_key),
-            caused_by=draft.caused_by,
-            session_id=draft.session_id,
-            turn_id=draft.turn_id,
-            timestamp_micros=timestamp_micros_from_time(payload.get("time")),
-        ),
-    )
 
 
 def add_durable_object_refs(event: dict[str, Any]) -> None:

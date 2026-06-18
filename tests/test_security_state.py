@@ -47,6 +47,7 @@ from sigil.workflows.ask import (
     ask,
 )
 from zeta import events as zeta_events
+from zeta import timeline as zeta_timeline
 from zeta.events import DraftEvent, Event, publish_event
 from zeta.store.events import (
     AppendOutcome,
@@ -95,6 +96,9 @@ def test_zeta_events_exports_only_generic_event_infrastructure() -> None:
     }
 
     assert runtime_names.isdisjoint(set(zeta_events.__all__))
+    assert not hasattr(zeta_timeline, "record_event")
+    assert not hasattr(zeta_timeline, "event_payload_draft")
+    assert not hasattr(zeta_timeline, "publish_event_payload_to_log")
 
 
 def resolved_import_module(

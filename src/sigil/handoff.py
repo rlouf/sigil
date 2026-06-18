@@ -1,5 +1,7 @@
 """Sigil-owned shell handoff capture and reconciliation."""
 
+import os
+import time
 import uuid
 from typing import Any, cast
 
@@ -22,7 +24,6 @@ from zeta.history import effect_record, publish_effect_record
 from zeta.loop import tool_called_draft, tool_durable_payload
 from zeta.timeline import (
     current_timeline,
-    event_payload,
     timeline_event_from_durable_event,
 )
 
@@ -35,7 +36,22 @@ def append_shell_result() -> dict[str, Any]:
     event = shell_result_event(current_timeline(runtime_context=runtime_context))
     if event.get("type") == "tool_result":
         return record_shell_tool_result(event)
-    return event_payload({**event, "session": runtime_context.session_id})
+    return shell_resume_payload(event, session_id=runtime_context.session_id)
+
+
+def shell_resume_payload(event: dict[str, Any], *, session_id: str) -> dict[str, Any]:
+    payload = dict(event)
+    payload["id"] = str(payload.get("id") or uuid.uuid4())
+    payload["time"] = shell_resume_time(payload.get("time"))
+    payload["cwd"] = str(payload.get("cwd") or os.getcwd())
+    payload["session"] = str(payload.get("session") or session_id)
+    return payload
+
+
+def shell_resume_time(value: Any) -> float:
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    return time.time()
 
 
 def record_shell_tool_result(event: dict[str, Any]) -> dict[str, Any]:
