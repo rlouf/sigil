@@ -518,13 +518,8 @@ def run_capability_step(
         execution_mode=config.execution_mode,
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
-        prompt_builder=ctx.builder,
-        event_sink=ctx.event_sink,
-        durable_event_sink=ctx.durable_event_sink,
-        session_id=ctx.session_id,
-        turn_id=ctx.turn_id,
-        tool_registry=ctx.tool_registry,
         caused_by=assistant_event_id,
+        ctx=ctx,
     )
     state.note_step("record_capability_result")
     return result
@@ -1390,15 +1385,9 @@ def handle_tool_call(
     execution_mode: ExecutionMode = "stage",
     model_telemetry: dict[str, Any] | None = None,
     prompt_trace: PromptTrace | None = None,
-    prompt_builder: PromptBuilder | None = None,
-    event_sink: AgentEventSink | None = None,
-    durable_event_sink: EventSink | None = None,
-    session_id: str | None = None,
-    turn_id: str | None = None,
-    tool_registry: CapabilityRegistry | None = None,
     caused_by: str | None = None,
+    ctx: TurnContext,
 ) -> CapabilityCallResult:
-    active_tool_registry = tool_registry or _runtime_tool_registry
     call_id = tool_call_id(tool_call, index=index)
     invocation = tool_call_invocation(tool_call, index=index, caused_by=caused_by)
     if invocation is None:
@@ -1410,18 +1399,18 @@ def handle_tool_call(
             "tool call did not include a function payload",
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-            event_sink=event_sink,
-            durable_event_sink=durable_event_sink,
-            session_id=session_id,
-            turn_id=turn_id,
+            prompt_builder=ctx.builder,
+            event_sink=ctx.event_sink,
+            durable_event_sink=ctx.durable_event_sink,
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id,
             caused_by=caused_by,
         )
     validation = validate_tool_call(
         invocation,
         allowed_capabilities=allowed_capabilities,
         projection=projection,
-        tool_registry=active_tool_registry,
+        tool_registry=ctx.tool_registry,
     )
     if validation.error is not None:
         code, message = validation.error
@@ -1431,11 +1420,11 @@ def handle_tool_call(
             message,
             model_telemetry=model_telemetry,
             prompt_trace=prompt_trace,
-            prompt_builder=prompt_builder,
-            event_sink=event_sink,
-            durable_event_sink=durable_event_sink,
-            session_id=session_id,
-            turn_id=turn_id,
+            prompt_builder=ctx.builder,
+            event_sink=ctx.event_sink,
+            durable_event_sink=ctx.durable_event_sink,
+            session_id=ctx.session_id,
+            turn_id=ctx.turn_id,
         )
     return run_valid_tool_call(
         invocation,
@@ -1443,12 +1432,12 @@ def handle_tool_call(
         execution_mode=execution_mode,
         model_telemetry=model_telemetry,
         prompt_trace=prompt_trace,
-        prompt_builder=prompt_builder,
-        event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
-        session_id=session_id,
-        turn_id=turn_id,
-        tool_registry=active_tool_registry,
+        prompt_builder=ctx.builder,
+        event_sink=ctx.event_sink,
+        durable_event_sink=ctx.durable_event_sink,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
+        tool_registry=ctx.tool_registry,
     )
 
 

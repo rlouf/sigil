@@ -514,6 +514,19 @@ def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
         )
     )
     allowed_capabilities = ("test.read",)
+    ctx = zeta_agent.TurnContext(
+        session_id="session-1",
+        turn_id="turn-1",
+        event_sink=None,
+        durable_event_sink=Sink(),
+        trace_store=None,
+        tool_registry=registry,
+        builder=zeta_context.PromptBuilder(),
+        model_status=None,
+        stream_sink=None,
+        cancellation_event=None,
+        deadline=None,
+    )
 
     result = zeta_agent.handle_tool_call(
         {
@@ -525,12 +538,8 @@ def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
         projection=registry.project(allowed_capabilities),
         index=0,
         execution_mode="direct",
-        event_sink=None,
-        durable_event_sink=Sink(),
-        session_id="session-1",
-        turn_id="turn-1",
-        tool_registry=registry,
         caused_by="model-1",
+        ctx=ctx,
     )
 
     assert [event["type"] for event in result.events] == ["tool_call", "tool_result"]
