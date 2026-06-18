@@ -132,6 +132,29 @@ def projected_direct_event(
     return direct_event
 
 
+def record_user_message(
+    event: dict[str, Any],
+    *,
+    runtime_context: Session,
+) -> dict[str, Any]:
+    payload = {key: value for key, value in event.items() if key != "type"}
+    payload["_timeline_type"] = "user_message"
+    outcome = runtime_context.event_sink.accept(
+        DraftEvent(
+            event_type="zeta.user_message",
+            source="zeta",
+            payload=payload,
+            idempotency_key=None,
+            caused_by=None,
+            session_id=runtime_context.session_id,
+            turn_id=event.get("turn_id")
+            if isinstance(event.get("turn_id"), str)
+            else None,
+        )
+    )
+    return timeline_event_from_durable_event(outcome.event)
+
+
 def time_micros() -> int:
     import time
 
@@ -378,7 +401,7 @@ def run_zeta_rpc_session(
         agent=model_selection_event(selected_model) if selected_model else None,
     )
     prior_timeline = current_timeline(runtime_context=runtime_context)
-    user_event = record_event(
+    user_event = record_user_message(
         {
             "type": "user_message",
             "content": objective,
