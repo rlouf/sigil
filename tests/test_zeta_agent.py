@@ -184,7 +184,7 @@ def test_zeta_tool_result_event_records_error_for_failed_content_result() -> Non
     assert event["result"]["content"][0]["text"].startswith("rg: missing")
 
 
-def test_zeta_tool_result_event_records_bash_exception_summary() -> None:
+def test_zeta_tool_result_event_uses_generic_failed_content_message() -> None:
     event = zeta_agent.tool_result_event(
         "call-1",
         "bash",
@@ -202,7 +202,7 @@ def test_zeta_tool_result_event_records_bash_exception_summary() -> None:
 
     assert event["result"]["error"] == {
         "code": "bash-failed",
-        "message": "ValueError: bad input",
+        "message": "$ run exit 1 stderr: Traceback ValueError: bad input",
     }
 
 

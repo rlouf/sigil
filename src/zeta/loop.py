@@ -1673,7 +1673,7 @@ def normalized_tool_result(name: str, result: dict[str, Any]) -> dict[str, Any]:
     stored = dict(result)
     if stored.get("ok") is not False or isinstance(stored.get("error"), dict):
         return stored
-    message = tool_failure_message(name, stored)
+    message = tool_failure_message(stored)
     if message:
         stored["error"] = {
             "code": f"{name or 'tool'}-failed",
@@ -1682,18 +1682,16 @@ def normalized_tool_result(name: str, result: dict[str, Any]) -> dict[str, Any]:
     return stored
 
 
-def tool_failure_message(name: str, result: dict[str, Any]) -> str:
+def tool_failure_message(result: dict[str, Any]) -> str:
     content = result.get("content")
     text = first_tool_text(content)
-    if name == "bash" and text:
-        return bash_failure_summary(text) or flatten_tool_text(text)
     if text:
         return flatten_tool_text(text)
     metadata = result.get("metadata")
     if isinstance(metadata, dict):
         status = metadata.get("status")
         if isinstance(status, int):
-            return f"exit status {status}" if name == "bash" else f"status {status}"
+            return f"status {status}"
     return ""
 
 
@@ -1711,27 +1709,6 @@ def first_tool_text(content: object) -> str:
 
 def flatten_tool_text(text: str) -> str:
     return " ".join(text.strip().split())
-
-
-def bash_failure_summary(text: str) -> str:
-    markers = (
-        "error:",
-        "Error:",
-        "Exception:",
-        "exceptions.",
-        "TimeoutError:",
-        "Unexpected",
-        "No such file",
-        "not found",
-        "/bin/sh:",
-    )
-    for line in reversed(text.splitlines()):
-        stripped = line.strip()
-        if stripped.startswith("raise "):
-            continue
-        if any(marker in stripped for marker in markers):
-            return stripped
-    return ""
 
 
 def tool_error(code: str, message: str) -> dict[str, Any]:

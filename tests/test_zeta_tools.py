@@ -854,6 +854,21 @@ def test_zeta_tool_bash_direct_executes_command() -> None:
     assert "direct-bash" in data["content"][0]["text"]
 
 
+def test_zeta_tool_bash_direct_normalizes_failure_error() -> None:
+    data = tool_registry.invoke(
+        "bash",
+        {"command": "sh -c 'echo \"ValueError: bad input\" >&2; exit 1'"},
+        execution_mode="direct",
+    )
+
+    assert data["ok"] is False
+    assert data["error"] == {
+        "code": "bash-failed",
+        "message": "ValueError: bad input",
+    }
+    assert data["metadata"]["status"] == 1
+
+
 def test_zeta_tool_bash_direct_replaces_invalid_utf8_output() -> None:
     data = tool_registry.invoke(
         "bash",

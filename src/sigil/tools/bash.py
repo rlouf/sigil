@@ -72,14 +72,13 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     stdout, stdout_truncated = bounded_output(decode_output(stdout_bytes))
     stderr, stderr_truncated = bounded_output(decode_output(stderr_bytes))
     status = proc.returncode
+    text = direct_output_text(command, status, stdout, stderr, timed_out=timed_out)
     result: dict[str, Any] = {
         "ok": status == 0 and not timed_out,
         "content": [
             {
                 "type": "text",
-                "text": direct_output_text(
-                    command, status, stdout, stderr, timed_out=timed_out
-                ),
+                "text": text,
             }
         ],
         "metadata": {
@@ -98,6 +97,11 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
             "message": (
                 f"command timed out after {DEFAULT_TIMEOUT_SECONDS:g}s and was killed"
             ),
+        }
+    elif result["ok"] is False:
+        result["error"] = {
+            "code": "bash-failed",
+            "message": bash_failure_message(text, status),
         }
     return result
 
@@ -141,3 +145,34 @@ def direct_output_text(
     if stderr:
         sections.extend(["stderr:", stderr])
     return "\n".join(sections)
+
+
+def bash_failure_message(text: str, status: int) -> str:
+    return (
+        bash_failure_summary(text) or flatten_tool_text(text) or f"exit status {status}"
+    )
+
+
+def bash_failure_summary(text: str) -> str:
+    markers = (
+        "error:",
+        "Error:",
+        "Exception:",
+        "exceptions.",
+        "TimeoutError:",
+        "Unexpected",
+        "No such file",
+        "not found",
+        "/bin/sh:",
+    )
+    for line in reversed(text.splitlines()):
+        stripped = line.strip()
+        if stripped.startswith("raise "):
+            continue
+        if any(marker in stripped for marker in markers):
+            return stripped
+    return ""
+
+
+def flatten_tool_text(text: str) -> str:
+    return " ".join(text.strip().split())
