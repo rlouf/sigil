@@ -21,6 +21,7 @@ from _zeta_helpers import (
     read_tool_call_response,
     read_tool_payload,
     required_stream_sink,
+    timeline_events,
 )
 from click.testing import CliRunner
 
@@ -45,7 +46,7 @@ from zeta.capabilities.base import (
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.context import builder as zeta_context
-from zeta.events import AppendOutcome, DraftEvent, Event
+from zeta.events import DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
 from zeta.store.substrate import InMemoryStore
@@ -124,17 +125,12 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
     )
 
-    assert result.events[0]["reasoning"] == "weighing the options"
-    assert result.events[0]["content"] == "done"
+    assert result.events[0].payload["reasoning"] == "weighing the options"
+    assert result.events[0].payload["content"] == "done"
 
 
-def test_zeta_agent_turn_can_emit_direct_durable_model_event(monkeypatch) -> None:
+def test_zeta_agent_turn_emits_model_draft(monkeypatch) -> None:
     drafts: list[DraftEvent] = []
-
-    class Sink:
-        def accept(self, draft: DraftEvent) -> AppendOutcome:
-            drafts.append(draft)
-            return AppendOutcome(Event.from_draft(draft), inserted=True)
 
     monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
@@ -147,18 +143,16 @@ def test_zeta_agent_turn_can_emit_direct_durable_model_event(monkeypatch) -> Non
         "answer",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=1),
-        durable_event_sink=Sink(),
-        session_id="session-1",
-        turn_id="turn-1",
+        event_sink=drafts.append,
         caused_by="prompt-1",
     )
 
-    assert result.events[0]["content"] == "done"
+    assert result.events[0].payload["content"] == "done"
     assert len(drafts) == 1
     assert drafts[0].event_type == "zeta.model_call.completed"
     assert drafts[0].payload == {"content": "done", "_timeline_type": "model"}
-    assert drafts[0].session_id == "session-1"
-    assert drafts[0].turn_id == "turn-1"
+    assert drafts[0].session_id is None
+    assert drafts[0].turn_id is None
     assert drafts[0].caused_by == "prompt-1"
 
 
@@ -446,14 +440,11 @@ def test_zeta_turn_aborted_runtime_event_round_trips_to_current_dict_shape() -> 
     }
 
 
-def test_zeta_record_model_event_sends_same_dict_to_sink() -> None:
-    events: list[dict[str, Any]] = []
-    sink_events: list[dict[str, Any]] = []
+def test_zeta_record_model_event_sends_same_draft_to_sink() -> None:
+    events: list[DraftEvent] = []
+    sink_events: list[DraftEvent] = []
     ctx = zeta_agent.TurnContext(
-        session_id=None,
-        turn_id=None,
         event_sink=sink_events.append,
-        durable_event_sink=None,
         trace_store=None,
         tool_registry=CapabilityRegistry(),
         builder=cast(Any, None),
@@ -475,24 +466,16 @@ def test_zeta_record_model_event_sends_same_dict_to_sink() -> None:
     assert tool_calls == []
     assert sink_events == events
     assert sink_events[0] is events[0]
-    assert events[0]["content"] == "done"
-    assert events[0]["caused_by"] == "parent-1"
+    assert events[0].payload["content"] == "done"
+    assert events[0].caused_by == "parent-1"
 
 
-def test_zeta_record_model_event_can_emit_direct_durable_draft() -> None:
-    events: list[dict[str, Any]] = []
+def test_zeta_record_model_event_records_draft() -> None:
+    events: list[DraftEvent] = []
     drafts: list[DraftEvent] = []
 
-    class Sink:
-        def accept(self, draft: DraftEvent) -> AppendOutcome:
-            drafts.append(draft)
-            return AppendOutcome(Event.from_draft(draft), inserted=True)
-
     ctx = zeta_agent.TurnContext(
-        session_id="session-1",
-        turn_id="turn-1",
-        event_sink=None,
-        durable_event_sink=Sink(),
+        event_sink=drafts.append,
         trace_store=None,
         tool_registry=CapabilityRegistry(),
         builder=cast(Any, None),
@@ -519,19 +502,14 @@ def test_zeta_record_model_event_can_emit_direct_durable_draft() -> None:
         "_timeline_type": "model",
         "content": "done",
     }
-    assert drafts[0].session_id == "session-1"
-    assert drafts[0].turn_id == "turn-1"
+    assert drafts[0].session_id is None
+    assert drafts[0].turn_id is None
     assert drafts[0].caused_by == "parent-1"
     assert drafts[0].idempotency_key == f"zeta.model_call.completed:{event_id}"
 
 
-def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
+def test_zeta_handle_tool_call_emits_drafts() -> None:
     drafts: list[DraftEvent] = []
-
-    class Sink:
-        def accept(self, draft: DraftEvent) -> AppendOutcome:
-            drafts.append(draft)
-            return AppendOutcome(Event.from_draft(draft), inserted=True)
 
     registry = CapabilityRegistry()
     registry.register(
@@ -542,10 +520,7 @@ def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
     )
     allowed_capabilities = ("test.read",)
     ctx = zeta_agent.TurnContext(
-        session_id="session-1",
-        turn_id="turn-1",
-        event_sink=None,
-        durable_event_sink=Sink(),
+        event_sink=drafts.append,
         trace_store=None,
         tool_registry=registry,
         builder=zeta_context.PromptBuilder(),
@@ -569,7 +544,10 @@ def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
         ctx=ctx,
     )
 
-    assert [event["type"] for event in result.events] == ["tool_call", "tool_result"]
+    assert [event["type"] for event in timeline_events(result.events)] == [
+        "tool_call",
+        "tool_result",
+    ]
     assert [draft.event_type for draft in drafts] == [
         "zeta.tool_call.started",
         "zeta.tool_call.completed",
@@ -588,8 +566,8 @@ def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
         "ok": True,
         "content": [{"type": "text", "text": "done"}],
     }
-    assert [draft.session_id for draft in drafts] == ["session-1", "session-1"]
-    assert [draft.turn_id for draft in drafts] == ["turn-1", "turn-1"]
+    assert [draft.session_id for draft in drafts] == [None, None]
+    assert [draft.turn_id for draft in drafts] == [None, None]
     assert [draft.caused_by for draft in drafts] == ["model-1", "model-1"]
 
 
@@ -769,10 +747,7 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
     state = zeta_agent.AgentTurnState()
     builder = PlanOnlyPromptBuilder()
     ctx = zeta_agent.TurnContext(
-        session_id=None,
-        turn_id=None,
         event_sink=None,
-        durable_event_sink=None,
         trace_store=None,
         tool_registry=CapabilityRegistry(),
         builder=builder,
@@ -913,10 +888,7 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
     projection = registry.project(())
     tool_call = {"id": "call-1", "function": {"name": "read", "arguments": "{}"}}
     ctx = zeta_agent.TurnContext(
-        session_id=None,
-        turn_id=None,
         event_sink=None,
-        durable_event_sink=None,
         trace_store=None,
         tool_registry=registry,
         builder=zeta_context.PromptBuilder(),
@@ -934,8 +906,21 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         assert kwargs["index"] == 0
         return zeta_agent.CapabilityCallResult(
             events=[
-                {"type": "tool_call", "tool_call_id": "call-1"},
-                {"type": "tool_result", "tool_call_id": "call-1"},
+                zeta_runtime_events.runtime_event_draft(
+                    {"type": "tool_call", "id": "call-1", "tool_call_id": "call-1"},
+                    session_id=None,
+                    turn_id=None,
+                ),
+                zeta_runtime_events.runtime_event_draft(
+                    {
+                        "type": "tool_result",
+                        "id": "result-1",
+                        "tool_call_id": "call-1",
+                        "result": {"ok": True},
+                    },
+                    session_id=None,
+                    turn_id=None,
+                ),
             ]
         )
 
@@ -960,9 +945,21 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         "execute_capability",
         "record_capability_result",
     ]
-    assert result.events == [
-        {"type": "tool_call", "tool_call_id": "call-1"},
-        {"type": "tool_result", "tool_call_id": "call-1"},
+    projected = timeline_events(result.events)
+    assert projected == [
+        {
+            "type": "tool_call",
+            "id": "call-1",
+            "tool_call_id": "call-1",
+            "time": projected[0]["time"],
+        },
+        {
+            "type": "tool_result",
+            "id": "result-1",
+            "tool_call_id": "call-1",
+            "result": {"ok": True},
+            "time": projected[1]["time"],
+        },
     ]
 
 
@@ -971,22 +968,24 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
 ) -> None:
     state = zeta_agent.RunState(
         events=[
-            {
-                "type": "tool_result",
-                "tool_call_id": "call-1",
-                "status": "completed",
-                "result": {"ok": True},
-            }
+            zeta_runtime_events.runtime_event_draft(
+                {
+                    "type": "tool_result",
+                    "id": "result-1",
+                    "tool_call_id": "call-1",
+                    "status": "completed",
+                    "result": {"ok": True},
+                },
+                session_id=None,
+                turn_id=None,
+            )
         ]
     )
     registry = CapabilityRegistry()
     projection = registry.project(())
     invoked = False
     ctx = zeta_agent.TurnContext(
-        session_id=None,
-        turn_id=None,
         event_sink=None,
-        durable_event_sink=None,
         trace_store=None,
         tool_registry=registry,
         builder=zeta_context.PromptBuilder(),
@@ -2894,7 +2893,9 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
 
     assert zeta_agent.tool_registry.get("ctx_echo") is None
     assert result.final_text == "done"
-    assert [event.get("name") for event in result.events if "name" in event] == [
+    assert [
+        event.get("name") for event in timeline_events(result.events) if "name" in event
+    ] == [
         "ctx_echo",
         "ctx_echo",
     ]
@@ -2948,9 +2949,15 @@ def test_zeta_agent_turn_resolves_model_alias_through_projection(monkeypatch) ->
 
     assert result.final_text == "done"
     assert invoked == [("host.read", {"path": "README.md"})]
-    tool_call = next(event for event in result.events if event["type"] == "tool_call")
+    tool_call = next(
+        event
+        for event in timeline_events(result.events)
+        if event["type"] == "tool_call"
+    )
     tool_result = next(
-        event for event in result.events if event["type"] == "tool_result"
+        event
+        for event in timeline_events(result.events)
+        if event["type"] == "tool_result"
     )
     assert tool_call["name"] == "read"
     assert tool_call["capability_id"] == "host.read"
@@ -3065,9 +3072,9 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
     )
 
     assert result.final_text == "done"
-    assert result.events[0]["type"] == "model"
-    assert result.events[0]["content"] == "done"
-    assert result.events[0]["prompt_trace"]["prompt_object_id"]
+    assert timeline_events(result.events)[0]["type"] == "model"
+    assert timeline_events(result.events)[0]["content"] == "done"
+    assert timeline_events(result.events)[0]["prompt_trace"]["prompt_object_id"]
     assert [step.step for step in result.steps] == [
         "check_budget",
         "build_prompt",
@@ -3129,9 +3136,9 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
     assert assistant.kind == "assistant_message"
     assert assistant.links == (trace.prompt_object_id,)
     assert assistant.data["message"] == {"content": "done"}
-    assert result.events[0]["prompt_trace"]["assistant_message_object_id"] == (
-        trace.assistant_message_object_id
-    )
+    assert timeline_events(result.events)[0]["prompt_trace"][
+        "assistant_message_object_id"
+    ] == (trace.assistant_message_object_id)
 
 
 def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
@@ -3247,7 +3254,9 @@ def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
     )
 
     tool_results = [
-        event for event in result.events if event.get("type") == "tool_result"
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
     ]
     assert tool_results[0]["model_telemetry"] == tool_telemetry
     assert "model_telemetry" not in tool_results[1]
@@ -3633,11 +3642,19 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     ]
     assert result.final_text == "done"
     assert [
-        event["name"] for event in result.events if event.get("type") == "tool_call"
+        event["name"]
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_call"
     ] == ["read", "ls"]
-    model_events = [event for event in result.events if event.get("type") == "model"]
+    model_events = [
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "model"
+    ]
     tool_results = [
-        event for event in result.events if event.get("type") == "tool_result"
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
     ]
     assert model_events[0]["caused_by"] == "prompt-event"
     assert tool_results[0]["caused_by"] == model_events[0]["id"]
@@ -3703,7 +3720,7 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
     assert sink.deltas == ["I'll inspect README.", "It is a README."]
     assert result.final_text == "It is a README."
     assert result.final_text_streamed is True
-    assert result.events[0]["content"] == "I'll inspect README."
+    assert timeline_events(result.events)[0]["content"] == "I'll inspect README."
 
 
 def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> None:
@@ -3814,7 +3831,7 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
 
 
 def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> None:
-    streamed: list[dict[str, Any]] = []
+    streamed: list[DraftEvent] = []
 
     monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
@@ -3838,7 +3855,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
         name: str, params: dict[str, Any], **kwargs: object
     ) -> dict[str, Any]:
         del name, params, kwargs
-        assert [event.get("type") for event in streamed] == [
+        assert [event.get("type") for event in timeline_events(streamed)] == [
             "model",
             "tool_call",
         ]
@@ -3854,7 +3871,7 @@ def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> N
     )
 
     assert result.events == streamed
-    assert [event.get("type") for event in streamed] == [
+    assert [event.get("type") for event in timeline_events(streamed)] == [
         "model",
         "tool_call",
         "tool_result",
@@ -3989,7 +4006,7 @@ def test_zeta_agent_turn_stops_after_capability_policy_stage_success(
     assert requests == 1
     assert result.final_text == ""
     assert result.staged_effect is None
-    assert [event["type"] for event in result.events] == [
+    assert [event["type"] for event in timeline_events(result.events)] == [
         "model",
         "tool_call",
         "tool_result",
@@ -4042,7 +4059,9 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
     assert result.staged_effect is None
     assert result.final_text == "done"
     tool_result = next(
-        event for event in result.events if event.get("type") == "tool_result"
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
     )
     assert "direct-bash" in tool_result["result"]["content"][0]["text"]
 
@@ -4085,7 +4104,7 @@ def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
 def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None:
     cancellation = threading.Event()
     cancellation.set()
-    events: list[dict[str, Any]] = []
+    events: list[DraftEvent] = []
 
     def fail_chat_completion_messages(*args: object, **kwargs: object) -> dict:
         raise AssertionError("cancelled turn must not request the model")
@@ -4111,13 +4130,15 @@ def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None
         "check_budget",
         "abort_run",
     ]
-    assert events == [
+    projected = timeline_events(events)
+    assert projected == [
         {
             "type": "turn_aborted",
-            "id": events[0]["id"],
+            "id": projected[0]["id"],
             "reason": "cancelled",
             "content": "(turn aborted: cancelled)",
             "caused_by": "prompt-event",
+            "time": projected[0]["time"],
         }
     ]
 
@@ -4130,7 +4151,7 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
     target.write_text("README\n", encoding="utf-8")
     store = zeta_trace.InMemoryStore()
     responses = iter([read_tool_call_response(target), {"content": "too late"}])
-    events: list[dict[str, Any]] = []
+    events: list[DraftEvent] = []
     monotonic = iter([0.0, 0.0, 0.0, 2.0])
 
     monkeypatch.setattr(zeta_agent, "time_monotonic", lambda: next(monotonic))
@@ -4178,14 +4199,15 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
         tool_result["tool_result_object_id"],
     )
     assert raised.value.result.steps[-1].step == "abort_run"
-    assert [event["type"] for event in events] == [
+    projected = timeline_events(events)
+    assert [event["type"] for event in projected] == [
         "model",
         "tool_call",
         "tool_result",
         "turn_aborted",
     ]
-    assert events[-1]["reason"] == "deadline_exceeded"
-    assert events[-1]["caused_by"] == events[-2]["id"]
+    assert projected[-1]["reason"] == "deadline_exceeded"
+    assert projected[-1]["caused_by"] == projected[-2]["id"]
 
 
 def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> None:
@@ -4228,7 +4250,9 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
 
     assert result.final_text == "recovered"
     tool_result = next(
-        event for event in result.events if event.get("type") == "tool_result"
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
     )
     assert tool_result["result"]["ok"] is False
     assert tool_result["result"]["error"]["code"] == "tool-crashed"
@@ -4271,7 +4295,9 @@ def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> 
 
     assert ran is False
     tool_result = next(
-        event for event in result.events if event.get("type") == "tool_result"
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
     )
     assert tool_result["result"]["ok"] is False
     assert tool_result["result"]["error"]["code"] == "schema-mismatch"
@@ -4313,7 +4339,9 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
 
     assert ran is False
     tool_result = next(
-        event for event in result.events if event.get("type") == "tool_result"
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "tool_result"
     )
     assert tool_result["result"]["ok"] is False
     assert tool_result["result"]["error"]["code"] == "disallowed-tool"

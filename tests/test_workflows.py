@@ -308,7 +308,7 @@ def test_zeta_agent_step_renders_context_usage_at_bottom_after_tools(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         first_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -540,7 +540,7 @@ def test_zeta_agent_step_prints_tool_start_while_agent_runs(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
         tool_call = {
             "type": "tool_call",
@@ -589,7 +589,7 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
         del objective, transcript, config
         stream_sink = required_stream_sink(kwargs)
         stream_sink.content_delta("I'll inspect README.")
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         tool_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -630,7 +630,7 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
         del objective, transcript, config
         stream_sink = required_stream_sink(kwargs)
         stream_sink.content_delta("I'll inspect README.")
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         tool_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -682,7 +682,7 @@ def test_zeta_agent_step_does_not_insert_blank_lines_between_tool_calls(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         events = [
             {
                 "type": "tool_call",
@@ -749,7 +749,7 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         tool_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -1515,7 +1515,7 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
         del objective, transcript, config
         stream_sink = required_stream_sink(kwargs)
         stream_sink.content_delta("I'll inspect README.")
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         tool_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -1576,7 +1576,7 @@ def test_zeta_ask_workflow_renders_context_usage_at_bottom_after_tools(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         first_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -1644,7 +1644,7 @@ def test_zeta_question_loop_prints_tool_start_while_agent_runs(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
         tool_call = {
             "type": "tool_call",
@@ -1842,7 +1842,7 @@ def test_zeta_ask_workflow_keeps_stdout_clean_for_pipes(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        event_sink = cast("Callable[[dict[str, Any]], None]", kwargs.get("event_sink"))
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
         assert callable(event_sink)
         events = [
             {
@@ -1989,22 +1989,20 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
         prompt_event_id = cast(str, kwargs["caused_by"])
-        durable_event_sink = cast(Any, kwargs["durable_event_sink"])
+        event_sink = cast("Callable[[Any], None]", kwargs["event_sink"])
         captured["prompt_event_id"] = prompt_event_id
-        durable_event_sink.accept(
+        drafts = [
             zeta_runtime_events.model_called_draft(
                 payload={
                     "_timeline_type": "model",
                     "content": "",
                     "workflow": "do",
                 },
-                turn_id=cast(str, kwargs["turn_id"]),
-                session_id=cast(str, kwargs["session_id"]),
+                turn_id=None,
+                session_id=None,
                 caused_by=prompt_event_id,
                 event_id="model-event",
-            )
-        )
-        durable_event_sink.accept(
+            ),
             zeta_runtime_events.tool_called_draft(
                 payload={
                     "_timeline_type": "tool_call",
@@ -2013,13 +2011,11 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
                     "input": {"path": "a.txt", "content": "hello\n"},
                     "workflow": "do",
                 },
-                turn_id=cast(str, kwargs["turn_id"]),
-                session_id=cast(str, kwargs["session_id"]),
+                turn_id=None,
+                session_id=None,
                 caused_by="model-event",
                 event_id="call-1",
-            )
-        )
-        durable_event_sink.accept(
+            ),
             zeta_runtime_events.tool_called_draft(
                 payload={
                     "_timeline_type": "tool_result",
@@ -2031,41 +2027,17 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
                     },
                     "workflow": "do",
                 },
-                turn_id=cast(str, kwargs["turn_id"]),
-                session_id=cast(str, kwargs["session_id"]),
+                turn_id=None,
+                session_id=None,
                 caused_by="model-event",
                 event_id="tool-event",
-            )
-        )
+            ),
+        ]
+        for draft in drafts:
+            event_sink(draft)
         return zeta_agent.AgentTurnResult(
             final_text="done",
-            events=[
-                {
-                    "type": "model",
-                    "id": "model-event",
-                    "content": "",
-                    "caused_by": prompt_event_id,
-                },
-                {
-                    "type": "tool_call",
-                    "id": "call-1",
-                    "tool_call_id": "call-1",
-                    "name": "write",
-                    "input": {"path": "a.txt", "content": "hello\n"},
-                    "caused_by": "model-event",
-                },
-                {
-                    "type": "tool_result",
-                    "id": "tool-event",
-                    "tool_call_id": "call-1",
-                    "name": "write",
-                    "result": {
-                        "ok": True,
-                        "metadata": {"mode": "direct", "path": "a.txt"},
-                    },
-                    "caused_by": "model-event",
-                },
-            ],
+            events=drafts,
         )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)

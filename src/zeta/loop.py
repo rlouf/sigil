@@ -25,7 +25,7 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace, prompt_trace_payload
-from zeta.events import EventSink
+from zeta.events import DraftEvent, Event
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelInput,
@@ -45,7 +45,7 @@ from zeta.runtime_events import (
 )
 from zeta.store.substrate import Store
 
-AgentEventSink = Callable[[dict[str, Any]], None]
+AgentEventSink = Callable[[DraftEvent], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 DEFAULT_MAX_TURNS = 25
 tool_registry = _runtime_tool_registry
@@ -75,12 +75,12 @@ class StepResult:
     effects: tuple[StepEffect, ...] = ()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class AgentTurnResult:
     """Result from one native tool-call loop."""
 
     final_text: str = ""
-    events: list[dict[str, Any]] = field(default_factory=list)
+    events: list[DraftEvent] = field(default_factory=list)
     staged_effect: dict[str, Any] | None = None
     final_text_streamed: bool = False
     model_telemetry: dict[str, Any] = field(default_factory=dict)
@@ -88,10 +88,34 @@ class AgentTurnResult:
     prompt_traces: list[PromptTrace] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
 
+    def __init__(
+        self,
+        final_text: str = "",
+        events: Iterable[DraftEvent | dict[str, Any]] = (),
+        staged_effect: dict[str, Any] | None = None,
+        final_text_streamed: bool = False,
+        model_telemetry: dict[str, Any] | None = None,
+        model_telemetry_calls: list[dict[str, Any]] | None = None,
+        prompt_traces: list[PromptTrace] | None = None,
+        steps: list[StepResult] | None = None,
+    ) -> None:
+        object.__setattr__(self, "final_text", final_text)
+        object.__setattr__(self, "events", normalize_draft_events(events))
+        object.__setattr__(self, "staged_effect", staged_effect)
+        object.__setattr__(self, "final_text_streamed", final_text_streamed)
+        object.__setattr__(self, "model_telemetry", model_telemetry or {})
+        object.__setattr__(
+            self,
+            "model_telemetry_calls",
+            model_telemetry_calls or [],
+        )
+        object.__setattr__(self, "prompt_traces", prompt_traces or [])
+        object.__setattr__(self, "steps", steps or [])
+
 
 @dataclass
 class RunState:
-    events: list[dict[str, Any]] = field(default_factory=list)
+    events: list[DraftEvent] = field(default_factory=list)
     latest_model_telemetry: dict[str, Any] = field(default_factory=dict)
     model_telemetry_calls: list[dict[str, Any]] = field(default_factory=list)
     prompt_traces: list[PromptTrace] = field(default_factory=list)
@@ -129,6 +153,9 @@ class RunState:
     def note_step(self, step: StepName, *effects: StepEffect) -> None:
         self.steps.append(StepResult(step, effects))
 
+    def timeline_events(self) -> list[dict[str, Any]]:
+        return [draft_timeline_event(draft) for draft in self.events]
+
 
 AgentTurnState = RunState
 
@@ -151,10 +178,7 @@ class AgentTurnAborted(RuntimeError):
 
 @dataclass(frozen=True)
 class TurnContext:
-    session_id: str | None
-    turn_id: str | None
     event_sink: AgentEventSink | None
-    durable_event_sink: EventSink | None
     trace_store: Store | None
     tool_registry: CapabilityRegistry
     builder: PromptBuilder
@@ -177,9 +201,6 @@ def run_agent_turn(
     trace_store: Store | None = None,
     tool_registry: CapabilityRegistry | None = None,
     caused_by: str | None = None,
-    durable_event_sink: EventSink | None = None,
-    session_id: str | None = None,
-    turn_id: str | None = None,
     cancellation_event: threading.Event | None = None,
     deadline: float | None = None,
 ) -> AgentTurnResult:
@@ -198,10 +219,7 @@ def run_agent_turn(
         transform=prompt_transform_from_env(),
     )
     ctx = TurnContext(
-        session_id=session_id,
-        turn_id=turn_id,
         event_sink=event_sink,
-        durable_event_sink=durable_event_sink,
         trace_store=trace_store,
         tool_registry=active_tool_registry,
         builder=builder,
@@ -337,7 +355,7 @@ def request_model_turn(
         config=config,
         allowed_capabilities=allowed_capabilities,
         context=context,
-        current_events=state.events,
+        current_events=state.timeline_events(),
         tools=tools,
         state=state,
         builder=ctx.builder,
@@ -518,10 +536,11 @@ TERMINAL_TOOL_STATUSES = {"completed", "failed", "refused", "cancelled", "timed_
 
 
 def terminal_capability_result_event(
-    events: list[dict[str, Any]],
+    events: list[DraftEvent],
     call_id: str,
 ) -> dict[str, Any] | None:
-    for event in reversed(events):
+    for draft in reversed(events):
+        event = draft_timeline_event(draft)
         if event.get("type") != "tool_result":
             continue
         if event.get("tool_call_id") != call_id:
@@ -564,7 +583,11 @@ def raise_if_agent_turn_aborted(
         return
     state.note_step("abort_run")
     event = turn_aborted_event(reason, caused_by=state.next_model_caused_by)
-    emit_event(state.events, event, ctx.event_sink)
+    record_runtime_event(
+        state.events,
+        runtime_events.TurnAbortedRuntimeEvent.from_event(event),
+        ctx=ctx,
+    )
     raise AgentTurnAborted(
         reason,
         result=state.result(),
@@ -743,9 +766,63 @@ def model_status_context(
     return factory()
 
 
+def draft_event_id(draft: DraftEvent) -> str | None:
+    key = draft.idempotency_key
+    prefix = f"{draft.event_type}:"
+    if key is None or not key.startswith(prefix):
+        return None
+    event_id = key[len(prefix) :].strip()
+    return event_id or None
+
+
+def normalize_draft_events(
+    events: Iterable[DraftEvent | dict[str, Any]],
+) -> list[DraftEvent]:
+    return [normalize_draft_event(event) for event in events]
+
+
+def normalize_draft_event(event: DraftEvent | dict[str, Any]) -> DraftEvent:
+    if isinstance(event, DraftEvent):
+        return event
+    runtime_event = runtime_events.runtime_event_from_event(event)
+    if runtime_event is None:
+        return DraftEvent(
+            event_type=str(event.get("type") or "event"),
+            source=str(event.get("source") or "zeta"),
+            payload={key: value for key, value in event.items() if key != "type"},
+        )
+    return runtime_event.to_durable(session_id=None, turn_id=None)
+
+
+def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
+    event = Event(
+        id=draft_event_id(draft) or f"evt_{uuid.uuid4().hex}",
+        event_type=draft.event_type,
+        source=draft.source,
+        payload=dict(draft.payload),
+        idempotency_key=draft.idempotency_key,
+        caused_by=draft.caused_by,
+        session_id=draft.session_id,
+        turn_id=draft.turn_id,
+        timestamp_micros=time.time_ns() // 1_000,
+    )
+    projected = runtime_events.timeline_event_from_durable_event(event)
+    if projected.get("type") == "model":
+        tool_call_object_ids = [
+            link["id"]
+            for link in draft.payload.get("returned_objects", [])
+            if isinstance(link, dict)
+            and link.get("kind") == "tool_call"
+            and isinstance(link.get("id"), str)
+        ]
+        if tool_call_object_ids:
+            projected["tool_call_object_ids"] = tool_call_object_ids
+    return projected
+
+
 def emit_event(
-    events: list[dict[str, Any]],
-    event: dict[str, Any],
+    events: list[DraftEvent],
+    event: DraftEvent,
     event_sink: AgentEventSink | None = None,
 ) -> None:
     events.append(event)
@@ -754,7 +831,7 @@ def emit_event(
 
 
 def emit_tool_event(
-    events: list[dict[str, Any]],
+    events: list[DraftEvent],
     event: dict[str, Any],
     *,
     ctx: TurnContext,
@@ -768,7 +845,7 @@ def emit_tool_event(
 
 
 def record_runtime_event(
-    events: list[dict[str, Any]],
+    events: list[DraftEvent],
     runtime_event: runtime_events.RuntimeEvent | None,
     *,
     event: dict[str, Any] | None = None,
@@ -777,21 +854,18 @@ def record_runtime_event(
     recorded = (
         runtime_event.to_event() if runtime_event is not None else dict(event or {})
     )
-    if (
-        runtime_event is not None
-        and ctx.durable_event_sink is not None
-        and ctx.session_id is not None
-    ):
-        ctx.durable_event_sink.accept(
-            runtime_event.to_durable(session_id=ctx.session_id, turn_id=ctx.turn_id)
+    if runtime_event is not None:
+        emit_event(
+            events,
+            runtime_event.to_durable(session_id=None, turn_id=None),
+            ctx.event_sink,
         )
-    emit_event(events, recorded, ctx.event_sink)
     return recorded
 
 
 @dataclass(frozen=True)
 class CapabilityCallResult:
-    events: list[dict[str, Any]]
+    events: list[DraftEvent]
     staged_effect: dict[str, Any] | None = None
     stop: bool = False
 
@@ -818,7 +892,7 @@ def assistant_tool_calls(assistant: dict[str, Any]) -> list[dict[str, Any]]:
 
 def record_model_event(
     assistant: dict[str, Any],
-    events: list[dict[str, Any]],
+    events: list[DraftEvent],
     *,
     prompt_trace: PromptTrace | None,
     caused_by: str | None = None,
@@ -848,8 +922,9 @@ def record_model_event(
     return event_id, tool_calls
 
 
-def next_model_parent(events: list[dict[str, Any]]) -> str | None:
-    for event in reversed(events):
+def next_model_parent(events: list[DraftEvent]) -> str | None:
+    for draft in reversed(events):
+        event = draft_timeline_event(draft)
         if str(event.get("type") or "") != "tool_result":
             continue
         event_id = event.get("id")
@@ -1131,7 +1206,7 @@ def run_valid_tool_call(
     prompt_trace: PromptTrace | None,
     ctx: TurnContext,
 ) -> CapabilityCallResult:
-    events: list[dict[str, Any]] = []
+    events: list[DraftEvent] = []
     call_event = invocation.call_event
     call_event["capability_id"] = capability_id
     attach_tool_call_trace(
@@ -1226,7 +1301,7 @@ def invalid_tool_result(
     }
     if caused_by is not None:
         event["caused_by"] = caused_by
-    events: list[dict[str, Any]] = []
+    events: list[DraftEvent] = []
     attach_tool_call_trace(
         event,
         prompt_trace=prompt_trace,

@@ -8,7 +8,7 @@ workflow-specific tagging, logging, and handoff handling.
 
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, TextIO
 
 from sigil.display.render import render_tool_start
@@ -35,7 +35,7 @@ from sigil.turn import TurnRecorder
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode
 from zeta.context.instructions import load_project_instructions
-from zeta.events import AppendOutcome, DraftEvent, Event
+from zeta.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -49,92 +49,12 @@ from zeta.models import (
     model_selection_event,
 )
 from zeta.models.chat_completions import ensure_server
-from zeta.runtime_events import (
-    model_called_draft,
-    model_durable_payload,
-    tool_called_draft,
-    tool_durable_payload,
-)
+from zeta.runtime_events import runtime_event_draft
 from zeta.session import Session
 from zeta.timeline import (
     current_timeline,
     timeline_event_from_durable_event,
 )
-
-
-def draft_event_id(draft: DraftEvent) -> str | None:
-    key = draft.idempotency_key
-    prefix = f"{draft.event_type}:"
-    if key is None or not key.startswith(prefix):
-        return None
-    event_id = key[len(prefix) :].strip()
-    return event_id or None
-
-
-class DirectRuntimeEventSink:
-    def __init__(
-        self,
-        runtime_context: Session,
-        tag_fields: Callable[[], dict[str, Any]],
-    ) -> None:
-        self.runtime_context = runtime_context
-        self._tag_fields = tag_fields
-        self.projected_events: dict[str, dict[str, Any]] = {}
-
-    def accept(self, draft: DraftEvent) -> AppendOutcome:
-        tagged = DraftEvent(
-            event_type=draft.event_type,
-            source=draft.source,
-            payload={**draft.payload, **self.tag_fields()},
-            idempotency_key=draft.idempotency_key,
-            caused_by=draft.caused_by,
-            session_id=draft.session_id,
-            turn_id=draft.turn_id,
-        )
-        event_id = draft_event_id(tagged)
-        append = getattr(self.runtime_context.event_sink, "append", None)
-        if callable(append) and event_id is not None:
-            event = Event(
-                id=event_id,
-                event_type=tagged.event_type,
-                source=tagged.source,
-                payload=tagged.payload,
-                idempotency_key=tagged.idempotency_key,
-                caused_by=tagged.caused_by,
-                session_id=tagged.session_id,
-                turn_id=tagged.turn_id,
-                timestamp_micros=time_micros(),
-            )
-            outcome = append(event)
-        else:
-            outcome = self.runtime_context.event_sink.accept(tagged)
-        projected = timeline_event_from_durable_event(outcome.event)
-        runtime_id = event_id or projected.get("id")
-        if isinstance(runtime_id, str) and projected:
-            self.projected_events[runtime_id] = projected
-        return outcome
-
-    def projected_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        event_id = event.get("id")
-        if not isinstance(event_id, str):
-            return None
-        projected = self.projected_events.get(event_id)
-        return dict(projected) if projected is not None else None
-
-    def tag_fields(self) -> dict[str, Any]:
-        return self._tag_fields()
-
-
-def projected_direct_event(
-    sink: DirectRuntimeEventSink,
-    event: dict[str, Any],
-) -> dict[str, Any] | None:
-    direct_event = sink.projected_event(event)
-    if direct_event is None:
-        return None
-    if "effects" in event:
-        direct_event["effects"] = event["effects"]
-    return direct_event
 
 
 def record_user_message(
@@ -160,62 +80,77 @@ def record_user_message(
     return timeline_event_from_durable_event(outcome.event)
 
 
-def record_runtime_event(
-    event: dict[str, Any],
+def record_runtime_draft(
+    draft: DraftEvent | dict[str, Any],
     *,
     runtime_context: Session,
     tag_fields: dict[str, Any] | None = None,
     strip_fields: frozenset[str] = frozenset(),
+    turn_id: str | None = None,
 ) -> dict[str, Any]:
-    tagged = {key: value for key, value in event.items() if key not in strip_fields}
+    draft = ensure_runtime_draft(draft)
+    tagged = {
+        key: value for key, value in draft.payload.items() if key not in strip_fields
+    }
     if tag_fields is not None:
         tagged.update(tag_fields)
-    event_type = str(tagged.get("type") or "")
-    caused_by = (
-        tagged.get("caused_by") if isinstance(tagged.get("caused_by"), str) else None
+    tagged_draft = replace(
+        draft,
+        payload=tagged,
+        session_id=runtime_context.session_id,
+        turn_id=turn_id or draft.turn_id,
     )
-    event_id = tagged.get("id") if isinstance(tagged.get("id"), str) else None
-    turn_id = tagged.get("turn_id") if isinstance(tagged.get("turn_id"), str) else None
-    if event_type == "model":
-        draft = model_called_draft(
-            payload=model_durable_payload(tagged),
-            turn_id=turn_id,
-            session_id=runtime_context.session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-        )
-    elif event_type in {"tool_call", "tool_result"}:
-        draft = tool_called_draft(
-            payload=tool_durable_payload(tagged),
-            turn_id=turn_id,
-            session_id=runtime_context.session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-        )
-    elif event_type == "turn_aborted":
-        payload = {
-            key: value
-            for key, value in tagged.items()
-            if key not in {"id", "type", "time", "session", "source", "caused_by"}
-        }
-        payload["_timeline_type"] = "turn_aborted"
-        payload.setdefault("reason", "aborted")
-        draft = DraftEvent(
-            event_type="zeta.turn.failed",
-            source="zeta",
-            payload=payload,
-            idempotency_key=None,
-            caused_by=caused_by,
-            session_id=runtime_context.session_id,
-            turn_id=turn_id,
+    append = getattr(runtime_context.event_sink, "append", None)
+    event_id = draft_event_id(tagged_draft)
+    if callable(append) and event_id is not None:
+        outcome = append(
+            Event(
+                id=event_id,
+                event_type=tagged_draft.event_type,
+                source=tagged_draft.source,
+                payload=tagged_draft.payload,
+                idempotency_key=tagged_draft.idempotency_key,
+                caused_by=tagged_draft.caused_by,
+                session_id=tagged_draft.session_id,
+                turn_id=tagged_draft.turn_id,
+                timestamp_micros=time_micros(),
+            )
         )
     else:
-        raise ValueError(f"unsupported runtime event type: {event_type}")
-    outcome = DirectRuntimeEventSink(runtime_context, lambda: {}).accept(draft)
+        outcome = runtime_context.event_sink.accept(tagged_draft)
     projected = timeline_event_from_durable_event(outcome.event)
-    if "effects" in tagged:
-        projected["effects"] = tagged["effects"]
     return projected
+
+
+def ensure_runtime_draft(draft: DraftEvent | dict[str, Any]) -> DraftEvent:
+    if isinstance(draft, DraftEvent):
+        return draft
+    turn_id = draft.get("turn_id") if isinstance(draft.get("turn_id"), str) else None
+    return runtime_event_draft(draft, session_id=None, turn_id=turn_id)
+
+
+def project_runtime_draft(draft: DraftEvent) -> dict[str, Any]:
+    event = Event(
+        id=draft_event_id(draft) or "draft",
+        event_type=draft.event_type,
+        source=draft.source,
+        payload=dict(draft.payload),
+        idempotency_key=draft.idempotency_key,
+        caused_by=draft.caused_by,
+        session_id=draft.session_id,
+        turn_id=draft.turn_id,
+        timestamp_micros=time_micros(),
+    )
+    return timeline_event_from_durable_event(event)
+
+
+def draft_event_id(draft: DraftEvent) -> str | None:
+    key = draft.idempotency_key
+    prefix = f"{draft.event_type}:"
+    if key is None or not key.startswith(prefix):
+        return None
+    event_id = key[len(prefix) :].strip()
+    return event_id or None
 
 
 def time_micros() -> int:
@@ -296,28 +231,32 @@ class TurnEventRecorder:
         self.turn_recorder = turn_recorder
         self.runtime_context = runtime_context
         self.recorded_event_ids: set[int] = set()
-        self.direct_event_sink = DirectRuntimeEventSink(
-            runtime_context,
-            lambda: self.tag_fields,
-        )
         self.status: int | None = None
 
-    def record(self, event: dict[str, Any]) -> None:
-        self.recorded_event_ids.add(id(event))
-        self.record_event(event)
+    def record(self, draft: DraftEvent | dict[str, Any]) -> None:
+        self.recorded_event_ids.add(id(draft))
+        self.record_event(draft)
 
     def replay(self, result: AgentTurnResult) -> None:
         """Record any turn events the live sink did not see."""
-        for event in result.events:
-            if id(event) in self.recorded_event_ids:
+        for draft in result.events:
+            if id(draft) in self.recorded_event_ids:
                 continue
-            self.record_event(event)
+            self.record_event(draft)
 
-    def record_event(self, event: dict[str, Any]) -> None:
-        event_type = str(event.get("type") or "")
-        if event_type == "tool_result" and self.turn_recorder is not None:
-            self.turn_recorder.attach_tool_result_effect(event)
-        persisted = self.persist(event_type, event)
+    def record_event(self, draft: DraftEvent | dict[str, Any]) -> None:
+        draft = ensure_runtime_draft(draft)
+        projected_for_effects = project_runtime_draft(draft)
+        if (
+            projected_for_effects.get("type") == "tool_result"
+            and self.turn_recorder is not None
+        ):
+            self.turn_recorder.attach_tool_result_effect(projected_for_effects)
+            effects = projected_for_effects.get("effects")
+            if effects is not None:
+                draft = replace(draft, payload={**draft.payload, "effects": effects})
+        persisted = self.persist(draft)
+        event_type = str(persisted.get("type") or "")
         if self.turn_recorder is not None:
             self.turn_recorder.note_runtime_event(persisted)
         if event_type == "tool_call":
@@ -333,18 +272,15 @@ class TurnEventRecorder:
         if status is not None:
             self.status = status
 
-    def persist(self, event_type: str, event: dict[str, Any]) -> dict[str, Any]:
-        direct_event = projected_direct_event(self.direct_event_sink, event)
-        if direct_event is not None:
-            return direct_event
-        tagged = dict(event)
-        if self.turn_recorder is not None:
-            tagged["turn_id"] = self.turn_recorder.turn_id
-        return record_runtime_event(
-            tagged,
+    def persist(self, draft: DraftEvent) -> dict[str, Any]:
+        return record_runtime_draft(
+            draft,
             runtime_context=self.runtime_context,
             tag_fields=self.tag_fields,
             strip_fields=self.strip_fields,
+            turn_id=(
+                self.turn_recorder.turn_id if self.turn_recorder is not None else None
+            ),
         )
 
     def handle_tool_call(self, name: str, args: dict[str, Any]) -> None:
@@ -481,16 +417,15 @@ def run_zeta_rpc_session(
     turn_recorder.note_root_event(user_event)
     append_prompt_submitted_event(user_event)
     publish_event(user_event)
-    direct_event_sink = DirectRuntimeEventSink(runtime_context, lambda: {})
 
-    def sink(event: dict[str, Any]) -> None:
-        event_type = str(event.get("type") or "")
-        if event_type == "tool_result":
-            turn_recorder.attach_tool_result_effect(event)
-        event["turn_id"] = turn_recorder.turn_id
-        persisted = projected_direct_event(direct_event_sink, event)
-        if persisted is None:
-            persisted = record_runtime_event(event, runtime_context=runtime_context)
+    def sink(draft: DraftEvent) -> None:
+        persisted = record_runtime_draft(
+            draft,
+            runtime_context=runtime_context,
+            turn_id=turn_recorder.turn_id,
+        )
+        if persisted.get("type") == "tool_result":
+            turn_recorder.attach_tool_result_effect(persisted)
         turn_recorder.note_runtime_event(persisted)
         publish_event(persisted)
 
@@ -526,18 +461,12 @@ def run_zeta_rpc_session(
                 else load_project_instructions()
             ),
             event_sink=sink,
-            durable_event_sink=direct_event_sink,
-            session_id=runtime_context.session_id,
-            turn_id=turn_recorder.turn_id,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
             caused_by=turn_recorder.root_event_id,
         )
     except AgentTurnAborted as error:
         turn_recorder.add_model_calls(error.result.model_telemetry_calls)
-        abort_event = error.result.events[-1] if error.event_recorded else None
-        if isinstance(abort_event, dict):
-            turn_recorder.note_runtime_event(abort_event)
         turn = turn_recorder.finish(
             TURN_OUTCOME_ABORTED,
             prompt_traces=error.result.prompt_traces,

@@ -21,7 +21,7 @@ from zeta.context.builder import (
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
-from zeta.events import Event
+from zeta.events import DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
 from zeta.rpc import rpc_event_dict_draft
 from zeta.session import Session
@@ -177,23 +177,49 @@ def linked_kinds(store: Store, prompt: Object) -> list[str]:
 
 
 def event_by_type(
-    events: list[dict[str, Any]],
+    events: list[dict[str, Any]] | list[DraftEvent],
     event_type: str,
 ) -> dict[str, Any]:
-    return next(event for event in events if event.get("type") == event_type)
+    projected = timeline_events(events)
+    return next(event for event in projected if event.get("type") == event_type)
+
+
+def timeline_events(
+    events: list[dict[str, Any]] | list[DraftEvent],
+) -> list[dict[str, Any]]:
+    return [
+        zeta_agent.draft_timeline_event(event)
+        if isinstance(event, DraftEvent)
+        else event
+        for event in events
+    ]
 
 
 def record_durable_timeline_event(
-    event: dict[str, Any],
+    event: dict[str, Any] | DraftEvent,
     *,
     runtime_context: Session,
 ) -> dict[str, Any]:
-    draft = rpc_event_dict_draft(event, session_id=runtime_context.session_id)
+    draft = (
+        event
+        if isinstance(event, DraftEvent)
+        else rpc_event_dict_draft(event, session_id=runtime_context.session_id)
+    )
+    if draft.session_id is None:
+        draft = DraftEvent(
+            event_type=draft.event_type,
+            source=draft.source,
+            payload=draft.payload,
+            idempotency_key=draft.idempotency_key,
+            caused_by=draft.caused_by,
+            session_id=runtime_context.session_id,
+            turn_id=draft.turn_id,
+        )
     append = getattr(runtime_context.event_sink, "append", None)
     if callable(append):
         appended = append(
             Event(
-                id=event_id(event),
+                id=draft_id(draft, event),
                 event_type=draft.event_type,
                 source=draft.source,
                 payload=draft.payload,
@@ -215,7 +241,21 @@ def event_id(event: dict[str, Any]) -> str:
     return value if isinstance(value, str) and value else f"evt_{uuid.uuid4().hex}"
 
 
-def event_timestamp_micros(event: dict[str, Any]) -> int:
+def draft_id(draft: DraftEvent, event: dict[str, Any] | DraftEvent) -> str:
+    key = draft.idempotency_key
+    prefix = f"{draft.event_type}:"
+    if key is not None and key.startswith(prefix):
+        value = key[len(prefix) :].strip()
+        if value:
+            return value
+    if isinstance(event, DraftEvent):
+        return f"evt_{uuid.uuid4().hex}"
+    return event_id(event)
+
+
+def event_timestamp_micros(event: dict[str, Any] | DraftEvent) -> int:
+    if isinstance(event, DraftEvent):
+        return time.time_ns() // 1_000
     value = event.get("time")
     if isinstance(value, int | float) and not isinstance(value, bool):
         return int(float(value) * 1_000_000)

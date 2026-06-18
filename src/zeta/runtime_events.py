@@ -65,7 +65,12 @@ class ModelRuntimeEvent:
             event["tool_calls"] = list(self.tool_calls)
         return event
 
-    def to_durable(self, *, session_id: str, turn_id: str | None) -> DraftEvent:
+    def to_durable(
+        self,
+        *,
+        session_id: str | None,
+        turn_id: str | None,
+    ) -> DraftEvent:
         return runtime_event_draft(
             self.to_event(),
             session_id=session_id,
@@ -99,7 +104,12 @@ class ToolCallRuntimeEvent:
             event["caused_by"] = self.caused_by
         return event
 
-    def to_durable(self, *, session_id: str, turn_id: str | None) -> DraftEvent:
+    def to_durable(
+        self,
+        *,
+        session_id: str | None,
+        turn_id: str | None,
+    ) -> DraftEvent:
         return runtime_event_draft(
             self.to_event(),
             session_id=session_id,
@@ -149,7 +159,12 @@ class ToolResultRuntimeEvent:
             event["prompt_trace"] = self.prompt_trace
         return event
 
-    def to_durable(self, *, session_id: str, turn_id: str | None) -> DraftEvent:
+    def to_durable(
+        self,
+        *,
+        session_id: str | None,
+        turn_id: str | None,
+    ) -> DraftEvent:
         return runtime_event_draft(
             self.to_event(),
             session_id=session_id,
@@ -186,7 +201,12 @@ class TurnAbortedRuntimeEvent:
             event["caused_by"] = self.caused_by
         return event
 
-    def to_durable(self, *, session_id: str, turn_id: str | None) -> DraftEvent:
+    def to_durable(
+        self,
+        *,
+        session_id: str | None,
+        turn_id: str | None,
+    ) -> DraftEvent:
         return runtime_event_draft(
             self.to_event(),
             session_id=session_id,
@@ -339,7 +359,7 @@ def durable_prompt_trace(event: dict[str, Any]) -> dict[str, Any]:
 def runtime_event_draft(
     event: dict[str, Any],
     *,
-    session_id: str,
+    session_id: str | None,
     turn_id: str | None,
 ) -> DraftEvent:
     event_type = str(event.get("type") or "")
@@ -391,7 +411,7 @@ def model_called_draft(
     *,
     payload: dict[str, Any],
     turn_id: str | None,
-    session_id: str,
+    session_id: str | None,
     caused_by: str | None = None,
     event_id: str | None = None,
 ) -> DraftEvent:
@@ -409,7 +429,7 @@ def tool_called_draft(
     *,
     payload: dict[str, Any],
     turn_id: str | None,
-    session_id: str,
+    session_id: str | None,
     caused_by: str | None = None,
     event_id: str | None = None,
 ) -> DraftEvent:
@@ -441,7 +461,7 @@ def durable_event_draft(
     *,
     payload: dict[str, Any],
     turn_id: str | None,
-    session_id: str,
+    session_id: str | None,
     caused_by: str | None,
     event_id: str | None,
 ) -> DraftEvent:

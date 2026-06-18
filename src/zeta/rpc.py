@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TextIO, cast
 
 from jsonschema import Draft202012Validator
@@ -29,14 +29,14 @@ from zeta.capabilities.base import (
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
 from zeta.dispatch import AgentDefinition, AgentRun, EventDispatcher, TriggerRule
-from zeta.events import AppendOutcome, DraftEvent, Event, EventSink
+from zeta.events import DraftEvent, Event, EventSink
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
     registered_capabilities,
     run_agent_turn,
 )
-from zeta.runtime_events import runtime_event_from_event
+from zeta.runtime_events import runtime_event_draft
 from zeta.session import Session, default_session
 from zeta.store.events import EventReader, Filter
 from zeta.timeline import (
@@ -77,62 +77,6 @@ class EventSubscription:
     run_id: str | None = None
 
 
-def draft_event_id(draft: DraftEvent) -> str | None:
-    key = draft.idempotency_key
-    prefix = f"{draft.event_type}:"
-    if key is None or not key.startswith(prefix):
-        return None
-    event_id = key[len(prefix) :].strip()
-    return event_id or None
-
-
-class DirectRuntimeEventSink:
-    def __init__(self, runtime_context: Session, run_id: str) -> None:
-        self.runtime_context = runtime_context
-        self.run_id = run_id
-        self.projected_events: dict[str, dict[str, Any]] = {}
-
-    def accept(self, draft: DraftEvent) -> AppendOutcome:
-        tagged = DraftEvent(
-            event_type=draft.event_type,
-            source=draft.source,
-            payload={**draft.payload, "run_id": self.run_id},
-            idempotency_key=draft.idempotency_key,
-            caused_by=draft.caused_by,
-            session_id=draft.session_id,
-            turn_id=draft.turn_id,
-        )
-        event_id = draft_event_id(tagged)
-        append = getattr(self.runtime_context.event_sink, "append", None)
-        if callable(append) and event_id is not None:
-            event = Event(
-                id=event_id,
-                event_type=tagged.event_type,
-                source=tagged.source,
-                payload=tagged.payload,
-                idempotency_key=tagged.idempotency_key,
-                caused_by=tagged.caused_by,
-                session_id=tagged.session_id,
-                turn_id=tagged.turn_id,
-                timestamp_micros=time.time_ns() // 1_000,
-            )
-            outcome = append(event)
-        else:
-            outcome = self.runtime_context.event_sink.accept(tagged)
-        projected = timeline_event_from_durable_event(outcome.event)
-        runtime_id = event_id or projected.get("id")
-        if isinstance(runtime_id, str) and projected:
-            self.projected_events[runtime_id] = projected
-        return outcome
-
-    def projected_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
-        event_id = event.get("id")
-        if not isinstance(event_id, str):
-            return None
-        projected = self.projected_events.get(event_id)
-        return dict(projected) if projected is not None else None
-
-
 def record_user_message(
     event: dict[str, Any],
     *,
@@ -156,28 +100,46 @@ def record_user_message(
     return timeline_event_from_durable_event(outcome.event)
 
 
-def record_runtime_event(
-    event: dict[str, Any],
+def record_runtime_draft(
+    draft: DraftEvent,
     *,
     runtime_context: Session,
-    direct_event_sink: DirectRuntimeEventSink,
+    run_id: str,
 ) -> dict[str, Any]:
-    draft = runtime_event_draft(event, session_id=runtime_context.session_id)
-    outcome = direct_event_sink.accept(draft)
+    tagged = replace(
+        draft,
+        payload={**draft.payload, "run_id": run_id},
+        session_id=runtime_context.session_id,
+        turn_id=run_id,
+    )
+    append = getattr(runtime_context.event_sink, "append", None)
+    event_id = draft_event_id(tagged)
+    if callable(append) and event_id is not None:
+        outcome = append(
+            Event(
+                id=event_id,
+                event_type=tagged.event_type,
+                source=tagged.source,
+                payload=tagged.payload,
+                idempotency_key=tagged.idempotency_key,
+                caused_by=tagged.caused_by,
+                session_id=tagged.session_id,
+                turn_id=tagged.turn_id,
+                timestamp_micros=time.time_ns() // 1_000,
+            )
+        )
+    else:
+        outcome = runtime_context.event_sink.accept(tagged)
     return timeline_event_from_durable_event(outcome.event)
 
 
-def runtime_event_draft(
-    event: dict[str, Any],
-    *,
-    session_id: str,
-) -> DraftEvent:
-    event_type = str(event.get("type") or "")
-    turn_id = event.get("turn_id") if isinstance(event.get("turn_id"), str) else None
-    runtime_event = runtime_event_from_event(event)
-    if runtime_event is None:
-        raise ValueError(f"unsupported runtime event type: {event_type}")
-    return runtime_event.to_durable(session_id=session_id, turn_id=turn_id)
+def draft_event_id(draft: DraftEvent) -> str | None:
+    key = draft.idempotency_key
+    prefix = f"{draft.event_type}:"
+    if key is None or not key.startswith(prefix):
+        return None
+    event_id = key[len(prefix) :].strip()
+    return event_id or None
 
 
 @dataclass(frozen=True)
@@ -299,17 +261,13 @@ def run_session_turn(
         runtime_context=runtime_context,
     )
     publish_event(rpc_event_with_cursor(runtime_context, user_event, run_id))
-    direct_event_sink = DirectRuntimeEventSink(runtime_context, run_id)
 
-    def sink(event: dict[str, Any]) -> None:
-        scoped = rpc_event_with_run_id(event, run_id)
-        persisted = direct_event_sink.projected_event(scoped)
-        if persisted is None:
-            persisted = record_runtime_event(
-                scoped,
-                runtime_context=runtime_context,
-                direct_event_sink=direct_event_sink,
-            )
+    def sink(draft: DraftEvent) -> None:
+        persisted = record_runtime_draft(
+            draft,
+            runtime_context=runtime_context,
+            run_id=run_id,
+        )
         publish_event(rpc_event_with_cursor(runtime_context, persisted, run_id))
 
     try:
@@ -324,9 +282,6 @@ def run_session_turn(
             ),
             context=rpc_context(params),
             event_sink=sink,
-            durable_event_sink=direct_event_sink,
-            session_id=runtime_context.session_id,
-            turn_id=run_id,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
             caused_by=caused_by,
@@ -464,7 +419,8 @@ def rpc_trace_result(agent_result: AgentTurnResult | None) -> dict[str, list[str
             trace["assistant_message_ids"],
             prompt_trace.assistant_message_object_id,
         )
-    for event in agent_result.events:
+    for draft in agent_result.events:
+        event = draft_timeline_event(draft)
         event_type = str(event.get("type") or "")
         if event_type == "model":
             add_unique(trace["model_event_ids"], event.get("id"))
@@ -502,6 +458,21 @@ def add_unique_list(values: list[str], raw_values: Any) -> None:
         return
     for value in raw_values:
         add_unique(values, value)
+
+
+def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
+    event = Event(
+        id=draft_event_id(draft) or f"evt_{uuid.uuid4().hex}",
+        event_type=draft.event_type,
+        source=draft.source,
+        payload=dict(draft.payload),
+        idempotency_key=draft.idempotency_key,
+        caused_by=draft.caused_by,
+        session_id=draft.session_id,
+        turn_id=draft.turn_id,
+        timestamp_micros=time.time_ns() // 1_000,
+    )
+    return timeline_event_from_durable_event(event)
 
 
 def final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
@@ -828,7 +799,10 @@ def rpc_event_dict_draft(event: dict[str, Any], *, session_id: str) -> DraftEven
     event_type = str(payload.get("type") or "event")
     event_session_id = str(payload.get("session") or session_id)
     if event_type in {"model", "tool_call", "tool_result", "turn_aborted"}:
-        return runtime_event_draft(payload, session_id=event_session_id)
+        turn_id = optional_string(payload.get("turn_id"))
+        return runtime_event_draft(
+            payload, session_id=event_session_id, turn_id=turn_id
+        )
     event_id = optional_string(payload.get("id"))
     turn_id = optional_string(payload.get("turn_id"))
     caused_by = optional_string(payload.get("caused_by"))

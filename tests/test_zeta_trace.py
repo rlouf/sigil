@@ -23,6 +23,7 @@ from zeta import loop as zeta_agent
 from zeta import timeline as zeta_timeline
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
+from zeta.events import DraftEvent
 from zeta.models import profiles as zeta_models
 from zeta.session import Session, default_session
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
@@ -76,7 +77,7 @@ def zeta_runtime_context(
 
 
 def record_zeta_event(
-    event: dict[str, object],
+    event: dict[str, object] | DraftEvent,
     *,
     runtime_context: Session | None = None,
 ) -> dict[str, object]:
@@ -864,7 +865,7 @@ def test_zeta_agent_durable_events_link_trace_objects(
         lambda name, params, **kwargs: read_tool_payload(target),
     )
 
-    def record_runtime_event(event: dict[str, object]) -> None:
+    def record_runtime_event(event: DraftEvent) -> None:
         record_zeta_event(event, runtime_context=runtime_context)
 
     result = zeta_agent.run_agent_turn(
