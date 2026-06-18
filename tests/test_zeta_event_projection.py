@@ -14,6 +14,7 @@ from zeta.rpc import (
     generic_rpc_event_from_durable_event,
     rpc_event_from_durable_event,
 )
+from zeta.runtime_events import runtime_event_from_event
 from zeta.timeline import timeline_from_events
 
 SESSION_ID = "session-1"
@@ -190,6 +191,48 @@ def runtime_events() -> list[Event]:
         for index, (draft, event_id) in enumerate(
             zip(runtime_drafts(), event_ids, strict=True)
         )
+    ]
+
+
+def test_zeta_runtime_events_project_to_durable_drafts() -> None:
+    events = [
+        model_event(),
+        tool_call_event(),
+        tool_result_event(
+            "result-ok",
+            status="completed",
+            result={"ok": True, "content": [{"type": "text", "text": "contents"}]},
+        ),
+        tool_result_event(
+            "result-failed",
+            status="failed",
+            result={
+                "ok": False,
+                "error": {"code": "read_failed", "message": "missing file"},
+            },
+        ),
+        tool_result_event(
+            "result-refused",
+            status="refused",
+            result={
+                "ok": False,
+                "refusal": {
+                    "reason": "capability_not_allowed",
+                    "message": "read is not allowed",
+                },
+            },
+        ),
+        turn_aborted_event(),
+    ]
+
+    drafts = []
+    for event in events:
+        runtime_event = runtime_event_from_event(event)
+        assert runtime_event is not None
+        drafts.append(runtime_event.to_durable(session_id=SESSION_ID, turn_id=TURN_ID))
+
+    assert [asdict(draft) for draft in drafts] == [
+        asdict(draft) for draft in runtime_drafts()
     ]
 
 

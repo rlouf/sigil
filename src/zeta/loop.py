@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Literal, cast
 
+from zeta import runtime_events
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode, proposed_effect
 from zeta.capabilities.registry import CapabilityProjection, CapabilityRegistry
@@ -43,19 +44,10 @@ from zeta.runtime_events import (
     TurnAbortedRuntimeEvent,
 )
 from zeta.store.substrate import Store
-from zeta.substrate import trace_object_id
 
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 DEFAULT_MAX_TURNS = 25
-EVENT_IDEMPOTENT_TYPES = frozenset(
-    {
-        "zeta.model_call.completed",
-        "zeta.tool_call.started",
-        "zeta.tool_call.completed",
-        "zeta.tool_call.failed",
-    }
-)
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
 StepName = Literal[
@@ -795,47 +787,19 @@ def publish_tool_draft(
 
 
 def tool_durable_payload(event: dict[str, Any]) -> dict[str, Any]:
-    payload = {
-        key: value
-        for key, value in event.items()
-        if key
-        not in {
-            "id",
-            "type",
-            "time",
-            "session",
-            "source",
-            "caused_by",
-            "prompt_trace",
-            "tool_call_object_id",
-            "tool_call_object_ids",
-            "tool_result_object_id",
-        }
-    }
-    payload["_timeline_type"] = str(event.get("type") or "")
-    used_objects, returned_objects = tool_durable_object_links(event)
-    if used_objects:
-        payload["used_objects"] = used_objects
-    if returned_objects:
-        payload["returned_objects"] = returned_objects
-    return payload
+    return runtime_events.tool_durable_payload(event)
 
 
 def tool_durable_object_links(
     event: dict[str, Any],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    event_type = str(event.get("type") or "")
-    if event_type == "tool_result":
-        return tool_result_durable_object_links(event)
-    if event_type != "tool_call":
-        return [], []
-    returned_objects: list[dict[str, str]] = []
-    add_durable_object_link(
-        returned_objects,
-        "tool_call",
-        trace_object_id(event, "tool_call_object_id"),
-    )
-    return [], returned_objects
+    return runtime_events.tool_durable_object_links(event)
+
+
+def tool_result_durable_object_links(
+    event: dict[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    return runtime_events.tool_result_durable_object_links(event)
 
 
 @dataclass(frozen=True)
@@ -857,8 +821,7 @@ def model_called_draft(
     caused_by: str | None = None,
     event_id: str | None = None,
 ) -> DraftEvent:
-    return durable_event_draft(
-        "zeta.model_call.completed",
+    return runtime_events.model_called_draft(
         payload=payload,
         turn_id=turn_id,
         session_id=session_id,
@@ -875,8 +838,7 @@ def tool_called_draft(
     caused_by: str | None = None,
     event_id: str | None = None,
 ) -> DraftEvent:
-    return durable_event_draft(
-        tool_call_event_type(payload),
+    return runtime_events.tool_called_draft(
         payload=payload,
         turn_id=turn_id,
         session_id=session_id,
@@ -885,118 +847,10 @@ def tool_called_draft(
     )
 
 
-def tool_call_event_type(payload: dict[str, Any]) -> str:
-    if payload.get("_timeline_type") == "tool_call":
-        return "zeta.tool_call.started"
-    if tool_call_failed(payload):
-        return "zeta.tool_call.failed"
-    return "zeta.tool_call.completed"
-
-
-def tool_call_failed(payload: dict[str, Any]) -> bool:
-    result = payload.get("result")
-    return isinstance(result, dict) and result.get("ok") is False
-
-
-def durable_event_draft(
-    event_type: str,
-    *,
-    payload: dict[str, Any],
-    turn_id: str | None,
-    session_id: str,
-    caused_by: str | None,
-    event_id: str | None,
-) -> DraftEvent:
-    return DraftEvent(
-        event_type=event_type,
-        source="zeta",
-        payload=payload,
-        idempotency_key=event_idempotency_key(event_type, event_id),
-        caused_by=caused_by,
-        session_id=session_id,
-        turn_id=turn_id,
-    )
-
-
-def event_idempotency_key(event_type: str, event_id: str | None) -> str | None:
-    if event_type not in EVENT_IDEMPOTENT_TYPES or not event_id:
-        return None
-    return f"{event_type}:{event_id}"
-
-
 def model_durable_object_links(
     event: dict[str, Any],
 ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    used_objects: list[dict[str, str]] = []
-    returned_objects: list[dict[str, str]] = []
-    prompt_trace = event.get("prompt_trace")
-    if isinstance(prompt_trace, dict):
-        add_durable_object_link(
-            used_objects,
-            "prompt",
-            trace_object_id(prompt_trace, "prompt_object_id"),
-        )
-        add_durable_object_link(
-            returned_objects,
-            "assistant_message",
-            trace_object_id(prompt_trace, "assistant_message_object_id"),
-        )
-    add_durable_object_links(
-        returned_objects,
-        "tool_call",
-        event.get("tool_call_object_ids"),
-    )
-    add_durable_object_link(
-        returned_objects,
-        "tool_call",
-        trace_object_id(event, "tool_call_object_id"),
-    )
-    return used_objects, returned_objects
-
-
-def tool_result_durable_object_links(
-    event: dict[str, Any],
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
-    used_objects: list[dict[str, str]] = []
-    returned_objects: list[dict[str, str]] = []
-    add_durable_object_link(
-        used_objects,
-        "tool_call",
-        trace_object_id(event, "tool_call_object_id"),
-    )
-    add_durable_object_link(
-        returned_objects,
-        "tool_result",
-        trace_object_id(event, "tool_result_object_id"),
-    )
-    return used_objects, returned_objects
-
-
-def add_durable_object_links(
-    links: list[dict[str, str]],
-    kind: str,
-    object_ids: Any,
-) -> None:
-    if not isinstance(object_ids, (list, tuple)):
-        return
-    for object_id in object_ids:
-        add_durable_object_link(
-            links,
-            kind,
-            object_id if isinstance(object_id, str) else None,
-        )
-
-
-def add_durable_object_link(
-    links: list[dict[str, str]],
-    kind: str,
-    object_id: str | None,
-) -> None:
-    if not object_id:
-        return
-    link = {"kind": kind, "id": object_id}
-    if link not in links:
-        links.append(link)
+    return runtime_events.model_durable_object_links(event)
 
 
 def ensure_event_id(event: dict[str, Any]) -> str:
@@ -1069,30 +923,7 @@ def publish_model_draft(
 
 
 def model_durable_payload(event: dict[str, Any]) -> dict[str, Any]:
-    payload = {
-        key: value
-        for key, value in event.items()
-        if key
-        not in {
-            "id",
-            "type",
-            "time",
-            "session",
-            "source",
-            "caused_by",
-            "prompt_trace",
-            "tool_call_object_id",
-            "tool_call_object_ids",
-            "tool_result_object_id",
-        }
-    }
-    payload["_timeline_type"] = "model"
-    used_objects, returned_objects = model_durable_object_links(event)
-    if used_objects:
-        payload["used_objects"] = used_objects
-    if returned_objects:
-        payload["returned_objects"] = returned_objects
-    return payload
+    return runtime_events.model_durable_payload(event)
 
 
 def next_model_parent(events: list[dict[str, Any]]) -> str | None:
