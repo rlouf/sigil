@@ -42,6 +42,7 @@ from zeta.capabilities.registry import registry as _default_tool_registry
 from zeta.context.components import latest_prompt_trace_fields
 from zeta.context.instructions import load_project_instructions
 from zeta.context.system import system_prompt
+from zeta.events import DraftEvent
 from zeta.loop import (
     AgentTurnAborted,
     registered_capabilities,
@@ -53,7 +54,10 @@ from zeta.models import (
 )
 from zeta.session import Session
 from zeta.skills import expand_skill_directive
-from zeta.timeline import current_timeline, record_event
+from zeta.timeline import (
+    current_timeline,
+    timeline_event_from_durable_event,
+)
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]
@@ -150,7 +154,7 @@ def step(
     }
     if selected_model is not None:
         user_event["model"] = model_selection_event(selected_model)
-    prompt_event = record_event(user_event, runtime_context=runtime_context)
+    prompt_event = record_user_message(user_event, runtime_context=runtime_context)
     append_prompt_submitted_event(prompt_event)
     turn_recorder.note_root_event(prompt_event)
     context = load_project_instructions()
@@ -365,6 +369,29 @@ def shell_handoff_from_tool_result(result: dict[str, Any]) -> dict[str, Any] | N
         reason,
         artifact=artifact if isinstance(artifact, str) and artifact else None,
     )
+
+
+def record_user_message(
+    event: dict[str, Any],
+    *,
+    runtime_context: Session,
+) -> dict[str, Any]:
+    payload = {key: value for key, value in event.items() if key != "type"}
+    payload["_timeline_type"] = "user_message"
+    outcome = runtime_context.event_sink.accept(
+        DraftEvent(
+            event_type="zeta.user_message",
+            source="zeta",
+            payload=payload,
+            idempotency_key=None,
+            caused_by=None,
+            session_id=runtime_context.session_id,
+            turn_id=event.get("turn_id")
+            if isinstance(event.get("turn_id"), str)
+            else None,
+        )
+    )
+    return timeline_event_from_durable_event(outcome.event)
 
 
 def turn_status_detail(renderer: TurnRenderer) -> Callable[[], str]:
