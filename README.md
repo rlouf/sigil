@@ -526,15 +526,15 @@ Sigil writes event-sourced state under `~/.sigil/` by default. Set
 `SIGIL_STATE_DIR` to move it.
 
 Every delegation leaves durable events in `events.sqlite3`: a
-`sigil.prompt.submitted` event for the prompt, `zeta.model.called` and
-`zeta.tool.called` events for runtime calls, and one
-`sigil.turn.completed`, `sigil.turn.failed`, or `sigil.turn.aborted`
-event for the final turn outcome. The turn event records which workflow
-ran, the objective, the enforced tool contract, model cost, the outcome,
-and the ids of the exact prompts the model saw. Tool-call events carry
-effect records for files written or edited (with before/after content
-hashes), commands executed (with exit status), and staged handoffs with
-how they resolved.
+`zeta.prompt.submitted` event for the prompt, `zeta.model_call.completed`
+events for model calls, `zeta.tool_call.*` events for runtime tool calls, and
+one `zeta.turn.completed` or `zeta.turn.failed` event for the final turn
+outcome. Aborted turns are recorded as failed turns with `reason: "aborted"`.
+The turn event records which workflow ran, the objective, the enforced tool
+contract, model cost, the outcome, and the ids of the exact prompts the model
+saw. Tool-call events carry effect records for files written or edited (with
+before/after content hashes), commands executed (with exit status), and staged
+handoffs with how they resolved.
 Plain shell commands and `+` runs are recorded as `run` turns with a
 command effect.
 
