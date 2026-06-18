@@ -208,10 +208,6 @@ class CapabilityRegistry:
         """List registered canonical capability ids."""
         return sorted(self._capabilities)
 
-    def list_ids(self) -> list[str]:
-        """List registered canonical capability ids."""
-        return self.list_capability_ids()
-
     def list_auto_enabled_capability_ids(self) -> list[str]:
         return [
             capability_id
