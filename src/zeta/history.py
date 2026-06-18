@@ -208,7 +208,7 @@ def turns_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
 def effects_by_id(events: list[Event]) -> dict[str, dict[str, Any]]:
     effects: dict[str, dict[str, Any]] = {}
     for event in events:
-        if event.event_type != "zeta.tool.called":
+        if event.event_type != "zeta.tool_call.completed":
             continue
         raw_effects = event.payload.get("effects")
         if not isinstance(raw_effects, list):
@@ -525,7 +525,7 @@ def event_time(event: Event) -> float:
 def event_from_effect_record(record: dict[str, Any]) -> Event:
     return Event(
         id=str(record.get("id") or record["effect_id"]),
-        event_type="zeta.tool.called",
+        event_type="zeta.tool_call.completed",
         source="zeta",
         payload={
             "cwd": record.get("cwd"),

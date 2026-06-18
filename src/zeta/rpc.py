@@ -916,8 +916,10 @@ def rpc_event_idempotency_key(
     turn_id: str | None,
 ) -> str | None:
     if event_type in {
-        "zeta.model.called",
-        "zeta.tool.called",
+        "zeta.model_call.completed",
+        "zeta.tool_call.started",
+        "zeta.tool_call.completed",
+        "zeta.tool_call.failed",
         "zeta.user_message",
         "zeta.turn_aborted",
         "zeta.model_usage",

@@ -121,9 +121,11 @@ def durable_timeline_type(event: Event) -> str:
     timeline_type = event.payload.get("_timeline_type")
     if isinstance(timeline_type, str) and timeline_type:
         return timeline_type
-    if event.event_type == "zeta.model.called":
+    if event.event_type == "zeta.model_call.completed":
         return "model"
-    if event.event_type == "zeta.tool.called":
+    if event.event_type == "zeta.tool_call.started":
+        return "tool_call"
+    if event.event_type in {"zeta.tool_call.completed", "zeta.tool_call.failed"}:
         return "tool_result" if "result" in event.payload else "tool_call"
     prefix = "zeta."
     if event.event_type.startswith(prefix):

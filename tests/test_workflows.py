@@ -1964,7 +1964,7 @@ def zeta_tool_events() -> list[Any]:
     return [
         event
         for event in read_zeta_events()
-        if event.event_type == "zeta.tool.called"
+        if event.event_type == "zeta.tool_call.completed"
         and event.payload.get("_timeline_type") == "tool_result"
     ]
 
@@ -2079,7 +2079,9 @@ def test_zeta_step_threads_durable_event_causality(monkeypatch) -> None:
         event for event in events if event.event_type == "zeta.prompt.submitted"
     ]
     (model_event,) = [
-        event for event in zeta_events if event.event_type == "zeta.model.called"
+        event
+        for event in zeta_events
+        if event.event_type == "zeta.model_call.completed"
     ]
     (tool_event,) = zeta_tool_events()
     (turn_event,) = [

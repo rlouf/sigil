@@ -465,7 +465,7 @@ def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
     store = SqliteEventStore(tmp_path / "events.sqlite3")
     first = store.accept(
         DraftEvent(
-            event_type="zeta.model.called",
+            event_type="zeta.model_call.completed",
             source="zeta",
             payload={"content": "one"},
             session_id="s1",
@@ -473,7 +473,7 @@ def test_sqlite_event_store_filters_and_cursors(tmp_path: Path) -> None:
     ).event
     second = store.accept(
         DraftEvent(
-            event_type="zeta.tool.called",
+            event_type="zeta.tool_call.completed",
             source="zeta",
             payload={"name": "read"},
             caused_by=first.id,
@@ -517,7 +517,7 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
         event_store = MemoryEventStore()
     first = event_store.accept(
         DraftEvent(
-            event_type="zeta.model.called",
+            event_type="zeta.model_call.completed",
             source="zeta",
             payload={"content": "first"},
             session_id="s1",
@@ -526,7 +526,7 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
     ).event
     duplicate = event_store.accept(
         DraftEvent(
-            event_type="zeta.model.called",
+            event_type="zeta.model_call.completed",
             source="zeta",
             payload={"content": "replayed"},
             session_id="s1",
@@ -535,7 +535,7 @@ def test_event_stores_share_ordering_idempotency_and_filter_semantics(
     )
     second = event_store.accept(
         DraftEvent(
-            event_type="zeta.tool.called",
+            event_type="zeta.tool_call.completed",
             source="zeta",
             payload={"name": "read"},
             caused_by=first.id,
@@ -562,7 +562,7 @@ def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
     first = store.append(
         Event(
             id="z-event",
-            event_type="zeta.model.called",
+            event_type="zeta.model_call.completed",
             source="zeta",
             payload={"content": "first"},
             timestamp_micros=2,
@@ -575,7 +575,7 @@ def test_sqlite_event_store_orders_by_append_sequence(tmp_path: Path) -> None:
     second = store.append(
         Event(
             id="a-event",
-            event_type="zeta.model.called",
+            event_type="zeta.model_call.completed",
             source="zeta",
             payload={"content": "second"},
             timestamp_micros=1,
@@ -614,7 +614,7 @@ def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
     model = store.append(
         Event(
             id="model-event",
-            event_type="zeta.model.called",
+            event_type="zeta.model_call.completed",
             source="zeta",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
@@ -627,7 +627,7 @@ def test_sqlite_event_store_traverses_causality(tmp_path: Path) -> None:
     tool = store.append(
         Event(
             id="tool-event",
-            event_type="zeta.tool.called",
+            event_type="zeta.tool_call.completed",
             source="zeta",
             payload={"turn_id": "turn-1"},
             turn_id="turn-1",
@@ -712,7 +712,7 @@ def test_sigil_event_query_helpers_use_zeta_event_log() -> None:
             )
             model = append_event(
                 {
-                    "type": "zeta.model.called",
+                    "type": "zeta.model_call.completed",
                     "turn_id": "turn-1",
                     "caused_by": prompt.id,
                 }
@@ -727,7 +727,7 @@ def test_sqlite_event_store_events_for_turn_uses_turn_id_column(tmp_path: Path) 
     store = SqliteEventStore(tmp_path / "events.sqlite3")
     column_match = store.accept(
         DraftEvent(
-            event_type="zeta.model.called",
+            event_type="zeta.model_call.completed",
             source="test",
             payload={"turn_id": "payload-turn"},
             turn_id="column-turn",
@@ -735,7 +735,7 @@ def test_sqlite_event_store_events_for_turn_uses_turn_id_column(tmp_path: Path) 
     ).event
     store.accept(
         DraftEvent(
-            event_type="zeta.model.called",
+            event_type="zeta.model_call.completed",
             source="test",
             payload={"turn_id": "payload-turn"},
             turn_id="other-turn",
@@ -803,13 +803,13 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
     assert prompt.source == "zeta"
     assert prompt.turn_id == "turn-1"
     assert prompt.idempotency_key == "zeta.prompt.submitted:turn-1"
-    assert model.event_type == "zeta.model.called"
+    assert model.event_type == "zeta.model_call.completed"
     assert model.source == "zeta"
     assert model.turn_id == "turn-1"
     assert model.caused_by == "prompt-event"
-    assert model.idempotency_key == "zeta.model.called:model-event"
-    assert tool.event_type == "zeta.tool.called"
-    assert tool.idempotency_key == "zeta.tool.called:tool-event"
+    assert model.idempotency_key == "zeta.model_call.completed:model-event"
+    assert tool.event_type == "zeta.tool_call.completed"
+    assert tool.idempotency_key == "zeta.tool_call.completed:tool-event"
     assert completed.event_type == "zeta.turn.completed"
     assert completed.idempotency_key == "zeta.turn.completed:turn-1"
     assert failed.event_type == "zeta.turn.failed"
@@ -973,7 +973,7 @@ def test_events_causality_subcommands() -> None:
             append_event(
                 {
                     "id": "model-event",
-                    "type": "zeta.model.called",
+                    "type": "zeta.model_call.completed",
                     "turn_id": "turn-1",
                     "caused_by": "prompt-event",
                     "time": 2.0,
@@ -982,7 +982,7 @@ def test_events_causality_subcommands() -> None:
             append_event(
                 {
                     "id": "tool-event",
-                    "type": "zeta.tool.called",
+                    "type": "zeta.tool_call.completed",
                     "turn_id": "turn-1",
                     "caused_by": "model-event",
                     "time": 3.0,

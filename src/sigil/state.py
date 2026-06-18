@@ -25,8 +25,10 @@ from zeta.store.events import (
 
 EVENT_IDEMPOTENT_TYPES = frozenset(
     {
-        "zeta.model.called",
-        "zeta.tool.called",
+        "zeta.model_call.completed",
+        "zeta.tool_call.started",
+        "zeta.tool_call.completed",
+        "zeta.tool_call.failed",
         "zeta.user_message",
         "zeta.turn_aborted",
         "zeta.model_usage",

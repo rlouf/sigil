@@ -152,7 +152,7 @@ def test_zeta_agent_turn_can_emit_direct_durable_model_event(monkeypatch) -> Non
 
     assert result.events[0]["content"] == "done"
     assert len(drafts) == 1
-    assert drafts[0].event_type == "zeta.model.called"
+    assert drafts[0].event_type == "zeta.model_call.completed"
     assert drafts[0].payload == {"content": "done", "_timeline_type": "model"}
     assert drafts[0].session_id == "session-1"
     assert drafts[0].turn_id == "turn-1"
@@ -317,13 +317,13 @@ def test_zeta_model_called_draft_sets_durable_metadata() -> None:
         event_id="model-1",
     )
 
-    assert draft.event_type == "zeta.model.called"
+    assert draft.event_type == "zeta.model_call.completed"
     assert draft.source == "zeta"
     assert draft.payload == {"content": "done"}
     assert draft.turn_id == "turn-1"
     assert draft.session_id == "session-1"
     assert draft.caused_by == "prompt-1"
-    assert draft.idempotency_key == "zeta.model.called:model-1"
+    assert draft.idempotency_key == "zeta.model_call.completed:model-1"
 
 
 def test_zeta_model_durable_object_links_extract_trace_refs() -> None:
@@ -373,20 +373,20 @@ def test_zeta_tool_call_runtime_event_round_trips_to_current_dict_shape() -> Non
 
 def test_zeta_tool_called_draft_sets_durable_metadata() -> None:
     draft = zeta_agent.tool_called_draft(
-        payload={"name": "read"},
+        payload={"_timeline_type": "tool_call", "name": "read"},
         turn_id="turn-1",
         session_id="session-1",
         caused_by="model-1",
         event_id="tool-1",
     )
 
-    assert draft.event_type == "zeta.tool.called"
+    assert draft.event_type == "zeta.tool_call.started"
     assert draft.source == "zeta"
-    assert draft.payload == {"name": "read"}
+    assert draft.payload == {"_timeline_type": "tool_call", "name": "read"}
     assert draft.turn_id == "turn-1"
     assert draft.session_id == "session-1"
     assert draft.caused_by == "model-1"
-    assert draft.idempotency_key == "zeta.tool.called:tool-1"
+    assert draft.idempotency_key == "zeta.tool_call.started:tool-1"
 
 
 def test_zeta_tool_result_durable_object_links_extract_trace_refs() -> None:
@@ -487,7 +487,7 @@ def test_zeta_record_model_event_can_emit_direct_durable_draft() -> None:
     assert tool_calls == []
     assert len(events) == 1
     assert len(drafts) == 1
-    assert drafts[0].event_type == "zeta.model.called"
+    assert drafts[0].event_type == "zeta.model_call.completed"
     assert drafts[0].payload == {
         "_timeline_type": "model",
         "content": "done",
@@ -495,7 +495,7 @@ def test_zeta_record_model_event_can_emit_direct_durable_draft() -> None:
     assert drafts[0].session_id == "session-1"
     assert drafts[0].turn_id == "turn-1"
     assert drafts[0].caused_by == "parent-1"
-    assert drafts[0].idempotency_key == f"zeta.model.called:{event_id}"
+    assert drafts[0].idempotency_key == f"zeta.model_call.completed:{event_id}"
 
 
 def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
@@ -535,8 +535,8 @@ def test_zeta_handle_tool_call_can_emit_direct_durable_drafts() -> None:
 
     assert [event["type"] for event in result.events] == ["tool_call", "tool_result"]
     assert [draft.event_type for draft in drafts] == [
-        "zeta.tool.called",
-        "zeta.tool.called",
+        "zeta.tool_call.started",
+        "zeta.tool_call.completed",
     ]
     assert drafts[0].payload == {
         "_timeline_type": "tool_call",
@@ -1513,7 +1513,7 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
         "runtime.work.pending",
         "runtime.work.claimed",
         "zeta.user_message",
-        "zeta.model.called",
+        "zeta.model_call.completed",
         "runtime.work.completed",
     ]
     assert [
@@ -1582,7 +1582,7 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         "runtime.work.pending",
         "runtime.work.claimed",
         "zeta.user_message",
-        "zeta.model.called",
+        "zeta.model_call.completed",
         "runtime.work.completed",
     ]
     assert [
@@ -2571,7 +2571,9 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
     assert response["result"]["turn_id"]
     event_store = SqliteEventStore(event_store_path())
     try:
-        model_events = event_store.list_events(Filter(event_type="zeta.model.called"))
+        model_events = event_store.list_events(
+            Filter(event_type="zeta.model_call.completed")
+        )
     finally:
         event_store.close()
     assert len(model_events) == 1

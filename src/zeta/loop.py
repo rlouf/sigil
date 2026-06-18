@@ -37,7 +37,14 @@ from zeta.store.substrate import Store
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 DEFAULT_MAX_TURNS = 25
-EVENT_IDEMPOTENT_TYPES = frozenset({"zeta.model.called", "zeta.tool.called"})
+EVENT_IDEMPOTENT_TYPES = frozenset(
+    {
+        "zeta.model_call.completed",
+        "zeta.tool_call.started",
+        "zeta.tool_call.completed",
+        "zeta.tool_call.failed",
+    }
+)
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
 StepName = Literal[
@@ -1003,7 +1010,7 @@ def model_called_draft(
     event_id: str | None = None,
 ) -> DraftEvent:
     return durable_event_draft(
-        "zeta.model.called",
+        "zeta.model_call.completed",
         payload=payload,
         turn_id=turn_id,
         session_id=session_id,
@@ -1021,13 +1028,26 @@ def tool_called_draft(
     event_id: str | None = None,
 ) -> DraftEvent:
     return durable_event_draft(
-        "zeta.tool.called",
+        tool_call_event_type(payload),
         payload=payload,
         turn_id=turn_id,
         session_id=session_id,
         caused_by=caused_by,
         event_id=event_id,
     )
+
+
+def tool_call_event_type(payload: dict[str, Any]) -> str:
+    if payload.get("_timeline_type") == "tool_call":
+        return "zeta.tool_call.started"
+    if tool_call_failed(payload):
+        return "zeta.tool_call.failed"
+    return "zeta.tool_call.completed"
+
+
+def tool_call_failed(payload: dict[str, Any]) -> bool:
+    result = payload.get("result")
+    return isinstance(result, dict) and result.get("ok") is False
 
 
 def durable_event_draft(

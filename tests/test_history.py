@@ -111,7 +111,7 @@ def test_history_publish_effect_record_writes_durable_tool_event() -> None:
     )
 
     (event,) = read_events()
-    assert event.event_type == "zeta.tool.called"
+    assert event.event_type == "zeta.tool_call.completed"
     assert event.payload["effects"][0]["effect_id"] == "effect-1"
     history = sigil_state.history_view()
     assert history.effects_for_turn("turn-1") == [payload]
@@ -171,7 +171,7 @@ def test_history_history_reads_durable_events() -> None:
     append_event(sample_turn_record("turn-old", time=100.0))
     publish_sigil_draft(
         DraftEvent(
-            event_type="zeta.tool.called",
+            event_type="zeta.tool_call.completed",
             source="zeta",
             payload={
                 "effects": [sample_effect_record("effect-old", turn_id="turn-old")]
@@ -707,7 +707,7 @@ def test_bundle_import_is_idempotent(monkeypatch, tmp_path) -> None:
     log_lines = read_events()
     assert [event.event_type for event in log_lines] == [
         "zeta.turn.completed",
-        "zeta.tool.called",
+        "zeta.tool_call.completed",
     ]
 
 

@@ -669,7 +669,9 @@ def test_zeta_timeline_record_and_project(tmp_path: Path, monkeypatch) -> None:
     assert events[0]["type"] == "tool_call"
     assert events[0]["name"] == "read"
     assert_no_trace_timeline_chain(runtime_context.trace_store)
-    tool_events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
+    tool_events = zeta_event_store().list_events(
+        Filter(event_type="zeta.tool_call.started")
+    )
     assert len(tool_events) == 1
     assert tool_events[0].payload["name"] == "read"
 
@@ -695,7 +697,11 @@ def test_zeta_timeline_tool_result_is_durable(
     timeline = zeta_timeline.current_timeline(runtime_context=runtime_context)
     assert timeline[0]["type"] == "tool_result"
     assert timeline[0]["result"] == {"ok": True}
-    tool_events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
+    tool_events = [
+        event
+        for event in zeta_event_store().list_events(Filter())
+        if event.event_type.startswith("zeta.tool_call.")
+    ]
     assert len(tool_events) == 1
     assert tool_events[0].payload["result"] == {"ok": True}
 
@@ -735,9 +741,11 @@ def test_zeta_timeline_tool_call_is_caused_by_assistant_event(
     )
 
     assistant = zeta_event_store().get("assistant-event-1")
-    tool_calls = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
+    tool_calls = zeta_event_store().list_events(
+        Filter(event_type="zeta.tool_call.started")
+    )
     assert assistant is not None
-    assert assistant.event_type == "zeta.model.called"
+    assert assistant.event_type == "zeta.model_call.completed"
     assert len(tool_calls) == 1
     assert tool_calls[0].caused_by == "assistant-event-1"
     assert tool_calls[0].payload["name"] == "read"
@@ -791,7 +799,7 @@ def test_zeta_model_called_links_used_and_returned_objects(
 
     event = zeta_event_store().get("model-event-1")
     assert event is not None
-    assert event.event_type == "zeta.model.called"
+    assert event.event_type == "zeta.model_call.completed"
     assert event.payload["used_objects"] == [
         {"kind": "prompt", "id": prompt_id},
     ]
@@ -820,7 +828,9 @@ def test_zeta_tool_called_links_used_and_returned_objects(
         }
     )
 
-    events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
+    events = zeta_event_store().list_events(
+        Filter(event_type="zeta.tool_call.completed")
+    )
     assert len(events) == 1
     assert events[0].caused_by == "model-event-1"
     assert events[0].payload["used_objects"] == [
@@ -868,9 +878,13 @@ def test_zeta_agent_durable_events_link_trace_objects(
     tool_call = event_by_type(result.events, "tool_call")
     tool_result = event_by_type(result.events, "tool_result")
     model_events = zeta_event_store().list_events(
-        Filter(event_type="zeta.model.called")
+        Filter(event_type="zeta.model_call.completed")
     )
-    tool_events = zeta_event_store().list_events(Filter(event_type="zeta.tool.called"))
+    tool_events = [
+        event
+        for event in zeta_event_store().list_events(Filter())
+        if event.event_type.startswith("zeta.tool_call.")
+    ]
 
     assert len(model_events) == 2
     assert model_events[0].payload["used_objects"] == [
@@ -1062,7 +1076,9 @@ def test_zeta_record_event_stores_prompt_link_not_components(
     )
 
     assert_no_trace_timeline_chain(store)
-    (event,) = zeta_event_store().list_events(Filter(event_type="zeta.model.called"))
+    (event,) = zeta_event_store().list_events(
+        Filter(event_type="zeta.model_call.completed")
+    )
     assert event.payload["used_objects"] == [{"kind": "prompt", "id": prompt_id}]
     assert event.payload["returned_objects"] == [
         {"kind": "assistant_message", "id": assistant_id}
