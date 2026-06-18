@@ -67,22 +67,27 @@ def draft_event_id(draft: DraftEvent) -> str | None:
 
 
 class DirectRuntimeEventSink:
-    def __init__(self, recorder: "TurnEventRecorder") -> None:
-        self.recorder = recorder
+    def __init__(
+        self,
+        runtime_context: Session,
+        tag_fields: Callable[[], dict[str, Any]],
+    ) -> None:
+        self.runtime_context = runtime_context
+        self._tag_fields = tag_fields
         self.projected_events: dict[str, dict[str, Any]] = {}
 
     def accept(self, draft: DraftEvent) -> AppendOutcome:
         tagged = DraftEvent(
             event_type=draft.event_type,
             source=draft.source,
-            payload={**draft.payload, **self.recorder.tag_fields},
+            payload={**draft.payload, **self.tag_fields()},
             idempotency_key=draft.idempotency_key,
             caused_by=draft.caused_by,
             session_id=draft.session_id,
             turn_id=draft.turn_id,
         )
         event_id = draft_event_id(tagged)
-        append = getattr(self.recorder.runtime_context.event_sink, "append", None)
+        append = getattr(self.runtime_context.event_sink, "append", None)
         if callable(append) and event_id is not None:
             event = Event(
                 id=event_id,
@@ -97,7 +102,7 @@ class DirectRuntimeEventSink:
             )
             outcome = append(event)
         else:
-            outcome = self.recorder.runtime_context.event_sink.accept(tagged)
+            outcome = self.runtime_context.event_sink.accept(tagged)
         projected = timeline_event_from_durable_event(outcome.event)
         runtime_id = event_id or projected.get("id")
         if isinstance(runtime_id, str) and projected:
@@ -110,6 +115,21 @@ class DirectRuntimeEventSink:
             return None
         projected = self.projected_events.get(event_id)
         return dict(projected) if projected is not None else None
+
+    def tag_fields(self) -> dict[str, Any]:
+        return self._tag_fields()
+
+
+def projected_direct_event(
+    sink: DirectRuntimeEventSink,
+    event: dict[str, Any],
+) -> dict[str, Any] | None:
+    direct_event = sink.projected_event(event)
+    if direct_event is None:
+        return None
+    if "effects" in event:
+        direct_event["effects"] = event["effects"]
+    return direct_event
 
 
 def time_micros() -> int:
@@ -190,7 +210,10 @@ class TurnEventRecorder:
         self.turn_recorder = turn_recorder
         self.runtime_context = runtime_context
         self.recorded_event_ids: set[int] = set()
-        self.direct_event_sink = DirectRuntimeEventSink(self)
+        self.direct_event_sink = DirectRuntimeEventSink(
+            runtime_context,
+            lambda: self.tag_fields,
+        )
         self.status: int | None = None
 
     def record(self, event: dict[str, Any]) -> None:
@@ -225,10 +248,8 @@ class TurnEventRecorder:
             self.status = status
 
     def persist(self, event_type: str, event: dict[str, Any]) -> dict[str, Any]:
-        direct_event = self.direct_event_sink.projected_event(event)
+        direct_event = projected_direct_event(self.direct_event_sink, event)
         if direct_event is not None:
-            if "effects" in event:
-                direct_event["effects"] = event["effects"]
             return direct_event
         fields = {
             key: value
@@ -371,13 +392,16 @@ def run_zeta_rpc_session(
     turn_recorder.note_root_event(user_event)
     append_prompt_submitted_event(user_event)
     publish_event(user_event)
+    direct_event_sink = DirectRuntimeEventSink(runtime_context, lambda: {})
 
     def sink(event: dict[str, Any]) -> None:
         event_type = str(event.get("type") or "")
         if event_type == "tool_result":
             turn_recorder.attach_tool_result_effect(event)
         event["turn_id"] = turn_recorder.turn_id
-        persisted = record_event(event, runtime_context=runtime_context)
+        persisted = projected_direct_event(direct_event_sink, event)
+        if persisted is None:
+            persisted = record_event(event, runtime_context=runtime_context)
         turn_recorder.note_runtime_event(persisted)
         publish_event(persisted)
 
@@ -413,6 +437,9 @@ def run_zeta_rpc_session(
                 else load_project_instructions()
             ),
             event_sink=sink,
+            durable_event_sink=direct_event_sink,
+            session_id=runtime_context.session_id,
+            turn_id=turn_recorder.turn_id,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
             caused_by=turn_recorder.root_event_id,

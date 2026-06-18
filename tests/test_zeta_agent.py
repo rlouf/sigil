@@ -47,7 +47,7 @@ from zeta.capabilities.registry import CapabilityRegistry
 from zeta.context import builder as zeta_context
 from zeta.events import AppendOutcome, DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
-from zeta.store.events import Filter, SqliteEventStore
+from zeta.store.events import Filter, SqliteEventStore, event_store_path
 from zeta.store.substrate import InMemoryStore
 from zeta.timeline import durable_event_draft
 
@@ -2572,6 +2572,14 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
     assert response["id"] == 1
     assert response["result"]["outcome"] == "answered"
     assert response["result"]["turn_id"]
+    event_store = SqliteEventStore(event_store_path())
+    try:
+        model_events = event_store.list_events(Filter(event_type="zeta.model.called"))
+    finally:
+        event_store.close()
+    assert len(model_events) == 1
+    assert model_events[0].id == published[1]["id"]
+    assert model_events[0].caused_by == published[0]["id"]
 
 
 def test_zeta_rpc_events_list_pages_in_append_order(tmp_path: Path) -> None:
