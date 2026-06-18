@@ -3,7 +3,7 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ..capabilities import ExecutionMode
+from zeta.capabilities.base import ExecutionMode
 
 
 @dataclass(frozen=True)

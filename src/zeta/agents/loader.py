@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from .spec import AgentSpec, load_spec
+from zeta.agents.spec import AgentSpec, load_spec
 
 
 def load_specs_recursive(directory: str | Path) -> list[AgentSpec]:

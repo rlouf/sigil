@@ -4,6 +4,7 @@ import json
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -40,11 +41,9 @@ from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from zeta import loop as zeta_agent
-from zeta import substrate as zeta_trace
 from zeta import timeline as zeta_timeline
-from zeta.context import PromptTrace
-from zeta.context.components import chat_messages
-from zeta.events import Filter, SqliteEventStore, event_store_path
+from zeta.context.components import PromptTrace, chat_messages
+from zeta.events.store import Filter, SqliteEventStore, event_store_path
 from zeta.history import (
     effect_record,
     history_event_record,
@@ -53,6 +52,10 @@ from zeta.history import (
     turn_record,
 )
 from zeta.models import profiles as zeta_models
+from zeta.substrate.ref import Ref
+from zeta.substrate.store import resolve_object_id
+
+zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 
 
 def record_sigil_event(event: dict[str, Any]) -> dict[str, Any]:

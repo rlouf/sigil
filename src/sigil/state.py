@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from zeta.events import (
+from zeta.events.store import (
     EVENT_STORE_NAME,
     Filter,
     event_log_causal_chain,
@@ -21,7 +21,7 @@ from zeta.events import (
 from zeta.timeline import publish_event_payload_to_log
 
 if TYPE_CHECKING:
-    from zeta.events import Event
+    from zeta.events.event import Event
 
 
 def state_dir() -> Path:
@@ -65,7 +65,7 @@ def events_for_turn(turn_id: str) -> list[Event]:
 
 def append_event(event: dict[str, Any]) -> Event:
     """Append a global audit/debug event with session metadata."""
-    from .sessions import session_id
+    from sigil.sessions import session_id
 
     payload = {"source": "sigil", **event}
     return publish_event_payload_to_log(

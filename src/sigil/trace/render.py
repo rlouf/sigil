@@ -1,8 +1,10 @@
 """Human-readable trace rendering helpers."""
 
-from zeta.substrate import Object, ObjectId, Store
+from __future__ import annotations
 
-from ..display.summarize import short_trace_id, text_content, trace_object_summary
+from sigil.display.summarize import short_trace_id, text_content, trace_object_summary
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.store import Store
 
 BODY_LINE_LIMIT = 8
 

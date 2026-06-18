@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from _zeta_helpers import (
@@ -13,17 +14,46 @@ from _zeta_helpers import (
 )
 from click.testing import CliRunner
 
+import zeta.context.components as zeta_context
 from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
-from zeta import context as zeta_context
 from zeta import loop as zeta_agent
-from zeta import substrate as zeta_trace
 from zeta import timeline as zeta_timeline
+from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
-from zeta.events import Filter, SqliteEventStore, event_store_path
+from zeta.events.store import Filter, SqliteEventStore, event_store_path
 from zeta.models import profiles as zeta_models
 from zeta.session import Session, default_session
+from zeta.substrate.derivation import Derivation
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.ref import Ref, RefUpdate
+from zeta.substrate.store import (
+    AmbiguousIdError,
+    InMemoryStore,
+    SqliteStore,
+    Store,
+    UnknownIdError,
+    available_session_ids,
+    resolve_object_id,
+    zeta_sqlite_path,
+)
+
+zeta_trace = SimpleNamespace(
+    AmbiguousIdError=AmbiguousIdError,
+    Derivation=Derivation,
+    InMemoryStore=InMemoryStore,
+    Object=Object,
+    ObjectId=ObjectId,
+    Ref=Ref,
+    RefUpdate=RefUpdate,
+    SqliteStore=SqliteStore,
+    Store=Store,
+    UnknownIdError=UnknownIdError,
+    available_session_ids=available_session_ids,
+    resolve_object_id=resolve_object_id,
+    zeta_sqlite_path=zeta_sqlite_path,
+)
 
 
 def zeta_event_store() -> SqliteEventStore:
@@ -833,7 +863,7 @@ def test_zeta_agent_durable_events_link_trace_objects(
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
         event_sink=record_runtime_event,
-        prompt_builder=zeta_context.PromptBuilder(store=runtime_context.trace_store),
+        prompt_builder=PromptBuilder(store=runtime_context.trace_store),
     )
 
     tool_call = event_by_type(result.events, "tool_call")

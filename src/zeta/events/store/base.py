@@ -8,7 +8,7 @@ capability while producers depend only on append capability.
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from ..event import Event
+from zeta.events.event import Event
 
 
 @dataclass(frozen=True)

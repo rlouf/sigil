@@ -2,9 +2,9 @@
 
 import click
 
-from ..status import current_status, format_status
-from ._base import cli, examples
-from ._shared import pretty_print_json
+from sigil.cli._base import cli, examples
+from sigil.cli._shared import pretty_print_json
+from sigil.status import current_status, format_status
 
 
 @cli.command(

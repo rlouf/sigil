@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import TextIO
 
-from .step import HandoffOutput, step
+from sigil.workflows.step import HandoffOutput, step
 
 
 def do(

@@ -1,23 +1,47 @@
 """Authored agent spec tests."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from zeta import agents as zeta_agents
 from zeta import dispatch as zeta_dispatch
-from zeta import events as zeta_events
-from zeta.agents import AgentConfig
-from zeta.capabilities import (
+from zeta.agents.capabilities import AgentConfig
+from zeta.agents.events import EventEnvelope, EventRegistry
+from zeta.agents.loader import load_spec
+from zeta.agents.manifest import Manifest, ManifestError
+from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
+from zeta.agents.returns import derive_returns_schema
+from zeta.agents.runtime import compile_agent_definition
+from zeta.agents.spec import ScheduleEntry, matches
+from zeta.capabilities.base import (
     Capability,
     CapabilityId,
     CapabilityPolicy,
-    CapabilityRegistry,
     CapabilitySpec,
     InProcessCapabilityExecutor,
 )
+from zeta.capabilities.registry import CapabilityRegistry
+from zeta.events.event import DraftEvent
+from zeta.events.store import SqliteEventStore
 from zeta.loop import AgentTurnResult
+
+zeta_agents = SimpleNamespace(
+    EventEnvelope=EventEnvelope,
+    EventRegistry=EventRegistry,
+    Manifest=Manifest,
+    ManifestError=ManifestError,
+    ScheduleEntry=ScheduleEntry,
+    TemplateError=TemplateError,
+    compile_agent_definition=compile_agent_definition,
+    derive_returns_schema=derive_returns_schema,
+    load_spec=load_spec,
+    matches=matches,
+    render_prompt=render_prompt,
+    validate_prompt=validate_prompt,
+)
+zeta_events = SimpleNamespace(DraftEvent=DraftEvent, SqliteEventStore=SqliteEventStore)
 
 
 def _write_spec(path: Path, content: str) -> Path:

@@ -9,30 +9,29 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ..capabilities import content_hash
-from ..models import ModelInput, ModelOutput
-from ..models.chat_completions import (
-    DEFAULT_MAX_COMPLETION_TOKENS,
-    chat_completion_request_body,
-)
-from ..skills import Skill, available_skills
-from ..substrate import (
-    Derivation,
-    Object,
-    ObjectId,
-    Store,
-    canonical_json,
-    warn_trace_failure_once,
-)
-from .components import (
+from zeta.capabilities.base import content_hash
+from zeta.context.components import (
     PromptComponent,
     PromptTrace,
     component_messages,
     prompt_component_object,
     prompt_components,
 )
-from .system import can_read_skill_files, enabled_capability_ids
-from .transforms import NoOpPromptTransform, PromptTransform
+from zeta.context.system import can_read_skill_files, enabled_capability_ids
+from zeta.context.transforms import NoOpPromptTransform, PromptTransform
+from zeta.models import ModelInput, ModelOutput
+from zeta.models.chat_completions import (
+    DEFAULT_MAX_COMPLETION_TOKENS,
+    chat_completion_request_body,
+)
+from zeta.skills import Skill, available_skills
+from zeta.substrate.derivation import Derivation
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.store import (
+    Store,
+    canonical_json,
+    warn_trace_failure_once,
+)
 
 
 @dataclass(frozen=True)

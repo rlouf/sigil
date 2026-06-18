@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .profiles import (
+from zeta.models.profiles import (
     CHAT_COMPLETIONS_API,
     CODEX_RESPONSES_API,
     DEFAULT_CODEX_BASE_URL,
@@ -193,11 +193,11 @@ def chat_completion_messages(
 ) -> dict[str, Any]:
     """Request one assistant message from the selected protocol client."""
     if api is None or api == CHAT_COMPLETIONS_API:
-        from . import chat_completions
+        from zeta.models import chat_completions
 
         return chat_completions.chat_completion_messages(messages, **options)
     if api == CODEX_RESPONSES_API:
-        from . import responses
+        from zeta.models import responses
 
         return responses.codex_completion_messages(messages, **options)
     raise ValueError(f"unknown model api: {api!r}")
@@ -211,11 +211,11 @@ def chat_structured_output(
 ) -> dict[str, Any]:
     """Request one schema-validated JSON object from the selected client."""
     if api is None or api == CHAT_COMPLETIONS_API:
-        from . import chat_completions
+        from zeta.models import chat_completions
 
         return chat_completions.chat_structured_output(messages, **options)
     if api == CODEX_RESPONSES_API:
-        from . import responses
+        from zeta.models import responses
 
         return responses.codex_structured_output(messages, **options)
     raise ValueError(f"unknown model api: {api!r}")

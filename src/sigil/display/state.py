@@ -18,11 +18,15 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.padding import Padding
 
-from zeta.capabilities import proposed_effect
+from sigil.display.summarize import (
+    short_trace_id,
+    summarize,
+    text_content,
+    tool_result_summary,
+)
+from sigil.display.tty import iris_italic, is_interactive, muted, should_color
+from zeta.capabilities.base import proposed_effect
 from zeta.context.budget import estimated_tokens_for_text
-
-from .summarize import short_trace_id, summarize, text_content, tool_result_summary
-from .tty import iris_italic, is_interactive, muted, should_color
 
 THINKING_STATUS_INTERVAL_SECONDS = 1.0
 RICH_STREAM_REFRESH_SECONDS = 0.125

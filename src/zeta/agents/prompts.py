@@ -2,8 +2,8 @@
 
 from jinja2 import Environment, meta
 
-from .events import EventEnvelope
-from .spec import AgentSpec
+from zeta.agents.events import EventEnvelope
+from zeta.agents.spec import AgentSpec
 
 
 class TemplateError(ValueError):

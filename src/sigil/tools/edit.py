@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from zeta.capabilities import (
+from zeta.capabilities.base import (
     CapabilityId,
     CapabilitySpec,
     change_hashes,

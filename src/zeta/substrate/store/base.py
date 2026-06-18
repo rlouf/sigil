@@ -12,15 +12,9 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
-from ..derivation import Derivation
-from ..object import (
-    Object,
-    ObjectId,
-)
-from ..ref import (
-    Ref,
-    RefUpdate,
-)
+from zeta.substrate.derivation import Derivation
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.ref import Ref, RefUpdate
 
 LOGGER = logging.getLogger("zeta.substrate")
 _WARNED_FAILURES: set[str] = set()

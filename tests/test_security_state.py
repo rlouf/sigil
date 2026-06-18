@@ -46,15 +46,14 @@ from sigil.workflows.ask import (
     ask,
 )
 from zeta import events as zeta_events
-from zeta.events import (
+from zeta.events.event import DraftEvent, Event
+from zeta.events.sink import publish_event
+from zeta.events.store import (
     AppendOutcome,
-    DraftEvent,
-    Event,
     Filter,
     MemoryEventStore,
     SqliteEventStore,
     event_store_path,
-    publish_event,
 )
 from zeta.timeline import durable_event, model_called_event, tool_called_event
 

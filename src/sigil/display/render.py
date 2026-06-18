@@ -8,9 +8,9 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
 
-from .state import TraceRenderState
-from .summarize import short_trace_id, summarize, tool_result_summary
-from .tty import muted, should_color
+from sigil.display.state import TraceRenderState
+from sigil.display.summarize import short_trace_id, summarize, tool_result_summary
+from sigil.display.tty import muted, should_color
 
 TRACE_LABEL_WIDTH = 5
 

@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from .events import EventRegistry
-from .spec import AgentSpec
+from zeta.agents.events import EventRegistry
+from zeta.agents.spec import AgentSpec
 
 
 def derive_returns_schema(

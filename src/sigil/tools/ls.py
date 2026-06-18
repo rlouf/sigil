@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from zeta.capabilities import CapabilityId, CapabilitySpec, error_result
+from zeta.capabilities.base import CapabilityId, CapabilitySpec, error_result
 
 SCHEMA: dict[str, Any] = {
     "type": "object",

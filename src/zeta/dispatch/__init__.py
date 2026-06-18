@@ -1,6 +1,6 @@
 """Event-triggered agent dispatch for Zeta."""
 
-from .dispatcher import (
+from zeta.dispatch.dispatcher import (
     AgentDefinition,
     AgentRun,
     DispatchMode,

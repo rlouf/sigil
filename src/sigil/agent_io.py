@@ -11,9 +11,30 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TextIO
 
-from zeta.agents import AgentConfig
-from zeta.capabilities import ExecutionMode
-from zeta.context import load_project_instructions
+from sigil.display.render import render_tool_start
+from sigil.display.state import (
+    PROGRESS_MODE_TRACE,
+    ContextUsageFooter,
+    TerminalDigestRenderer,
+    TraceAwareStreamRenderer,
+    TraceRenderState,
+    create_stream_renderer,
+    progress_mode_from_env,
+)
+from sigil.protocols import (
+    TURN_OUTCOME_ABORTED,
+    TURN_OUTCOME_ANSWERED,
+    TURN_OUTCOME_EXECUTED,
+    TURN_OUTCOME_FAILED,
+    TURN_OUTCOME_STAGED,
+)
+from sigil.sessions import session_id
+from sigil.state import append_prompt_submitted_event
+from sigil.tools import ensure_builtin_tools_registered
+from sigil.turn import TurnRecorder
+from zeta.agents.capabilities import AgentConfig
+from zeta.capabilities.base import ExecutionMode
+from zeta.context.instructions import load_project_instructions
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
@@ -29,28 +50,6 @@ from zeta.models import (
 from zeta.models.chat_completions import ensure_server
 from zeta.session import Session
 from zeta.timeline import current_timeline, record_event
-
-from .display.render import render_tool_start
-from .display.state import (
-    PROGRESS_MODE_TRACE,
-    ContextUsageFooter,
-    TerminalDigestRenderer,
-    TraceAwareStreamRenderer,
-    TraceRenderState,
-    create_stream_renderer,
-    progress_mode_from_env,
-)
-from .protocols import (
-    TURN_OUTCOME_ABORTED,
-    TURN_OUTCOME_ANSWERED,
-    TURN_OUTCOME_EXECUTED,
-    TURN_OUTCOME_FAILED,
-    TURN_OUTCOME_STAGED,
-)
-from .sessions import session_id
-from .state import append_prompt_submitted_event
-from .tools import ensure_builtin_tools_registered
-from .turn import TurnRecorder
 
 
 def model_server_ready(selected_model: ModelSelection | None) -> bool:
@@ -246,7 +245,7 @@ def run_zeta_rpc_session(
     *,
     publish_event: Callable[[dict[str, Any]], None],
 ) -> dict[str, Any]:
-    from . import zeta_session_for_sigil
+    from sigil import zeta_session_for_sigil
 
     runtime_context = zeta_session_for_sigil()
     objective = str(params.get("objective") or "")

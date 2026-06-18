@@ -7,7 +7,12 @@ from html import unescape
 from pathlib import Path
 from typing import Any
 
-from zeta.capabilities import CapabilityId, CapabilitySpec, content_hash, error_result
+from zeta.capabilities.base import (
+    CapabilityId,
+    CapabilitySpec,
+    content_hash,
+    error_result,
+)
 
 DEFAULT_READ_LIMIT = 2_000
 MAX_READ_CHARS = 50_000

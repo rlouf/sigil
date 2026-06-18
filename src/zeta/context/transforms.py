@@ -4,8 +4,8 @@ import logging
 from dataclasses import dataclass
 from typing import Protocol
 
-from .budget import ContextUsage, measure
-from .components import PromptComponent
+from zeta.context.budget import ContextUsage, measure
+from zeta.context.components import PromptComponent
 
 LOGGER = logging.getLogger("zeta.context")
 _warned_over_budget = False

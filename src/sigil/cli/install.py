@@ -4,7 +4,9 @@ from pathlib import Path
 
 import click
 
-from ..install import (
+from sigil.cli._base import cli, examples
+from sigil.cli._shared import pretty_print_json
+from sigil.install import (
     DoctorCheck,
     checks_exit_code,
     checks_summary,
@@ -12,8 +14,6 @@ from ..install import (
     doctor_checks,
     install_zsh_binding,
 )
-from ._base import cli, examples
-from ._shared import pretty_print_json
 
 
 @cli.command(

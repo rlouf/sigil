@@ -4,16 +4,14 @@ from typing import Any
 
 import click
 
-from zeta.substrate import (
+from sigil.display.summarize import estimated_prompt_tokens
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.store import (
     AmbiguousIdError,
-    Object,
-    ObjectId,
     Store,
     UnknownIdError,
     resolve_object_id,
 )
-
-from ..display.summarize import estimated_prompt_tokens
 
 
 def resolve_cli_object_id(token: str, *, store: Store) -> ObjectId:

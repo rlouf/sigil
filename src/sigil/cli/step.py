@@ -6,14 +6,14 @@ from typing import TextIO
 
 import click
 
-from .. import handoff as sigil_handoff
-from ..display.summarize import shell_result_summary
-from ..protocols import SHELL_HANDOFF_RESULT_SCHEMA
-from ..workflows.ask import ask
-from ..workflows.do import do
-from ..workflows.propose import propose
-from ._base import cli, examples
-from ._shared import compose_in_editor, piped_stdin_text, question_with_stdin
+from sigil import handoff as sigil_handoff
+from sigil.cli._base import cli, examples
+from sigil.cli._shared import compose_in_editor, piped_stdin_text, question_with_stdin
+from sigil.display.summarize import shell_result_summary
+from sigil.protocols import SHELL_HANDOFF_RESULT_SCHEMA
+from sigil.workflows.ask import ask
+from sigil.workflows.do import do
+from sigil.workflows.propose import propose
 
 EDIT_GLYPHS = {"ask": ",", "propose": ",,", "do": ",,,"}
 
@@ -176,9 +176,8 @@ def cmd_zeta_rpc(stdio: bool) -> int:
     """Serve the Zeta JSON-RPC protocol."""
     if not stdio:
         raise click.UsageError("only --stdio is supported")
+    from sigil.agent_io import run_zeta_rpc_session
     from zeta.rpc import JsonRpcServer
-
-    from ..agent_io import run_zeta_rpc_session
 
     server = JsonRpcServer(sys.stdin, sys.stdout)
     server.session_runner = lambda params: run_zeta_rpc_session(

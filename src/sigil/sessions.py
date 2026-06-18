@@ -16,24 +16,19 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from zeta.events import Event
-from zeta.history import (
-    effect_record,
-    publish_effect_record,
-    publish_turn_record,
-    turn_record,
-)
-
-from .protocols import (
+from sigil.protocols import (
     EFFECT_KIND_COMMAND,
     TURN_OUTCOME_EXECUTED,
     TURN_OUTCOME_FAILED,
     turn_contract,
 )
-from .state import (
-    event_store_path,
-    read_events,
-    state_dir,
+from sigil.state import event_store_path, read_events, state_dir
+from zeta.events.event import Event
+from zeta.history import (
+    effect_record,
+    publish_effect_record,
+    publish_turn_record,
+    turn_record,
 )
 
 RUN_WORKFLOW = "run"
@@ -260,7 +255,7 @@ def rename_current_session(name: str) -> dict[str, Any]:
 
 def clear_current_session() -> dict[str, list[str]]:
     """Clear state scoped to the current session."""
-    from . import zeta_session_for_sigil
+    from sigil import zeta_session_for_sigil
 
     removed: list[str] = []
     root = session_dir()
@@ -306,7 +301,7 @@ def recent_turns(limit: int = RECENT_TURNS_LIMIT) -> list[dict[str, Any]]:
 
 def latest_active_failure() -> dict[str, Any] | None:
     """Return the last failure only when it is still the latest shell turn."""
-    from .failure import last_failure_or_none
+    from sigil.failure import last_failure_or_none
 
     failure = last_failure_or_none()
     if failure is None:
@@ -325,7 +320,7 @@ def active_failure_context(since: float | None = None) -> str:
 
     A failure older than ``since`` returns nothing: the model already saw it.
     """
-    from .failure import failure_context_prompt
+    from sigil.failure import failure_context_prompt
 
     failure = latest_active_failure()
     if failure is None:
@@ -397,7 +392,7 @@ def record_turn(
     ``at`` carries the original timestamp for turns recorded after the fact,
     such as spooled binding records; live recording stamps the current time.
     """
-    from .failure import record_failure, truncate_snippet
+    from sigil.failure import record_failure, truncate_snippet
 
     if turn_is_skippable(command):
         return

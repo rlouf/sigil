@@ -1,6 +1,6 @@
 """Substrate store implementations."""
 
-from .base import (
+from zeta.substrate.store.base import (
     AmbiguousIdError,
     Store,
     StoreBase,
@@ -13,8 +13,8 @@ from .base import (
     resolve_object_id,
     warn_trace_failure_once,
 )
-from .memory import InMemoryStore
-from .sqlite import (
+from zeta.substrate.store.memory import InMemoryStore
+from zeta.substrate.store.sqlite import (
     DEFAULT_SQLITE_NAME,
     ZETA_SQLITE_NAME,
     SqliteStore,

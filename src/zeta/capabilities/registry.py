@@ -8,7 +8,12 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
 
-from .base import Capability, CapabilityResult, ExecutionMode, error_result
+from zeta.capabilities.base import (
+    Capability,
+    CapabilityResult,
+    ExecutionMode,
+    error_result,
+)
 
 __all__ = [
     "ExecutionMode",

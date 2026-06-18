@@ -4,7 +4,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from ..events import DraftEvent, Event, EventSink
+from zeta.events.event import DraftEvent, Event
+from zeta.events.sink import EventSink
 
 DispatchMode = Literal["one_shot", "session_scoped"]
 AgentRunner = Callable[["AgentRun"], dict[str, Any]]

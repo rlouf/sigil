@@ -23,7 +23,8 @@ from sigil.state import (
     state_dir,
 )
 from zeta import history as zeta_history
-from zeta.events import DraftEvent, publish_event_to_log
+from zeta.events.event import DraftEvent
+from zeta.events.store import publish_event_to_log
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:
@@ -556,7 +557,9 @@ def test_sigil_blame_reports_untouched_files(monkeypatch) -> None:
 
 def seed_bundle_state(monkeypatch) -> dict[str, str]:
     """Record one turn with an effect, bridged into its session trace store."""
-    from zeta import substrate as zeta_trace
+    from zeta.substrate.derivation import Derivation
+    from zeta.substrate.object import Object
+    from zeta.substrate.store import SqliteStore, zeta_sqlite_path
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "bundle-src")
     append_event(
@@ -577,18 +580,16 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
             time=101.0,
         )
     )
-    store = zeta_trace.SqliteStore(
-        zeta_trace.zeta_sqlite_path(), session_id="bundle-src"
-    )
+    store = SqliteStore(zeta_sqlite_path(), session_id="bundle-src")
     prompt_id = store.put_object(
-        zeta_trace.Object(
+        Object(
             kind="prompt",
             schema="zeta.prompt.v1",
             data={"payload": {"text": "the deploy prompt"}},
         )
     )
     turn_object_id = store.put_object(
-        zeta_trace.Object(
+        Object(
             kind="turn_record",
             schema="zeta.turn",
             data={"turn_id": "turn-bundle-1"},
@@ -596,7 +597,7 @@ def seed_bundle_state(monkeypatch) -> dict[str, str]:
         )
     )
     store.record_derivation(
-        zeta_trace.Derivation(
+        Derivation(
             producer="SigilTurnRecord:v1",
             output_id=turn_object_id,
             input_ids=(prompt_id,),

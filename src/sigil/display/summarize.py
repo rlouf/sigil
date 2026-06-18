@@ -6,15 +6,14 @@ import time
 from collections.abc import Callable
 from typing import Any, cast
 
-from zeta.capabilities import proposed_effect
-from zeta.context.budget import estimated_tokens_for_text
-from zeta.substrate import Object
-
-from ..protocols import (
+from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
     SHELL_HANDOFF_OUTCOME_NO_PENDING,
 )
+from zeta.capabilities.base import proposed_effect
+from zeta.context.budget import estimated_tokens_for_text
+from zeta.substrate.object import Object
 
 SUMMARY_FIELDS_BY_TOOL = {
     "read": ("path", "file_path"),

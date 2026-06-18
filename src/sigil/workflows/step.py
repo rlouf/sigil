@@ -9,14 +9,39 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
-from zeta.agents import AgentConfig
-from zeta.capabilities import CapabilityRegistry, ExecutionMode, proposed_effect
-from zeta.capabilities import registry as _default_tool_registry
-from zeta.context import (
-    latest_prompt_trace_fields,
-    load_project_instructions,
-    system_prompt,
+from sigil.agent_io import (
+    TurnEventRecorder,
+    TurnRenderer,
+    build_turn_renderer,
+    event_model_telemetry,
+    model_server_ready,
+    model_telemetry_fields,
+    record_turn_abort,
+    record_zeta_event,
+    render_final_text,
 )
+from sigil.display.render import render_tool_result_summary
+from sigil.display.state import PROGRESS_MODE_TRACE, thinking_status_factory
+from sigil.display.summarize import render_handoff_lines
+from sigil.protocols import (
+    SHELL_HANDOFF_RESULT_SCHEMA,
+    TURN_OUTCOME_ABORTED,
+    TURN_OUTCOME_ANSWERED,
+    TURN_OUTCOME_EXECUTED,
+    TURN_OUTCOME_FAILED,
+    TURN_OUTCOME_STAGED,
+    shell_prompt_handoff,
+)
+from sigil.state import append_prompt_submitted_event
+from sigil.tools import ensure_builtin_tools_registered
+from sigil.turn import TurnRecorder
+from zeta.agents.capabilities import AgentConfig
+from zeta.capabilities.base import ExecutionMode, proposed_effect
+from zeta.capabilities.registry import CapabilityRegistry
+from zeta.capabilities.registry import registry as _default_tool_registry
+from zeta.context.components import latest_prompt_trace_fields
+from zeta.context.instructions import load_project_instructions
+from zeta.context.system import system_prompt
 from zeta.loop import (
     AgentTurnAborted,
     registered_capabilities,
@@ -29,36 +54,6 @@ from zeta.models import (
 from zeta.session import Session
 from zeta.skills import expand_skill_directive
 from zeta.timeline import current_timeline, record_event
-
-from ..agent_io import (
-    TurnEventRecorder,
-    TurnRenderer,
-    build_turn_renderer,
-    event_model_telemetry,
-    model_server_ready,
-    model_telemetry_fields,
-    record_turn_abort,
-    record_zeta_event,
-    render_final_text,
-)
-from ..display.render import render_tool_result_summary
-from ..display.state import (
-    PROGRESS_MODE_TRACE,
-    thinking_status_factory,
-)
-from ..display.summarize import render_handoff_lines
-from ..protocols import (
-    SHELL_HANDOFF_RESULT_SCHEMA,
-    TURN_OUTCOME_ABORTED,
-    TURN_OUTCOME_ANSWERED,
-    TURN_OUTCOME_EXECUTED,
-    TURN_OUTCOME_FAILED,
-    TURN_OUTCOME_STAGED,
-    shell_prompt_handoff,
-)
-from ..state import append_prompt_submitted_event
-from ..tools import ensure_builtin_tools_registered
-from ..turn import TurnRecorder
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]
@@ -109,7 +104,7 @@ def step(
     wrapped in the step instruction scaffolding. The do workflow executes
     directly; every other workflow stages mutations for review.
     """
-    from .. import zeta_session_for_sigil
+    from sigil import zeta_session_for_sigil
 
     runtime_context = zeta_session_for_sigil()
     system = system or STEP_SYSTEM_PROMPT

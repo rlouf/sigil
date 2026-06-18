@@ -18,16 +18,16 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from ..derivation import Derivation
-from ..object import (
+from zeta.substrate.derivation import Derivation
+from zeta.substrate.object import (
     Object,
     ObjectId,
 )
-from ..ref import (
+from zeta.substrate.ref import (
     Ref,
     RefUpdate,
 )
-from .base import (
+from zeta.substrate.store.base import (
     StoreBase,
     TraceStats,
     UnknownSessionError,
@@ -266,6 +266,12 @@ class SqliteStore(StoreBase):
 
     def close(self) -> None:
         self.connection.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def _init_schema(self) -> None:
         with self._write_lock:

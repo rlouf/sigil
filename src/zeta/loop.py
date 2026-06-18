@@ -12,34 +12,26 @@ from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Literal, cast
 
-from .agents import AgentConfig
-from .capabilities import (
-    CapabilityProjection,
-    CapabilityRegistry,
-    ExecutionMode,
-    proposed_effect,
-)
-from .capabilities import registry as _runtime_tool_registry
-from .context import (
+from zeta.agents.capabilities import AgentConfig
+from zeta.capabilities.base import ExecutionMode, proposed_effect
+from zeta.capabilities.registry import CapabilityProjection, CapabilityRegistry
+from zeta.capabilities.registry import registry as _runtime_tool_registry
+from zeta.context import prompt_transform_from_env
+from zeta.context.builder import (
     PreparedPrompt,
     PromptBuilder,
-    PromptTrace,
-    prompt_trace_payload,
-    prompt_transform_from_env,
+    prepared_prompt_from,
     render_model_input,
 )
-from .context.builder import prepared_prompt_from
-from .models import (
+from zeta.context.components import PromptTrace, prompt_trace_payload
+from zeta.models import (
     CODEX_RESPONSES_API,
     ModelInput,
     ModelOutput,
     chat_completion_messages,
 )
-from .models.chat_completions import (
-    ChatCompletionStreamSink,
-    model_endpoint_open,
-)
-from .substrate import Store
+from zeta.models.chat_completions import ChatCompletionStreamSink, model_endpoint_open
+from zeta.substrate.store import Store
 
 AgentEventSink = Callable[[dict[str, Any]], None]
 ModelStatusFactory = Callable[[], AbstractContextManager[object]]

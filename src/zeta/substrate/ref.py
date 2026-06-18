@@ -15,7 +15,7 @@ multiple agents or tasks update the same logical state concurrently.
 
 from dataclasses import dataclass
 
-from .object import ObjectId
+from zeta.substrate.object import ObjectId
 
 RefName = str
 

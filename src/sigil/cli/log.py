@@ -4,8 +4,8 @@ from typing import Any
 
 import click
 
-from ._base import cli, examples
-from ._shared import pretty_print_json
+from sigil.cli._base import cli, examples
+from sigil.cli._shared import pretty_print_json
 
 DEFAULT_LOG_LIMIT = 20
 
@@ -60,10 +60,9 @@ def cmd_log(
     if ctx.invoked_subcommand is not None:
         return 0
     # Imported lazily: `sigil.cli` must stay light at import time.
+    from sigil.display.summarize import format_turn_line
+    from sigil.state import history_view
     from zeta.history import query_history
-
-    from ..display.summarize import format_turn_line
-    from ..state import history_view
 
     turns = query_history(
         history_view(),
@@ -127,7 +126,7 @@ def cmd_log_export(
     """Export turns and their trace closures as a portable bundle."""
     import json
 
-    from ..bundle import export_bundle
+    from sigil.bundle import export_bundle
 
     bundle = export_bundle(
         since=since_epoch(since) if since else None,
@@ -164,7 +163,7 @@ def cmd_log_import(bundle_file: str) -> int:
     import json
     from pathlib import Path
 
-    from ..bundle import import_bundle
+    from sigil.bundle import import_bundle
 
     try:
         payload = json.loads(Path(bundle_file).read_text(encoding="utf-8"))
@@ -195,8 +194,8 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
     Effects carry content hashes, and the listed prompt ids feed
     `sigil trace show`. TURN_ID may be a full id or a unique prefix.
     """
-    from ..display.summarize import render_turn_record
-    from ..state import history_view
+    from sigil.display.summarize import render_turn_record
+    from sigil.state import history_view
 
     history = history_view()
     resolved = resolve_cli_turn_id(history, turn_id)
@@ -228,9 +227,8 @@ def cmd_blame(file: str) -> int:
     hashes. Bash commands record what ran, not which files it touched —
     find those with `sigil log` and the command text.
     """
+    from sigil.state import history_view
     from zeta.history import touched_path_variants
-
-    from ..state import history_view
 
     history = history_view()
     effects: list[dict[str, Any]] = []
@@ -272,7 +270,7 @@ def render_blame_block(
     turn: dict[str, Any] | None,
 ) -> list[str]:
     """Render one touching effect joined to its turn."""
-    from ..display.summarize import (
+    from sigil.display.summarize import (
         first_line,
         format_turn_time,
         short_trace_id,

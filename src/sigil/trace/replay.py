@@ -5,25 +5,26 @@ from typing import Any
 
 import click
 
+from sigil.display.summarize import (
+    assistant_trace_message,
+    assistant_trace_summary,
+    short_trace_id,
+)
 from zeta.models import (
     ModelOutput,
     ModelSelection,
     resolve_active_model,
     resolve_model_profile,
 )
-from zeta.substrate import Derivation, Object, ObjectId, Store, warn_trace_failure_once
-
-from ..display.summarize import (
-    assistant_trace_message,
-    assistant_trace_summary,
-    short_trace_id,
-)
+from zeta.substrate.derivation import Derivation
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.store import Store, warn_trace_failure_once
 
 
 def replay_model_selection(model_profile: str | None) -> ModelSelection:
     """Return the model a replay should use, honoring --model."""
     if model_profile is None:
-        from ..sessions import session_dir
+        from sigil.sessions import session_dir
 
         return resolve_active_model(session_dir=session_dir()).selection
     selection = resolve_model_profile(model_profile)

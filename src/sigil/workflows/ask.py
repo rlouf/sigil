@@ -6,11 +6,12 @@ the other glyphs remember. A new shell session starts a fresh thread.
 
 """
 
+from __future__ import annotations
+
+from sigil.sessions import active_failure_context, recent_turns_context
+from sigil.workflows.step import step
 from zeta.skills import expand_skill_directive
 from zeta.timeline import last_event_time
-
-from ..sessions import active_failure_context, recent_turns_context
-from .step import step
 
 ASK_SYSTEM_PROMPT = (
     "Answer concisely. You are responding to a quick question typed at a shell "
@@ -54,7 +55,7 @@ def ask(
     tools: tuple[str, ...] = ASK_TOOLS,
 ) -> int:
     """Run Zeta for a shell ask continuing the session timeline."""
-    from .. import zeta_session_for_sigil
+    from sigil import zeta_session_for_sigil
 
     runtime_context = zeta_session_for_sigil()
     return step(

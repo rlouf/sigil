@@ -20,8 +20,8 @@ from click.testing import CliRunner
 
 from sigil.cli import cli as sigil_cli
 from sigil.sessions import session_dir
-from zeta import context as zeta_context
 from zeta import models as zeta_models_api
+from zeta.context.compaction import TASK_STATE_SCHEMA
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 
@@ -1352,7 +1352,7 @@ def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
 
     extracted = zeta_model.chat_structured_output(
         [{"role": "user", "content": "history"}],
-        schema=zeta_context.TASK_STATE_SCHEMA,
+        schema=TASK_STATE_SCHEMA,
         response_name="zeta_task_state",
         selected_model="state-model",
         selected_url="http://127.0.0.1:8081/v1/chat/completions",
@@ -1364,10 +1364,7 @@ def test_zeta_chat_structured_output_sends_json_schema(monkeypatch) -> None:
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["name"] == "zeta_task_state"
     assert body["response_format"]["json_schema"]["strict"] is True
-    assert (
-        body["response_format"]["json_schema"]["schema"]
-        == zeta_context.TASK_STATE_SCHEMA
-    )
+    assert body["response_format"]["json_schema"]["schema"] == TASK_STATE_SCHEMA
     assert captured["selected_url"] == "http://127.0.0.1:8081/v1/chat/completions"
 
 
@@ -1388,7 +1385,7 @@ def test_zeta_chat_structured_output_rejects_invalid_json_schema(
     with pytest.raises(RuntimeError, match="validation"):
         zeta_model.chat_structured_output(
             [{"role": "user", "content": "history"}],
-            schema=zeta_context.TASK_STATE_SCHEMA,
+            schema=TASK_STATE_SCHEMA,
             response_name="zeta_task_state",
         )
 

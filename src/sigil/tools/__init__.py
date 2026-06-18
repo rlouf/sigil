@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from zeta.capabilities import (
+from sigil.tools import bash, edit, grep, ls, query_log, read, web, write
+from zeta.capabilities.base import (
     Capability,
     CapabilityFunction,
     CapabilityPolicy,
@@ -12,16 +13,14 @@ from zeta.capabilities import (
     InProcessCapabilityExecutor,
 )
 
-from . import bash, edit, grep, ls, query_log, read, web, write
-
 if TYPE_CHECKING:
-    from zeta.capabilities import CapabilityRegistry
+    from zeta.capabilities.registry import CapabilityRegistry
 
 __all__ = ["ensure_builtin_tools_registered", "register_builtin_tools"]
 
 
 def ensure_builtin_tools_registered() -> None:
-    from zeta.capabilities import registry
+    from zeta.capabilities.registry import registry
 
     register_builtin_tools(registry)
 

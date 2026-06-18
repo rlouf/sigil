@@ -2,8 +2,8 @@
 
 from typing import Any
 
-from ..budget import measure
-from ..components import PromptComponent
+from zeta.context.budget import measure
+from zeta.context.components import PromptComponent
 
 
 class DropOldestPromptTransform:

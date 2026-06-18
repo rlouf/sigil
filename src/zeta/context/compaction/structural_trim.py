@@ -4,9 +4,9 @@ import json
 from dataclasses import replace
 from typing import Any
 
-from ...capabilities import content_hash
-from ..budget import render_stub
-from ..components import PromptComponent
+from zeta.capabilities.base import content_hash
+from zeta.context.budget import render_stub
+from zeta.context.components import PromptComponent
 
 STRUCTURAL_TRIM_TOOL_NAMES = frozenset({"read", "grep"})
 DEFAULT_MAX_CONTENT_CHARS = 120_000

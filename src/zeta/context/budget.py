@@ -4,7 +4,7 @@ import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from .components import PromptComponent
+from zeta.context.components import PromptComponent
 
 
 @dataclass(frozen=True)

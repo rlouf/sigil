@@ -2,9 +2,9 @@
 
 import difflib
 
-from zeta.substrate import Object, ObjectId, Store
-
-from ..display.summarize import short_trace_id, trace_object_summary
+from sigil.display.summarize import short_trace_id, trace_object_summary
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.store import Store
 
 
 def render_prompt_diff(

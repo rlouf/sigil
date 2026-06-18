@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 
 import click
 
+from sigil.cli._base import cli, examples
+from sigil.sessions import session_dir
 from zeta.models import (
     clear_active_model_profile,
     default_model_selection,
@@ -13,9 +15,6 @@ from zeta.models import (
     resolve_model_profile,
     set_active_model_profile,
 )
-
-from ..sessions import session_dir
-from ._base import cli, examples
 
 
 @cli.group(

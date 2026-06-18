@@ -2,6 +2,7 @@
 
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from _zeta_helpers import (
@@ -20,7 +21,10 @@ from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
 )
-from zeta import substrate as zeta_trace
+from zeta.substrate.object import Object
+from zeta.substrate.store import InMemoryStore
+
+zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore, Object=Object)
 
 
 def test_sigil_display_summarizes_tool_results() -> None:

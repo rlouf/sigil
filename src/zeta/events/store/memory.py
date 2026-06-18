@@ -4,8 +4,10 @@ The memory store mirrors SQLite append semantics for tests and ephemeral
 runtimes, including idempotency and sequence ordering, without creating files.
 """
 
-from ..event import DraftEvent, Event
-from .base import AppendOutcome, Filter
+from __future__ import annotations
+
+from zeta.events.event import DraftEvent, Event
+from zeta.events.store.base import AppendOutcome, Filter
 
 
 class MemoryEventStore:

@@ -5,8 +5,16 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
-from zeta.capabilities import proposed_effect
-from zeta.context import PromptTrace
+from sigil.protocols import (
+    EFFECT_KIND_COMMAND,
+    EFFECT_KIND_FILE_EDIT,
+    EFFECT_KIND_FILE_WRITE,
+    turn_contract,
+)
+from sigil.sessions import session_id
+from sigil.state import event_store_path
+from zeta.capabilities.base import proposed_effect
+from zeta.context.components import PromptTrace
 from zeta.history import (
     TURN_RECORD_SCHEMA,
     effect_record,
@@ -16,21 +24,9 @@ from zeta.history import (
     turn_record,
 )
 from zeta.session import Session
-from zeta.substrate import (
-    Derivation,
-    Object,
-    ObjectId,
-    warn_trace_failure_once,
-)
-
-from .protocols import (
-    EFFECT_KIND_COMMAND,
-    EFFECT_KIND_FILE_EDIT,
-    EFFECT_KIND_FILE_WRITE,
-    turn_contract,
-)
-from .sessions import session_id
-from .state import event_store_path
+from zeta.substrate.derivation import Derivation
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.store import warn_trace_failure_once
 
 
 class TurnRecorder:

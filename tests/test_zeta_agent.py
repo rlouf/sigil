@@ -7,6 +7,7 @@ import tomllib
 from collections.abc import Callable, Iterable
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -27,28 +28,40 @@ from sigil.agent_io import run_zeta_rpc_session
 from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import cli as zeta_cli
-from zeta import context as zeta_context
 from zeta import dispatch as zeta_dispatch
-from zeta import events as zeta_events
 from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
 from zeta import session as zeta_session
-from zeta import substrate as zeta_trace
 from zeta import timeline as zeta_timeline
-from zeta.capabilities import (
+from zeta.capabilities.base import (
     Capability,
     CapabilityId,
     CapabilityPolicy,
-    CapabilityRegistry,
     CapabilitySpec,
     EffectKind,
     InProcessCapabilityExecutor,
     TrustLevel,
 )
+from zeta.capabilities.registry import CapabilityRegistry
+from zeta.context import builder as zeta_context
+from zeta.events.event import DraftEvent, Event
+from zeta.events.store import Filter, SqliteEventStore
 from zeta.models import chat_completions as zeta_model
+from zeta.substrate.store import InMemoryStore
+from zeta.timeline import durable_event_draft
+
+zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
 ensure_builtin_tools_registered()
+
+zeta_events = SimpleNamespace(
+    DraftEvent=DraftEvent,
+    Event=Event,
+    Filter=Filter,
+    SqliteEventStore=SqliteEventStore,
+    durable_event_draft=durable_event_draft,
+)
 
 
 def _test_capability(
@@ -2832,7 +2845,7 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
     prompt = store.get_object(trace.prompt_object_id)
     assert prompt is not None
     kwargs = cast(dict[str, Any], captured["kwargs"])
-    assert prompt.data["payload_sha256"] == zeta_context.builder.payload_sha256(
+    assert prompt.data["payload_sha256"] == zeta_context.payload_sha256(
         zeta_model.chat_completion_request_body(
             cast(list[dict[str, Any]], captured["messages"]),
             tools=cast(list[dict[str, Any]], kwargs["tools"]),

@@ -3,11 +3,7 @@
 import uuid
 from typing import Any, cast
 
-from zeta.capabilities import proposed_effect
-from zeta.history import effect_record, publish_effect_record
-from zeta.timeline import current_timeline, record_event
-
-from .protocols import (
+from sigil.protocols import (
     EFFECT_KIND_HANDOFF,
     SHELL_HANDOFF_CANCEL_EXPECTED_NOT_EXECUTED,
     SHELL_HANDOFF_CANCEL_NO_TURNS,
@@ -19,13 +15,16 @@ from .protocols import (
     is_shell_handoff_result,
     is_shell_prompt_handoff,
 )
-from .sessions import event_time, recent_turns, session_id
-from .state import event_store_path
+from sigil.sessions import event_time, recent_turns, session_id
+from sigil.state import event_store_path
+from zeta.capabilities.base import proposed_effect
+from zeta.history import effect_record, publish_effect_record
+from zeta.timeline import current_timeline, record_event
 
 
 def append_shell_result() -> dict[str, Any]:
     """Append a synthetic tool result for commands run after a shell handoff."""
-    from . import zeta_session_for_sigil
+    from sigil import zeta_session_for_sigil
 
     runtime_context = zeta_session_for_sigil()
     return record_event(

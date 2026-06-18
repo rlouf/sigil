@@ -5,19 +5,10 @@ from typing import Any
 
 import click
 
-from zeta.context import reconstructed_prompt_request
-from zeta.models import chat_completion_messages
-from zeta.substrate import (
-    SqliteStore,
-    Store,
-    UnknownSessionError,
-    available_session_ids,
-    open_existing_trace_store,
-    zeta_sqlite_path,
-)
-
-from ..trace.diff import render_prompt_diff
-from ..trace.query import (
+from sigil.cli._base import cli, examples
+from sigil.cli._shared import pretty_print_json
+from sigil.trace.diff import render_prompt_diff
+from sigil.trace.query import (
     get_trace_object,
     list_trace_closure,
     list_trace_prompts,
@@ -25,24 +16,29 @@ from ..trace.query import (
     resolve_cli_object_id,
     resolve_cli_prompt,
 )
-from ..trace.render import (
+from sigil.trace.render import (
     object_listing_lines,
     render_trace_object,
     render_trace_tree,
 )
-from ..trace.replay import (
+from sigil.trace.replay import (
     answer_display_text,
     latest_model_answer,
     record_replay,
     render_replay,
     replay_model_selection,
 )
-from ..trace.tools import (
-    tool_call_rows,
-    tool_failure_detail,
+from sigil.trace.tools import tool_call_rows, tool_failure_detail
+from zeta.context.builder import reconstructed_prompt_request
+from zeta.models import chat_completion_messages
+from zeta.substrate.store import (
+    SqliteStore,
+    Store,
+    UnknownSessionError,
+    available_session_ids,
+    open_existing_trace_store,
+    zeta_sqlite_path,
 )
-from ._base import cli, examples
-from ._shared import pretty_print_json
 
 NARRATIVE_KINDS = ("prompt", "assistant_message")
 
@@ -96,7 +92,7 @@ def scoped_store(ctx: click.Context) -> Store:
 
 
 def current_store() -> Store:
-    from .. import zeta_session_for_sigil
+    from sigil import zeta_session_for_sigil
 
     return zeta_session_for_sigil().trace_store
 
@@ -529,7 +525,7 @@ def trace_replay(
         raise click.ClickException(f"not a prompt: {object_id}")
     selection = replay_model_selection(model_profile)
     original = latest_model_answer(store, prompt_id)
-    from ..sessions import session_id as current_session_id
+    from sigil.sessions import session_id as current_session_id
 
     message = chat_completion_messages(
         reconstructed.messages,

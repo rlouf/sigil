@@ -7,6 +7,8 @@ Each command lives in a sibling module and registers on the shared `cli` group
 via decorators; the group imports each module on first use.
 """
 
-from ._base import cli, main
+from __future__ import annotations
+
+from sigil.cli._base import cli, main
 
 __all__ = ["cli", "main"]

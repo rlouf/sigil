@@ -17,8 +17,8 @@ from typing import Any
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from . import ModelInput, ModelOutput
-from .chat_completions import (
+from zeta.models import ModelInput, ModelOutput
+from zeta.models.chat_completions import (
     DEFAULT_MAX_COMPLETION_TOKENS,
     ChatCompletionStreamSink,
     ModelTelemetrySink,
@@ -30,8 +30,8 @@ from .chat_completions import (
     parse_structured_message_content,
     stream_with_idle_timeout,
 )
-from .codex_auth import CodexCredentials, load_codex_credentials
-from .profiles import DEFAULT_CODEX_BASE_URL
+from zeta.models.codex_auth import CodexCredentials, load_codex_credentials
+from zeta.models.profiles import DEFAULT_CODEX_BASE_URL
 
 CODEX_ORIGINATOR = "zeta"
 CODEX_CONTEXT_TOKENS = {"gpt-5.3-codex-spark": 128_000}

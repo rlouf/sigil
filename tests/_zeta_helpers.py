@@ -10,12 +10,27 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
-from zeta import context as zeta_context
 from zeta import loop as zeta_agent
-from zeta import substrate as zeta_trace
+from zeta.context.builder import (
+    PreparedPrompt,
+    ReconstructedPrompt,
+    reconstructed_prompt_request,
+)
+from zeta.context.components import PromptComponent, prompt_components
 from zeta.models import chat_completions as zeta_model
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.store import InMemoryStore, Store
+
+zeta_context = SimpleNamespace(
+    PreparedPrompt=PreparedPrompt,
+    PromptComponent=PromptComponent,
+    ReconstructedPrompt=ReconstructedPrompt,
+    prompt_components=prompt_components,
+    reconstructed_prompt_request=reconstructed_prompt_request,
+)
 
 
 class TtyBuffer(StringIO):
@@ -135,10 +150,10 @@ def tool_result_transcript(
 
 
 def linked_ids_by_kind(
-    store: zeta_trace.Store,
-    prompt: zeta_trace.Object,
+    store: Store,
+    prompt: Object,
     kind: str,
-) -> list[zeta_trace.ObjectId]:
+) -> list[ObjectId]:
     matches = []
     for object_id in prompt.links:
         linked = store.get_object(object_id)
@@ -147,7 +162,7 @@ def linked_ids_by_kind(
     return matches
 
 
-def linked_kinds(store: zeta_trace.Store, prompt: zeta_trace.Object) -> list[str]:
+def linked_kinds(store: Store, prompt: Object) -> list[str]:
     kinds = []
     for object_id in prompt.links:
         linked = store.get_object(object_id)
@@ -203,7 +218,7 @@ def assert_structural_trim_payload(
 
 
 def assert_structural_trim_graph(
-    store: zeta_trace.InMemoryStore,
+    store: InMemoryStore,
     prepared: zeta_context.PreparedPrompt,
     payload: dict[str, Any],
     *,
@@ -229,11 +244,11 @@ def assert_structural_trim_graph(
 
 
 def assert_task_state_graph(
-    store: zeta_trace.InMemoryStore,
+    store: InMemoryStore,
     prepared: zeta_context.PreparedPrompt,
     *,
     source_count: int,
-) -> zeta_trace.Object:
+) -> Object:
     assert prepared.prompt_object_id is not None
     prompt = store.get_object(prepared.prompt_object_id)
     assert prompt is not None
@@ -251,7 +266,7 @@ def assert_task_state_graph(
 
 
 def assert_tool_result_derivation_graph(
-    store: zeta_trace.InMemoryStore,
+    store: InMemoryStore,
     result: zeta_agent.AgentTurnResult,
     call_event: dict[str, Any],
     result_event: dict[str, Any],
@@ -269,7 +284,7 @@ def assert_tool_result_derivation_graph(
 
 
 def assert_prompt_trace_replay_graph(
-    store: zeta_trace.InMemoryStore,
+    store: InMemoryStore,
     trace: zeta_context.PromptTrace,
 ) -> zeta_context.ReconstructedPrompt:
     reconstructed = zeta_context.reconstructed_prompt_request(
@@ -291,9 +306,9 @@ def assert_prompt_trace_replay_graph(
 
 
 def assert_tool_call_derivation(
-    store: zeta_trace.InMemoryStore,
+    store: InMemoryStore,
     result: zeta_agent.AgentTurnResult,
-    call_object_id: zeta_trace.ObjectId,
+    call_object_id: ObjectId,
 ) -> None:
     call_object = store.get_object(call_object_id)
     assert call_object is not None
@@ -305,9 +320,9 @@ def assert_tool_call_derivation(
 
 
 def assert_tool_result_derivation(
-    store: zeta_trace.InMemoryStore,
-    call_object_id: zeta_trace.ObjectId,
-    result_object_id: zeta_trace.ObjectId,
+    store: InMemoryStore,
+    call_object_id: ObjectId,
+    result_object_id: ObjectId,
 ) -> None:
     result_object = store.get_object(result_object_id)
     assert result_object is not None
@@ -319,10 +334,10 @@ def assert_tool_result_derivation(
 
 
 def assert_prompt_closure_contains_tool_result(
-    store: zeta_trace.InMemoryStore,
+    store: InMemoryStore,
     result: zeta_agent.AgentTurnResult,
-    call_object_id: zeta_trace.ObjectId,
-    result_object_id: zeta_trace.ObjectId,
+    call_object_id: ObjectId,
+    result_object_id: ObjectId,
 ) -> None:
     second_prompt_id = result.prompt_traces[1].prompt_object_id
     second_closure = store.graph_closure([second_prompt_id])
@@ -395,7 +410,7 @@ def big_transcript_components(count: int = 6) -> list[zeta_context.PromptCompone
     return zeta_context.prompt_components("continue", timeline, allowed_capabilities=())
 
 
-class BatchSpyStore(zeta_trace.InMemoryStore):
+class BatchSpyStore(InMemoryStore):
     def __init__(self) -> None:
         super().__init__()
         self.batches = 0

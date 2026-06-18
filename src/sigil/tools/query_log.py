@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from zeta.capabilities import CapabilityId, CapabilitySpec, error_result
+from zeta.capabilities.base import CapabilityId, CapabilitySpec, error_result
 
 if TYPE_CHECKING:
     from zeta.history import HistoryView
@@ -78,11 +78,10 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily: the registry imports every tool module, and the
     # display layer reaches back into zeta.context — a module-level import
     # here closes that loop into a cycle.
+    from sigil.display.summarize import format_turn_line
+    from sigil.sessions import session_id
+    from sigil.state import history_view
     from zeta.history import query_history
-
-    from ..display.summarize import format_turn_line
-    from ..sessions import session_id
-    from ..state import history_view
 
     history = history_view()
     turn_token = str(params.get("turn_id") or "")
@@ -125,9 +124,8 @@ def run(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def run_expand(history: HistoryView, token: str) -> dict[str, Any]:
+    from sigil.display.summarize import render_turn_record
     from zeta.history import AmbiguousTurnError, UnknownTurnError, resolve_turn_id
-
-    from ..display.summarize import render_turn_record
 
     try:
         resolved = resolve_turn_id(history, token)

@@ -6,14 +6,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, cast
 
-from ..dispatch import AgentDefinition, AgentRun, TriggerRule
-from .capabilities import AgentConfig
-from .events import EventEnvelope
-from .prompts import render_prompt
-from .spec import AgentSpec
+from zeta.agents.capabilities import AgentConfig
+from zeta.agents.events import EventEnvelope
+from zeta.agents.prompts import render_prompt
+from zeta.agents.spec import AgentSpec
+from zeta.dispatch import AgentDefinition, AgentRun, TriggerRule
 
 if TYPE_CHECKING:
-    from ..loop import AgentTurnResult
+    from zeta.loop import AgentTurnResult
 
 AgentTurnRunner = Callable[..., "AgentTurnResult"]
 TimelineFactory = Callable[[AgentRun], list[dict[str, Any]]]
@@ -126,6 +126,6 @@ def agent_turn_result_mapping(result: AgentTurnResult) -> dict[str, Any]:
 
 
 def default_agent_turn_runner() -> AgentTurnRunner:
-    from ..loop import run_agent_turn
+    from zeta.loop import run_agent_turn
 
     return run_agent_turn

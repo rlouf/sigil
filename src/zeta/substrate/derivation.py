@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from .object import ObjectId
+from zeta.substrate.object import ObjectId
 
 
 @dataclass(frozen=True)

@@ -3,9 +3,9 @@
 from collections.abc import Mapping
 from typing import Any, cast
 
-from zeta.substrate import Object, ObjectId, SqliteStore, Store
-
-from ..display.summarize import truncate
+from sigil.display.summarize import truncate
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.store import SqliteStore, Store
 
 
 def tool_failure_detail(row: dict[str, Any]) -> str:

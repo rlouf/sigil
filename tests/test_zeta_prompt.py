@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -19,27 +20,82 @@ from _zeta_helpers import (
 )
 
 from sigil.tools import ensure_builtin_tools_registered
-from zeta import context as zeta_context
 from zeta import models as zeta_models_api
 from zeta import skills as zeta_skills
-from zeta import substrate as zeta_trace
-from zeta.capabilities import (
+from zeta.capabilities.base import (
     Capability,
     CapabilityId,
     CapabilityPolicy,
-    CapabilityRegistry,
     CapabilitySpec,
     InProcessCapabilityExecutor,
+)
+from zeta.capabilities.registry import CapabilityRegistry
+from zeta.context import builder as context_builder
+from zeta.context import prompt_transform_from_env
+from zeta.context import transforms as context_transforms
+from zeta.context.budget import estimated_tokens, measure, render_stub
+from zeta.context.builder import (
+    PreparedPrompt,
+    PromptBuilder,
+    payload_sha256,
+    reconstructed_prompt_request,
+    render_model_input,
+)
+from zeta.context.compaction import (
+    DropOldestPromptTransform,
+    StructuralTrimPromptTransform,
+    TaskStateExtractionPromptTransform,
+    task_state_extraction_messages,
+)
+from zeta.context.components import (
+    PromptComponent,
+    component_messages,
+    prompt_components,
+    zeta_context_message,
 )
 from zeta.context.instructions import (
     MAX_INSTRUCTION_FILE_CHARS,
     MAX_INSTRUCTION_TOTAL_CHARS,
     load_project_instructions,
 )
-from zeta.context.system import model_capability_descriptors
+from zeta.context.system import model_capability_descriptors, system_prompt
 from zeta.models import chat_completions as zeta_model
+from zeta.substrate.derivation import Derivation
+from zeta.substrate.object import Object
+from zeta.substrate.store import InMemoryStore
 
 ensure_builtin_tools_registered()
+
+zeta_trace = SimpleNamespace(
+    Derivation=Derivation,
+    InMemoryStore=InMemoryStore,
+    Object=Object,
+)
+
+zeta_context = SimpleNamespace(
+    BudgetThresholdPromptTransform=context_transforms.BudgetThresholdPromptTransform,
+    DropOldestPromptTransform=DropOldestPromptTransform,
+    NoOpPromptTransform=context_transforms.NoOpPromptTransform,
+    PreparedPrompt=PreparedPrompt,
+    PromptBuilder=PromptBuilder,
+    PromptComponent=PromptComponent,
+    StructuralTrimPromptTransform=StructuralTrimPromptTransform,
+    TaskStateExtractionPromptTransform=TaskStateExtractionPromptTransform,
+    builder=context_builder,
+    component_messages=component_messages,
+    estimated_tokens=estimated_tokens,
+    measure=measure,
+    payload_sha256=payload_sha256,
+    prompt_components=prompt_components,
+    prompt_transform_from_env=prompt_transform_from_env,
+    reconstructed_prompt_request=reconstructed_prompt_request,
+    render_model_input=render_model_input,
+    render_stub=render_stub,
+    system_prompt=system_prompt,
+    task_state_extraction_messages=task_state_extraction_messages,
+    transforms=context_transforms,
+    zeta_context_message=zeta_context_message,
+)
 
 
 def prepare_prompt(

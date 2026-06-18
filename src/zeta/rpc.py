@@ -12,37 +12,33 @@ from typing import Any, Literal, TextIO, cast
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from .agents import AgentConfig
-from .capabilities import (
+from zeta.agents.capabilities import AgentConfig
+from zeta.capabilities.base import (
     EFFECT_KINDS,
     READ_ONLY_EFFECT_KINDS,
     Capability,
     CapabilityId,
     CapabilityPolicy,
-    CapabilityRegistry,
     CapabilityResult,
     CapabilitySpec,
     EffectKind,
     ExecutionMode,
     error_result,
 )
-from .capabilities import registry as _runtime_tool_registry
-from .dispatch import AgentDefinition, AgentRun, EventDispatcher, TriggerRule
-from .events import (
-    DraftEvent,
-    Event,
-    EventReader,
-    EventSink,
-    Filter,
-)
-from .loop import (
+from zeta.capabilities.registry import CapabilityRegistry
+from zeta.capabilities.registry import registry as _runtime_tool_registry
+from zeta.dispatch import AgentDefinition, AgentRun, EventDispatcher, TriggerRule
+from zeta.events.event import DraftEvent, Event
+from zeta.events.sink import EventSink
+from zeta.events.store import EventReader, Filter
+from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
     registered_capabilities,
     run_agent_turn,
 )
-from .session import Session, default_session
-from .timeline import (
+from zeta.session import Session, default_session
+from zeta.timeline import (
     current_timeline,
     event_payload_draft,
     record_event,

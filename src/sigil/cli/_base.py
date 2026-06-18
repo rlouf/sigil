@@ -10,7 +10,7 @@ from contextlib import suppress
 
 import click
 
-from .._version import __version__
+from sigil._version import __version__
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -103,7 +103,7 @@ def cli(ctx: click.Context) -> None:
     # The binding spools shell turns with zero forks; the CLI is the reader.
     # Recording must never break a command, mirroring the binding's fail-open
     # writes.
-    from ..sessions import ingest_spooled_turns
+    from sigil.sessions import ingest_spooled_turns
 
     with suppress(OSError):
         ingest_spooled_turns()

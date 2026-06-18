@@ -1,8 +1,8 @@
 """Prompt transforms that compact context while preserving trace links."""
 
-from .drop_oldest import DropOldestPromptTransform
-from .structural_trim import StructuralTrimPromptTransform
-from .task_state import (
+from zeta.context.compaction.drop_oldest import DropOldestPromptTransform
+from zeta.context.compaction.structural_trim import StructuralTrimPromptTransform
+from zeta.context.compaction.task_state import (
     TASK_STATE_SCHEMA,
     ModelTaskStateExtractor,
     TaskStateExtractionPromptTransform,

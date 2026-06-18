@@ -3,10 +3,10 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from ..derivation import Derivation
-from ..object import Object, ObjectId
-from ..ref import Ref, RefUpdate
-from .base import StoreBase, TraceStats, canonical_json
+from zeta.substrate.derivation import Derivation
+from zeta.substrate.object import Object, ObjectId
+from zeta.substrate.ref import Ref, RefUpdate
+from zeta.substrate.store.base import StoreBase, TraceStats, canonical_json
 
 
 class InMemoryStore(StoreBase):

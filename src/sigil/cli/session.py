@@ -2,15 +2,15 @@
 
 import click
 
-from ..sessions import (
+from sigil.cli._base import cli, examples
+from sigil.cli._shared import pretty_print_json
+from sigil.sessions import (
     clear_current_session,
     current_session_snapshot,
     known_sessions,
     rename_current_session,
     session_paths,
 )
-from ._base import cli, examples
-from ._shared import pretty_print_json
 
 JSON_HELP = "Emit session state as JSON."
 
@@ -194,9 +194,8 @@ def print_session_clear(json_output: bool) -> int:
 def print_session_transcript(limit: int | None, json_output: bool) -> int:
     """Render the current session timeline as a conversation."""
     # Imported lazily: `sigil.cli` must not load zeta or rich at import time.
+    from sigil import zeta_session_for_sigil
     from zeta.timeline import current_timeline
-
-    from .. import zeta_session_for_sigil
 
     events = current_timeline(runtime_context=zeta_session_for_sigil())
     if limit is not None and limit > 0:
@@ -209,7 +208,7 @@ def print_session_transcript(limit: int | None, json_output: bool) -> int:
         return 0
     from rich.console import Console
 
-    from ..display.render import render_transcript
+    from sigil.display.render import render_transcript
 
     console = Console()
     if console.is_terminal:
