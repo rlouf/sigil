@@ -10,14 +10,19 @@ import time
 from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from .derivation import Derivation
 from .object import (
     Object,
     ObjectId,
 )
-from .refs import REF_EXPECTED_UNSET, RefConflictError, UnknownSessionError
+from .refs import (
+    REF_EXPECTED_UNSET,
+    Ref,
+    RefUpdate,
+    UnknownSessionError,
+)
 from .store import StoreBase, TraceStats, canonical_json, escape_like
 
 DEFAULT_SQLITE_NAME = "zeta-trace.sqlite3"
@@ -117,7 +122,7 @@ def export_trace_refs(
         for name in refs:
             target = store.get_ref(name)
             if target is not None:
-                resolved_refs[name] = target
+                resolved_refs[name] = target.object_id
         if not resolved_refs:
             return None
         closure = store.graph_closure(list(resolved_refs.values()))
@@ -485,9 +490,17 @@ class SqliteStore(StoreBase):
         object_id: ObjectId,
         *,
         expected: ObjectId | None | object = REF_EXPECTED_UNSET,
-    ) -> None:
+    ) -> RefUpdate:
         self._ensure_writable()
         with self._write_lock:
+            old_object_id = self._ref_object_id(name)
+            if expected is not REF_EXPECTED_UNSET and old_object_id != expected:
+                return RefUpdate(
+                    name=name,
+                    old_object_id=old_object_id,
+                    new_object_id=object_id,
+                    updated=False,
+                )
             if expected is REF_EXPECTED_UNSET:
                 self.connection.execute(
                     """
@@ -498,21 +511,15 @@ class SqliteStore(StoreBase):
                     (self.scope, name, object_id),
                 )
             elif expected is None:
-                cursor = self.connection.execute(
+                self.connection.execute(
                     """
                     INSERT INTO refs (scope, name, object_id) VALUES (?, ?, ?)
                     ON CONFLICT(scope, name) DO NOTHING
                     """,
                     (self.scope, name, object_id),
                 )
-                if cursor.rowcount != 1:
-                    raise RefConflictError(
-                        name,
-                        expected=None,
-                        actual=self.get_ref(name),
-                    )
             else:
-                cursor = self.connection.execute(
+                self.connection.execute(
                     """
                     UPDATE refs
                     SET object_id = ?
@@ -520,15 +527,15 @@ class SqliteStore(StoreBase):
                     """,
                     (object_id, self.scope, name, expected),
                 )
-                if cursor.rowcount != 1:
-                    raise RefConflictError(
-                        name,
-                        expected=cast(ObjectId, expected),
-                        actual=self.get_ref(name),
-                    )
             self._commit()
+            return RefUpdate(
+                name=name,
+                old_object_id=old_object_id,
+                new_object_id=object_id,
+                updated=True,
+            )
 
-    def get_ref(self, name: str) -> ObjectId | None:
+    def _ref_object_id(self, name: str) -> ObjectId | None:
         row = self.connection.execute(
             "SELECT object_id FROM refs WHERE scope = ? AND name = ?",
             (self.scope, name),
@@ -536,6 +543,12 @@ class SqliteStore(StoreBase):
         if row is None:
             return None
         return str(row["object_id"])
+
+    def get_ref(self, name: str) -> Ref | None:
+        object_id_value = self._ref_object_id(name)
+        if object_id_value is None:
+            return None
+        return Ref(name=name, object_id=object_id_value)
 
     def record_derivation(self, derivation: Derivation) -> str:
         self._ensure_writable()
@@ -692,12 +705,14 @@ class SqliteStore(StoreBase):
         ).fetchall()
         return [_derivation_from_row(row) for row in rows]
 
-    def refs(self) -> dict[str, ObjectId]:
+    def refs(self) -> list[Ref]:
         rows = self.connection.execute(
             "SELECT name, object_id FROM refs WHERE scope = ? ORDER BY name",
             (self.scope,),
         ).fetchall()
-        return {str(row["name"]): str(row["object_id"]) for row in rows}
+        return [
+            Ref(name=str(row["name"]), object_id=str(row["object_id"])) for row in rows
+        ]
 
     def objects(
         self, kind: str | tuple[str, ...] | None = None, limit: int | None = None

@@ -17,7 +17,9 @@ from .object import (
 from .refs import (
     REF_EXPECTED_UNSET,
     AmbiguousIdError,
-    RefConflictError,
+    Ref,
+    RefName,
+    RefUpdate,
     UnknownIdError,
     UnknownSessionError,
 )
@@ -56,7 +58,9 @@ __all__ = [
     "Object",
     "ObjectId",
     "REF_EXPECTED_UNSET",
-    "RefConflictError",
+    "Ref",
+    "RefName",
+    "RefUpdate",
     "SqliteStore",
     "Store",
     "StoreBase",

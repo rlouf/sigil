@@ -68,7 +68,7 @@ def assert_no_trace_timeline_chain(
     *,
     session_id: str = "zeta-test",
 ) -> None:
-    refs = store.refs()
+    refs = {ref.name: ref.object_id for ref in store.refs()}
     assert store.objects(kind="run_event") == []
     assert f"run/{session_id}/head" not in refs
     assert f"run/{session_id}/event_head" not in refs
@@ -86,14 +86,40 @@ def test_zeta_trace_set_ref_compares_expected_value(
     store: zeta_trace.Store | None,
 ) -> None:
     trace_store = store or zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
-    trace_store.set_ref("run/test/head", "sha256:first")
+    created = trace_store.set_ref("run/test/head", "sha256:first")
 
-    trace_store.set_ref("run/test/head", "sha256:second", expected="sha256:first")
+    assert created == zeta_trace.RefUpdate(
+        name="run/test/head",
+        old_object_id=None,
+        new_object_id="sha256:first",
+        updated=True,
+    )
+    updated = trace_store.set_ref(
+        "run/test/head", "sha256:second", expected="sha256:first"
+    )
 
-    assert trace_store.get_ref("run/test/head") == "sha256:second"
-    with pytest.raises(zeta_trace.RefConflictError):
-        trace_store.set_ref("run/test/head", "sha256:third", expected="sha256:first")
-    assert trace_store.get_ref("run/test/head") == "sha256:second"
+    assert updated == zeta_trace.RefUpdate(
+        name="run/test/head",
+        old_object_id="sha256:first",
+        new_object_id="sha256:second",
+        updated=True,
+    )
+    assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
+        name="run/test/head", object_id="sha256:second"
+    )
+    stale = trace_store.set_ref(
+        "run/test/head", "sha256:third", expected="sha256:first"
+    )
+
+    assert stale == zeta_trace.RefUpdate(
+        name="run/test/head",
+        old_object_id="sha256:second",
+        new_object_id="sha256:third",
+        updated=False,
+    )
+    assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
+        name="run/test/head", object_id="sha256:second"
+    )
 
 
 @pytest.mark.parametrize(
@@ -111,10 +137,20 @@ def test_zeta_trace_set_ref_expected_none_creates_only_when_absent(
 
     trace_store.set_ref("run/test/head", "sha256:first", expected=None)
 
-    assert trace_store.get_ref("run/test/head") == "sha256:first"
-    with pytest.raises(zeta_trace.RefConflictError):
-        trace_store.set_ref("run/test/head", "sha256:second", expected=None)
-    assert trace_store.get_ref("run/test/head") == "sha256:first"
+    assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
+        name="run/test/head", object_id="sha256:first"
+    )
+    stale = trace_store.set_ref("run/test/head", "sha256:second", expected=None)
+
+    assert stale == zeta_trace.RefUpdate(
+        name="run/test/head",
+        old_object_id="sha256:first",
+        new_object_id="sha256:second",
+        updated=False,
+    )
+    assert trace_store.get_ref("run/test/head") == zeta_trace.Ref(
+        name="run/test/head", object_id="sha256:first"
+    )
 
 
 def test_zeta_trace_object_ids_ignore_dict_key_order() -> None:
@@ -196,7 +232,9 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     assert reopened.get_object(parent_id) == zeta_trace.Object(
         kind="context", schema="v1", data={"text": "parent"}
     )
-    assert reopened.get_ref("prompt/current") == child_id
+    assert reopened.get_ref("prompt/current") == zeta_trace.Ref(
+        name="prompt/current", object_id=child_id
+    )
     assert reopened.derivations_for_output(child_id)[0].producer == "test:v1"
     assert set(reopened.graph_closure([child_id])) == {parent_id, child_id}
     assert reopened.stats().object_count == 2

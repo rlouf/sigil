@@ -17,7 +17,8 @@ from .object import (
 from .refs import (
     REF_EXPECTED_UNSET,
     AmbiguousIdError,
-    RefConflictError,
+    Ref,
+    RefUpdate,
     UnknownIdError,
 )
 
@@ -78,14 +79,14 @@ class Store(Protocol):
         object_id: ObjectId,
         *,
         expected: ObjectId | None | object = REF_EXPECTED_UNSET,
-    ) -> None: ...
-    def get_ref(self, name: str) -> ObjectId | None: ...
+    ) -> RefUpdate: ...
+    def get_ref(self, name: str) -> Ref | None: ...
     def batch(self) -> AbstractContextManager[None]: ...
     def record_derivation(self, derivation: Derivation) -> str: ...
     def derivations_for_output(self, output_id: ObjectId) -> list[Derivation]: ...
     def derivations_for_input(self, input_id: ObjectId) -> list[Derivation]: ...
     def graph_closure(self, roots: list[ObjectId]) -> dict[ObjectId, Object]: ...
-    def refs(self) -> dict[str, ObjectId]: ...
+    def refs(self) -> list[Ref]: ...
     def objects(
         self, kind: str | tuple[str, ...] | None = None, limit: int | None = None
     ) -> list[tuple[ObjectId, Object]]: ...
@@ -110,7 +111,7 @@ def resolve_object_id(store: Store, token: str) -> ObjectId:
         raise UnknownIdError(token)
     ref_target = store.get_ref(token)
     if ref_target is not None:
-        return ref_target
+        return ref_target.object_id
     if store.get_object(token) is not None:
         return token
     prefix = token if token.startswith("sha256:") else f"sha256:{token}"
@@ -208,19 +209,28 @@ class InMemoryStore(StoreBase):
         object_id: ObjectId,
         *,
         expected: ObjectId | None | object = REF_EXPECTED_UNSET,
-    ) -> None:
-        if expected is not REF_EXPECTED_UNSET:
-            actual = self._refs.get(name)
-            if actual != expected:
-                raise RefConflictError(
-                    name,
-                    expected=cast(ObjectId | None, expected),
-                    actual=actual,
-                )
+    ) -> RefUpdate:
+        old_object_id = self._refs.get(name)
+        if expected is not REF_EXPECTED_UNSET and old_object_id != expected:
+            return RefUpdate(
+                name=name,
+                old_object_id=old_object_id,
+                new_object_id=object_id,
+                updated=False,
+            )
         self._refs[name] = object_id
+        return RefUpdate(
+            name=name,
+            old_object_id=old_object_id,
+            new_object_id=object_id,
+            updated=True,
+        )
 
-    def get_ref(self, name: str) -> ObjectId | None:
-        return self._refs.get(name)
+    def get_ref(self, name: str) -> Ref | None:
+        object_id_value = self._refs.get(name)
+        if object_id_value is None:
+            return None
+        return Ref(name=name, object_id=object_id_value)
 
     @contextmanager
     def batch(self) -> Iterator[None]:
@@ -245,8 +255,11 @@ class InMemoryStore(StoreBase):
             if input_id in derivation.input_ids
         ]
 
-    def refs(self) -> dict[str, ObjectId]:
-        return dict(sorted(self._refs.items()))
+    def refs(self) -> list[Ref]:
+        return [
+            Ref(name=name, object_id=object_id_value)
+            for name, object_id_value in sorted(self._refs.items())
+        ]
 
     def stats(self) -> TraceStats:
         return TraceStats(

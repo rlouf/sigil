@@ -1389,8 +1389,9 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
         result["run_id"],
     ]
     assert trace_store.objects(kind="run_event") == []
-    assert "run/ctx-session/head" not in trace_store.refs()
-    assert "run/ctx-session/event_head" not in trace_store.refs()
+    ref_names = {ref.name for ref in trace_store.refs()}
+    assert "run/ctx-session/head" not in ref_names
+    assert "run/ctx-session/event_head" not in ref_names
 
 
 def test_zeta_rpc_session_result_returns_prompt_trace_refs(

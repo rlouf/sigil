@@ -2232,7 +2232,7 @@ def test_zeta_step_bridges_turn_record_into_trace_graph(monkeypatch) -> None:
 
 def test_turn_bridge_failure_does_not_break_the_step(monkeypatch) -> None:
     class BrokenStore:
-        def get_ref(self, name: str) -> str | None:
+        def get_ref(self, name: str) -> zeta_trace.Ref | None:
             raise RuntimeError("trace store unavailable")
 
         def batch(self):

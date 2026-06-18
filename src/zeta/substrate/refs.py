@@ -2,9 +2,30 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from .object import ObjectId
 
 REF_EXPECTED_UNSET = object()
+RefName = str
+
+
+@dataclass(frozen=True)
+class Ref:
+    """Resolved mutable substrate ref."""
+
+    name: RefName
+    object_id: ObjectId
+
+
+@dataclass(frozen=True)
+class RefUpdate:
+    """Result of moving a mutable ref."""
+
+    name: RefName
+    old_object_id: ObjectId | None
+    new_object_id: ObjectId
+    updated: bool
 
 
 class UnknownIdError(LookupError):
@@ -31,21 +52,3 @@ class UnknownSessionError(LookupError):
         super().__init__(session_id)
         self.session_id = session_id
         self.available = available
-
-
-class RefConflictError(RuntimeError):
-    """A mutable ref did not match the caller's observed value."""
-
-    def __init__(
-        self,
-        name: str,
-        *,
-        expected: ObjectId | None,
-        actual: ObjectId | None,
-    ) -> None:
-        super().__init__(
-            f"ref {name!r} changed: expected {expected!r}, found {actual!r}"
-        )
-        self.name = name
-        self.expected = expected
-        self.actual = actual

@@ -79,7 +79,7 @@ def list_trace_closure(object_id: ObjectId, *, store: Store) -> list[dict[str, A
 
 
 def list_trace_refs(*, store: Store) -> dict[str, ObjectId]:
-    return dict(store.refs())
+    return {ref.name: ref.object_id for ref in store.refs()}
 
 
 def list_trace_prompts(*, store: Store) -> list[dict[str, Any]]:
