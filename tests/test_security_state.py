@@ -47,6 +47,7 @@ from sigil.workflows.ask import (
     ask,
 )
 from zeta import events as zeta_events
+from zeta import loop as zeta_agent
 from zeta import timeline as zeta_timeline
 from zeta.events import DraftEvent, Event, publish_event
 from zeta.store.events import (
@@ -56,7 +57,6 @@ from zeta.store.events import (
     SqliteEventStore,
     event_store_path,
 )
-from zeta.timeline import durable_event, model_called_event, tool_called_event
 
 
 class TtyStringIO(StringIO):
@@ -99,6 +99,9 @@ def test_zeta_events_exports_only_generic_event_infrastructure() -> None:
     assert not hasattr(zeta_timeline, "record_event")
     assert not hasattr(zeta_timeline, "event_payload_draft")
     assert not hasattr(zeta_timeline, "publish_event_payload_to_log")
+    assert not hasattr(zeta_timeline, "durable_event")
+    assert not hasattr(zeta_timeline, "model_called_event")
+    assert not hasattr(zeta_timeline, "tool_called_event")
 
 
 def resolved_import_module(
@@ -756,39 +759,41 @@ def test_sqlite_event_store_has_no_stream_projection_table(tmp_path: Path) -> No
 
 
 def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
-    prompt = durable_event.prompt_submitted(
+    prompt = zeta_turn_draft(
+        "zeta.prompt.submitted",
         payload={"content": "hello"},
         turn_id="turn-1",
         session_id="s1",
-        event_id="prompt-event",
     )
-    model = model_called_event(
+    model = zeta_agent.model_called_draft(
         payload={"content": "answer"},
         turn_id="turn-1",
         session_id="s1",
         caused_by="prompt-event",
         event_id="model-event",
     )
-    tool = tool_called_event(
+    tool = zeta_agent.tool_called_draft(
         payload={"name": "read"},
         turn_id="turn-1",
         session_id="s1",
         caused_by="model-event",
         event_id="tool-event",
     )
-    completed = durable_event.turn_completed(
+    completed = zeta_turn_draft(
+        "zeta.turn.completed",
         payload={"outcome": "answered"},
         turn_id="turn-1",
         session_id="s1",
         caused_by="tool-event",
-        event_id="turn-event",
     )
-    failed = durable_event.turn_failed(
+    failed = zeta_turn_draft(
+        "zeta.turn.failed",
         payload={"outcome": "failed"},
         turn_id="turn-1",
         session_id="s1",
     )
-    aborted = durable_event.turn_aborted(
+    aborted = zeta_turn_draft(
+        "zeta.turn.aborted",
         payload={"outcome": "aborted"},
         turn_id="turn-1",
         session_id="s1",
@@ -811,15 +816,14 @@ def test_durable_event_constructors_set_turn_id_and_idempotency_keys() -> None:
     assert failed.idempotency_key == "zeta.turn.failed:turn-1"
     assert aborted.event_type == "zeta.turn.aborted"
     assert aborted.idempotency_key == "zeta.turn.aborted:turn-1"
-    assert not hasattr(durable_event, "model_called")
-    assert not hasattr(durable_event, "tool_called")
 
 
 def test_durable_event_constructor_idempotency_deduplicates_replays(
     tmp_path: Path,
 ) -> None:
     store = SqliteEventStore(tmp_path / "events.sqlite3")
-    draft = durable_event.turn_completed(
+    draft = zeta_turn_draft(
+        "zeta.turn.completed",
         payload={"outcome": "answered"},
         turn_id="turn-1",
         session_id="s1",
@@ -832,6 +836,25 @@ def test_durable_event_constructor_idempotency_deduplicates_replays(
     assert second.inserted is False
     assert first.event == second.event
     assert first.event.id.startswith("evt_")
+
+
+def zeta_turn_draft(
+    event_type: str,
+    *,
+    payload: dict[str, Any],
+    turn_id: str | None,
+    session_id: str,
+    caused_by: str | None = None,
+) -> DraftEvent:
+    return DraftEvent(
+        event_type=event_type,
+        source="zeta",
+        payload=payload,
+        idempotency_key=f"{event_type}:{turn_id}" if turn_id is not None else None,
+        caused_by=caused_by,
+        session_id=session_id,
+        turn_id=turn_id,
+    )
 
 
 def test_sqlite_event_store_accepts_events_without_idempotency_keys(

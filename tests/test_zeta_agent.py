@@ -33,7 +33,6 @@ from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
 from zeta import session as zeta_session
-from zeta import timeline as zeta_timeline
 from zeta.capabilities.base import (
     Capability,
     CapabilityId,
@@ -49,7 +48,6 @@ from zeta.events import AppendOutcome, DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
 from zeta.store.substrate import InMemoryStore
-from zeta.timeline import durable_event_draft
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
@@ -60,7 +58,6 @@ zeta_events = SimpleNamespace(
     Event=Event,
     Filter=Filter,
     SqliteEventStore=SqliteEventStore,
-    durable_event_draft=durable_event_draft,
 )
 
 
@@ -2586,9 +2583,9 @@ def test_zeta_rpc_events_list_pages_in_append_order(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     for content in ("one", "two", "three"):
         event_store.accept(
-            zeta_timeline.durable_event_draft(
-                "zeta.user_message",
-                "zeta",
+            DraftEvent(
+                event_type="zeta.user_message",
+                source="zeta",
                 payload={
                     "_timeline_type": "user_message",
                     "content": content,
@@ -2645,9 +2642,9 @@ def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None
         ("session-1", "run_1", "three"),
     ):
         event_store.accept(
-            zeta_timeline.durable_event_draft(
-                "zeta.user_message",
-                "zeta",
+            DraftEvent(
+                event_type="zeta.user_message",
+                source="zeta",
                 payload={
                     "_timeline_type": "user_message",
                     "content": content,
