@@ -33,13 +33,10 @@ from zeta.events import AppendOutcome, DraftEvent, Event, EventSink
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
-    model_called_draft,
-    model_durable_payload,
     registered_capabilities,
     run_agent_turn,
-    tool_called_draft,
-    tool_durable_payload,
 )
+from zeta.runtime_events import runtime_event_from_event
 from zeta.session import Session, default_session
 from zeta.store.events import EventReader, Filter
 from zeta.timeline import (
@@ -179,51 +176,11 @@ def runtime_event_draft(
     session_id: str,
 ) -> DraftEvent:
     event_type = str(event.get("type") or "")
-    caused_by = (
-        event.get("caused_by") if isinstance(event.get("caused_by"), str) else None
-    )
-    event_id = event.get("id") if isinstance(event.get("id"), str) else None
     turn_id = event.get("turn_id") if isinstance(event.get("turn_id"), str) else None
-    if event_type == "model":
-        draft = model_called_draft(
-            payload=model_durable_payload(event),
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-        )
-    elif event_type in {"tool_call", "tool_result"}:
-        draft = tool_called_draft(
-            payload=tool_durable_payload(event),
-            turn_id=turn_id,
-            session_id=session_id,
-            caused_by=caused_by,
-            event_id=event_id,
-        )
-    elif event_type == "turn_aborted":
-        return DraftEvent(
-            event_type="zeta.turn.failed",
-            source="zeta",
-            payload=turn_aborted_payload(event),
-            idempotency_key=None,
-            caused_by=caused_by,
-            session_id=session_id,
-            turn_id=turn_id,
-        )
-    else:
+    runtime_event = runtime_event_from_event(event)
+    if runtime_event is None:
         raise ValueError(f"unsupported runtime event type: {event_type}")
-    return draft
-
-
-def turn_aborted_payload(event: dict[str, Any]) -> dict[str, Any]:
-    payload = {
-        key: value
-        for key, value in event.items()
-        if key not in {"id", "type", "time", "session", "source", "caused_by"}
-    }
-    payload["_timeline_type"] = "turn_aborted"
-    payload.setdefault("reason", "aborted")
-    return payload
+    return runtime_event.to_durable(session_id=session_id, turn_id=turn_id)
 
 
 @dataclass(frozen=True)
