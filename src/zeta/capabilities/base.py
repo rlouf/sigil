@@ -66,6 +66,7 @@ class CapabilityPolicy:
     supports_direct: bool
     trust: TrustLevel
     timeout_seconds: float | None = None
+    stop_turn_after_stage: bool = False
 
 
 @dataclass(frozen=True)

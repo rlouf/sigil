@@ -71,6 +71,7 @@ def _test_capability(
     run_result: dict[str, Any] | None = None,
     supports_staging: bool = False,
     supports_direct: bool = True,
+    stop_turn_after_stage: bool = False,
     trust: TrustLevel = "host",
 ) -> Capability:
     return Capability(
@@ -85,6 +86,7 @@ def _test_capability(
             supports_staging=supports_staging,
             supports_direct=supports_direct,
             trust=trust,
+            stop_turn_after_stage=stop_turn_after_stage,
         ),
         InProcessCapabilityExecutor(
             lambda params: (
@@ -3931,6 +3933,64 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
         tool_call["tool_call_object_id"],
         tool_result["tool_result_object_id"],
     )
+
+
+def test_zeta_agent_turn_stops_after_capability_policy_stage_success(
+    monkeypatch,
+) -> None:
+    requests = 0
+    registry = CapabilityRegistry()
+    registry.register(
+        _test_capability(
+            "mutate",
+            effects=("write",),
+            supports_staging=True,
+            stop_turn_after_stage=True,
+        )
+    )
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        nonlocal requests
+        requests += 1
+        return {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "mutate", "arguments": "{}"},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_agent,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = zeta_agent.run_agent_turn(
+        "mutate",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_capabilities=("mutate",),
+            max_turns=3,
+            stop_on_staged_effect=False,
+        ),
+        tool_registry=registry,
+    )
+
+    assert requests == 1
+    assert result.final_text == ""
+    assert result.staged_effect is None
+    assert [event["type"] for event in result.events] == [
+        "model",
+        "tool_call",
+        "tool_result",
+    ]
 
 
 def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:

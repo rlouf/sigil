@@ -1501,7 +1501,9 @@ def run_valid_tool_call(
     )
     stop = bool(
         execution_mode == "stage"
-        and invocation.name == "edit"
+        and capability_stops_turn_after_stage(
+            capability_id, tool_registry=ctx.tool_registry
+        )
         and result.get("ok") is True
     )
     emit_tool_event(
@@ -1750,6 +1752,15 @@ def tool_call_stages_effect(
         return False
     capability = active_tool_registry.get(capability_id)
     return capability is not None and capability.spec.mutates()
+
+
+def capability_stops_turn_after_stage(
+    capability_id: str,
+    *,
+    tool_registry: CapabilityRegistry,
+) -> bool:
+    capability = tool_registry.get(capability_id)
+    return capability is not None and capability.policy.stop_turn_after_stage
 
 
 def result_staged_effect(result: dict[str, Any]) -> dict[str, Any] | None:

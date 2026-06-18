@@ -60,6 +60,7 @@ def builtin_capability(
             timeout_seconds=DEFAULT_TIMEOUT_SECONDS_BY_ALIAS.get(
                 spec.aliases[0] if spec.aliases else "",
             ),
+            stop_turn_after_stage="edit" in spec.aliases,
         ),
         InProcessCapabilityExecutor(
             run,
