@@ -911,6 +911,7 @@ def test_zeta_skill_directive_expands_through_agent_step_workflow(
         **kwargs: object,
     ) -> dict[str, Any]:
         del kwargs
+        captured["system"] = str(messages[0]["content"])
         captured["user"] = str(messages[1]["content"])
         return {"content": "done"}
 
@@ -927,6 +928,9 @@ def test_zeta_skill_directive_expands_through_agent_step_workflow(
     code = zeta_runner.step("@step-skill: do step work", workflow="propose")
 
     assert code == 0
+    assert "<available_skills>" in captured["system"]
+    assert "name: step-skill" in captured["system"]
+    assert "description: Step work." in captured["system"]
     assert '<skill name="step-skill"' in captured["user"]
     assert "Step skill body." in captured["user"]
     assert "do step work" in captured["user"]

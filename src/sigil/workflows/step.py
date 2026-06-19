@@ -10,7 +10,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
-from agents.skills import expand_skill_directive
+from agents.skills import available_skills_prompt, expand_skill_directive
 from sigil.agent_io import (
     TurnEventRecorder,
     TurnRenderer,
@@ -132,6 +132,7 @@ def step(
         runtime_context.tool_registry.model_alias(capability_id)
         for capability_id in enabled_capabilities
     )
+    system = system_with_available_skills(system, enabled_tool_aliases)
     turn_recorder = TurnRecorder(
         runtime_context=runtime_context,
         workflow=workflow,
@@ -459,6 +460,18 @@ def stages_mutations(
         if (capability_id := active_tool_registry.resolve(name)) is not None
         if (capability := active_tool_registry.get(capability_id)) is not None
     )
+
+
+def system_with_available_skills(
+    system: str,
+    enabled_tool_aliases: Iterable[str],
+) -> str:
+    if "read" not in enabled_tool_aliases:
+        return system
+    skills_prompt = available_skills_prompt()
+    if not skills_prompt:
+        return system
+    return f"{system.rstrip()}\n\n{skills_prompt}"
 
 
 def agent_prompt(objective: str, *, stdin_text: str) -> str:

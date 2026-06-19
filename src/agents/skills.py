@@ -12,6 +12,9 @@ SKILL_MENTION_PATTERN = re.compile(
     r"(?<![A-Za-z0-9._%+-])@([a-z0-9-]+)(?![A-Za-z0-9._%+/-])"
 )
 SKIP_DIRECTORIES = {"node_modules"}
+AVAILABLE_SKILLS_HEADER = """<available_skills>
+When the task matches a skill description, use `read` to inspect that skill file.
+Resolve relative skill references against the skill directory."""
 
 
 @dataclass(frozen=True)
@@ -68,6 +71,27 @@ def available_skills(cwd: str | Path | None = None) -> list[Skill]:
         for skill in sorted(catalog.skills.values(), key=lambda item: item.name)
         if not skill.disable_model_invocation
     ]
+
+
+def available_skills_prompt(cwd: str | Path | None = None) -> str:
+    """Render the discoverable skill list for a workflow-owned prompt."""
+    return render_available_skills(available_skills(cwd))
+
+
+def render_available_skills(skills: list[Skill]) -> str:
+    if not skills:
+        return ""
+    lines = [AVAILABLE_SKILLS_HEADER]
+    for skill in skills:
+        lines.extend(
+            [
+                f"- name: {skill.name}",
+                f"  description: {skill.description}",
+                f"  location: {skill.location}",
+            ]
+        )
+    lines.append("</available_skills>")
+    return "\n".join(lines)
 
 
 def expand_skill_directive(objective: str, cwd: str | Path | None = None) -> str:

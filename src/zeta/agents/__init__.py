@@ -1,1 +1,1 @@
-"""Authored-agent spec modules."""
+"""Agent runtime configuration for Zeta."""

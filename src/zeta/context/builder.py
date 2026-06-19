@@ -10,7 +10,6 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
-from agents.skills import Skill, available_skills
 from zeta.capabilities.base import content_hash
 from zeta.context.components import (
     PromptComponent,
@@ -18,7 +17,6 @@ from zeta.context.components import (
     prompt_component_object,
     prompt_components,
 )
-from zeta.context.system import can_read_skill_files, enabled_capability_ids
 from zeta.context.transforms import NoOpPromptTransform, PromptTransform
 from zeta.events import DraftEvent, Event, draft_event_id
 from zeta.models import ModelInput
@@ -88,9 +86,6 @@ class PromptBuilder:
     ) -> None:
         self._store = store
         self.transform = transform or NoOpPromptTransform()
-        # One builder serves every model call of a turn; skills discovery
-        # walks the filesystem, so do it once per tool set instead.
-        self._skills: dict[tuple[str, ...], list[Skill]] = {}
 
     def plan_prompt(
         self,
@@ -119,7 +114,6 @@ class PromptBuilder:
             max_tokens=max_tokens,
             selected_model=selected_model,
             thinking=thinking,
-            skills=self._skills_for(allowed_capabilities),
         )
 
     def commit_prompt_plan(self, plan: PromptPlan) -> StoredPrompt:
@@ -128,14 +122,6 @@ class PromptBuilder:
             self.store(),
             transform=self.transform,
         )
-
-    def _skills_for(self, allowed_capabilities: Iterable[str] | None) -> list[Skill]:
-        enabled = enabled_capability_ids(allowed_capabilities)
-        cached = self._skills.get(enabled)
-        if cached is None:
-            cached = available_skills() if can_read_skill_files(enabled) else []
-            self._skills[enabled] = cached
-        return cached
 
     def store(self) -> Store | None:
         return self._store
@@ -326,7 +312,6 @@ def plan_prompt(
     max_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
     selected_model: str | None = None,
     thinking: str | None = None,
-    skills: list[Skill] | None = None,
 ) -> PromptPlan:
     components = prompt_components(
         objective,
@@ -336,7 +321,6 @@ def plan_prompt(
         context=context,
         current_events=current_events,
         tools=tools,
-        skills=skills,
     )
     return PromptPlan(
         components=tuple(components),

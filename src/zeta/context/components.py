@@ -6,12 +6,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from agents.skills import Skill, available_skills, expand_skill_directive
 from zeta.capabilities.base import content_hash, effect_resolution, proposed_effect
 from zeta.context.system import (
-    can_read_skill_files,
     enabled_capability_ids,
-    skill_prompt_items,
     system_prompt,
 )
 from zeta.substrate import Object, ObjectId
@@ -95,7 +92,6 @@ def zeta_context_message(
     *,
     context: str = "",
 ) -> str:
-    objective = expand_skill_directive(objective)
     sections = [
         objective,
         f"cwd:\n{os.getcwd()}",
@@ -387,7 +383,6 @@ def prompt_components(
     current_events: Iterable[dict[str, Any]] = (),
     tools: list[dict[str, Any]] | None = None,
     include_non_message_components: bool = True,
-    skills: list[Skill] | None = None,
 ) -> list[PromptComponent]:
     """Return prompt components in stable prefix-cache-friendly order.
 
@@ -395,14 +390,9 @@ def prompt_components(
     then volatile timeline/objective/current-turn components.
     """
     enabled_capabilities = enabled_capability_ids(allowed_capabilities)
-    if skills is None:
-        skills = (
-            available_skills() if can_read_skill_files(enabled_capabilities) else []
-        )
     system_content = system_prompt(
         system,
         allowed_capabilities=enabled_capabilities,
-        skills=skills,
     )
     components = [
         PromptComponent(
@@ -422,7 +412,6 @@ def prompt_components(
                 context=context,
                 tools=tools,
                 enabled_capabilities=enabled_capabilities,
-                skills=skills,
             )
         )
     components.extend(
@@ -437,7 +426,7 @@ def prompt_components(
             kind="user_message",
             data={
                 "objective": objective,
-                "expanded_objective": expand_skill_directive(objective),
+                "expanded_objective": objective,
                 "context": context,
                 "message": {"role": "user", "content": objective_message},
             },
@@ -616,7 +605,6 @@ def non_message_components(
     context: str,
     tools: list[dict[str, Any]] | None,
     enabled_capabilities: tuple[str, ...],
-    skills: list[Skill],
 ) -> list[PromptComponent]:
     components: list[PromptComponent] = []
     if tools is not None:
@@ -627,13 +615,6 @@ def non_message_components(
                     "allowed_tools": list(enabled_capabilities),
                     "tools": tools,
                 },
-            )
-        )
-    if skills:
-        components.append(
-            PromptComponent(
-                kind="skill_context",
-                data={"skills": skill_prompt_items(skills)},
             )
         )
     if context.strip():

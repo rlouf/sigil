@@ -1210,14 +1210,14 @@ def test_zeta_skill_discovery_reports_invalid_metadata(
     assert "missing non-empty description" in catalog.diagnostics[1].message
 
 
-def test_system_prompt_advertises_enabled_skills_only_with_read(
+def test_system_prompt_does_not_advertise_skills(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     home = tmp_path / "home"
     project = tmp_path / "repo"
     project.mkdir()
-    enabled = write_skill(
+    write_skill(
         home / ".zeta" / "skills",
         "enabled-skill",
         description="Do enabled work.",
@@ -1229,10 +1229,8 @@ def test_system_prompt_advertises_enabled_skills_only_with_read(
     prompt = zeta_context.system_prompt(allowed_capabilities=("read", "ls"))
     no_read_prompt = zeta_context.system_prompt(allowed_capabilities=("ls",))
 
-    assert "<available_skills>" in prompt
-    assert "name: enabled-skill" in prompt
-    assert "description: Do enabled work." in prompt
-    assert f"location: {enabled}" in prompt
+    assert "<available_skills>" not in prompt
+    assert "enabled-skill" not in prompt
     assert "hidden-skill" not in prompt
     assert "<available_skills>" not in no_read_prompt
 
@@ -1281,7 +1279,7 @@ def test_system_prompt_states_todays_date() -> None:
     assert prompt == zeta_context.system_prompt(allowed_capabilities=("read",))
 
 
-def test_zeta_skill_directive_expands_in_context_message(
+def test_agent_skill_directive_expands_leading_directive(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1297,16 +1295,16 @@ def test_zeta_skill_directive_expands_in_context_message(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta_context.zeta_context_message("@reviewer: inspect the patch")
+    message = zeta_skills.expand_skill_directive("@reviewer: inspect the patch")
 
     assert f'<skill name="reviewer" location="{skill}">' in message
     assert f"References are relative to {skill}." in message
     assert "# Reviewer\nRead references/sample.md first." in message
     assert "description: Review code." not in message
-    assert "\n\ninspect the patch\n\ncwd:" in message
+    assert message.endswith("</skill>\n\ninspect the patch")
 
 
-def test_zeta_skill_directive_expands_inline_known_bare_token(
+def test_agent_skill_directive_expands_inline_known_bare_token(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1322,7 +1320,7 @@ def test_zeta_skill_directive_expands_inline_known_bare_token(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta_context.zeta_context_message(
+    message = zeta_skills.expand_skill_directive(
         "Look into @linear for issues that are outstanding"
     )
 
@@ -1331,11 +1329,11 @@ def test_zeta_skill_directive_expands_inline_known_bare_token(
         f"References are relative to {skill}.\n\n"
         "# Linear\nFind open issues.\n"
         "</skill>\n\n"
-        "Look into @linear for issues that are outstanding\n\ncwd:"
+        "Look into @linear for issues that are outstanding"
     )
 
 
-def test_zeta_skill_directive_expands_each_inline_skill_once(
+def test_agent_skill_directive_expands_each_inline_skill_once(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1347,16 +1345,16 @@ def test_zeta_skill_directive_expands_each_inline_skill_once(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta_context.zeta_context_message(
+    message = zeta_skills.expand_skill_directive(
         "Use @linear and @reviewer, then mention @linear again"
     )
 
     assert message.count('<skill name="linear"') == 1
     assert message.count('<skill name="reviewer"') == 1
-    assert "Use @linear and @reviewer, then mention @linear again\n\ncwd:" in message
+    assert message.endswith("Use @linear and @reviewer, then mention @linear again")
 
 
-def test_zeta_skill_directive_leaves_unknown_skill_unchanged(
+def test_agent_skill_directive_leaves_unknown_skill_unchanged(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1366,12 +1364,12 @@ def test_zeta_skill_directive_leaves_unknown_skill_unchanged(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta_context.zeta_context_message("@missing: inspect")
+    message = zeta_skills.expand_skill_directive("@missing: inspect")
 
-    assert message.startswith("@missing: inspect\n\ncwd:")
+    assert message == "@missing: inspect"
 
 
-def test_zeta_skill_directive_leaves_unknown_inline_skill_unchanged(
+def test_agent_skill_directive_leaves_unknown_inline_skill_unchanged(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1381,13 +1379,13 @@ def test_zeta_skill_directive_leaves_unknown_inline_skill_unchanged(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta_context.zeta_context_message("Look into @missing for issues")
+    message = zeta_skills.expand_skill_directive("Look into @missing for issues")
 
-    assert message.startswith("Look into @missing for issues\n\ncwd:")
+    assert message == "Look into @missing for issues"
     assert "<skill name=" not in message
 
 
-def test_zeta_skill_directive_expands_leading_bare_token(
+def test_agent_skill_directive_expands_leading_bare_token(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1398,13 +1396,13 @@ def test_zeta_skill_directive_expands_leading_bare_token(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta_context.zeta_context_message("@reviewer inspect")
+    message = zeta_skills.expand_skill_directive("@reviewer inspect")
 
     assert message.startswith('<skill name="reviewer"')
-    assert "@reviewer inspect\n\ncwd:" in message
+    assert message.endswith("@reviewer inspect")
 
 
-def test_zeta_skill_directive_ignores_non_bare_inline_handles(
+def test_agent_skill_directive_ignores_non_bare_inline_handles(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1415,11 +1413,11 @@ def test_zeta_skill_directive_ignores_non_bare_inline_handles(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
 
-    message = zeta_context.zeta_context_message(
+    message = zeta_skills.expand_skill_directive(
         "Email me@example.com and inspect @reviewer/docs"
     )
 
-    assert message.startswith("Email me@example.com and inspect @reviewer/docs\n\ncwd:")
+    assert message == "Email me@example.com and inspect @reviewer/docs"
     assert '<skill name="reviewer"' not in message
 
 
@@ -1885,23 +1883,3 @@ def test_zeta_prompt_object_stores_payload_hash_not_payload() -> None:
         if obj is not None and "message" in obj.data
     ]
     assert linked_messages == prepared.messages
-
-
-def test_zeta_prompt_builder_discovers_skills_once_per_turn(monkeypatch) -> None:
-    calls = 0
-
-    def fake_available_skills() -> list[zeta_skills.Skill]:
-        nonlocal calls
-        calls += 1
-        return []
-
-    monkeypatch.setattr(
-        "zeta.context.components.available_skills", fake_available_skills
-    )
-    monkeypatch.setattr("zeta.context.builder.available_skills", fake_available_skills)
-    builder = zeta_context.PromptBuilder(store=zeta_trace.InMemoryStore())
-
-    prepare_prompt(builder, "question", [], allowed_capabilities=("read",), tools=[])
-    prepare_prompt(builder, "question", [], allowed_capabilities=("read",), tools=[])
-
-    assert calls == 1

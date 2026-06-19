@@ -6,7 +6,6 @@ from typing import Any
 
 from jinja2 import Environment, StrictUndefined
 
-from agents.skills import Skill, available_skills
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
 
@@ -16,6 +15,7 @@ PROMPT_TEMPLATE_ENV = Environment(
     trim_blocks=False,
     undefined=StrictUndefined,
 )
+
 
 TOOL_PROTOCOL_PROMPT = """Tool protocol:
 
@@ -44,11 +44,6 @@ Tool policy:
 
 - {{ grep_tool_policy }}
 {% endif %}
-{% if skills_prompt %}
-
-{{ skills_prompt }}
-{% endif %}
-
 {{ tools_prompt }}"""
 
 TOOLS_PROMPT_TEMPLATE = """Available tools:{% if tools %}
@@ -56,43 +51,22 @@ TOOLS_PROMPT_TEMPLATE = """Available tools:{% if tools %}
 {% endfor %}{% else %}
 (none){% endif %}"""
 
-SKILLS_PROMPT_TEMPLATE = """{% if skills -%}
-<available_skills>
-When the task matches a skill description, use `read` to inspect that skill file.
-Resolve relative skill references against the skill directory.
-{% for skill in skills -%}
-- name: {{ skill.name }}
-  description: {{ skill.description }}
-  location: {{ skill.location }}
-{% endfor -%}
-</available_skills>
-{%- endif %}"""
-
 
 def system_prompt(
     base_prompt: str | None = None,
     *,
     allowed_capabilities: Iterable[str] | None = None,
-    skills: Iterable[Skill] | None = None,
 ) -> str:
     """Assemble the system prompt around the caller's base prompt.
 
     The base prompt is workflow content and belongs to the caller; this
     module only adds the runtime scaffolding: date line, tool protocol,
-    skills, and tool descriptors.
+    and tool descriptors.
     """
     active_capabilities = enabled_capability_ids(allowed_capabilities)
-    active_skills = (
-        tuple(skills)
-        if skills is not None
-        else tuple(
-            available_skills() if can_read_skill_files(active_capabilities) else ()
-        )
-    )
     return render_system_prompt(
         base_prompt,
         allowed_capabilities=active_capabilities,
-        skills=active_skills,
     )
 
 
@@ -100,7 +74,6 @@ def render_system_prompt(
     base_prompt: str | None = None,
     *,
     allowed_capabilities: Iterable[str] | None = None,
-    skills: Iterable[Skill] = (),
 ) -> str:
     """Render the system prompt from already-resolved prompt inputs."""
     active_capabilities = (
@@ -114,7 +87,6 @@ def render_system_prompt(
         grep_tool_policy=GREP_TOOL_POLICY
         if capability_available("grep", active_capabilities)
         else "",
-        skills_prompt=skills_prompt(skills),
         tools_prompt=tools_prompt(active_capabilities),
     )
 
@@ -126,21 +98,6 @@ def current_date_line() -> str:
     trace component, and a finer stamp would defeat its deduplication.
     """
     return time.strftime("Today is %Y-%m-%d (%A).", time.localtime())
-
-
-def can_read_skill_files(
-    enabled_capabilities: Iterable[str],
-    *,
-    tool_registry: CapabilityRegistry | None = None,
-) -> bool:
-    active_registry = tool_registry or _runtime_tool_registry
-    for capability_id in enabled_capabilities:
-        capability = active_registry.get(capability_id)
-        if not capability:
-            continue
-        if "read" in capability.spec.aliases:
-            return True
-    return False
 
 
 def capability_available(
@@ -206,25 +163,6 @@ def tool_signature(name: str, schema: dict[str, Any]) -> str:
         if isinstance(property_name, str) and property_name not in required
     )
     return f"{name}({', '.join(args)})"
-
-
-def skills_prompt(skills: Iterable[Skill]) -> str:
-    """Render discoverable skills into the system prompt."""
-    return render_prompt_template(
-        SKILLS_PROMPT_TEMPLATE,
-        skills=skill_prompt_items(skills),
-    )
-
-
-def skill_prompt_items(skills: Iterable[Skill]) -> list[dict[str, str]]:
-    return [
-        {
-            "name": skill.name,
-            "description": skill.description,
-            "location": str(skill.location),
-        }
-        for skill in skills
-    ]
 
 
 def clean_prompt(prompt: str | None) -> str:
