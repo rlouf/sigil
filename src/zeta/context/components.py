@@ -14,7 +14,7 @@ from zeta.context.system import (
     system_prompt,
 )
 from zeta.skills import Skill, available_skills, expand_skill_directive
-from zeta.substrate import Object, ObjectId, trace_object_id
+from zeta.substrate import Object, ObjectId
 
 Representation = Literal["full", "summary", "stub"]
 
@@ -510,7 +510,7 @@ def timeline_message_component_links(event: dict[str, Any]) -> tuple[ObjectId, .
     links: list[ObjectId] = []
     add_event_link(links, assistant_message_object_id(event))
     for trace_field in ("tool_result_object_id", "tool_call_object_id"):
-        add_event_link(links, trace_object_id(event, trace_field))
+        add_event_link(links, event.get(trace_field))
     return tuple(links)
 
 
@@ -523,7 +523,7 @@ def assistant_message_object_id(event: dict[str, Any]) -> ObjectId | None:
     prompt_trace = event.get("prompt_trace")
     if not isinstance(prompt_trace, dict):
         return None
-    return trace_object_id(prompt_trace, "assistant_message_object_id")
+    return prompt_trace.get("assistant_message_object_id")
 
 
 def record_tool_call_names(
@@ -605,7 +605,7 @@ def add_trace_object_field(
     event: dict[str, Any],
     field_name: str,
 ) -> None:
-    object_id = trace_object_id(event, field_name)
+    object_id = event.get(field_name)
     if object_id is not None:
         data[field_name] = object_id
 

@@ -14,13 +14,6 @@ ObjectId = str
 RefName = str
 
 
-def trace_object_id(event: dict[str, Any], field: str) -> ObjectId | None:
-    value = event.get(field)
-    if isinstance(value, str) and value.startswith("sha256:"):
-        return value
-    return None
-
-
 @dataclass(frozen=True)
 class Object:
     """Immutable content-addressed value.
@@ -108,14 +101,3 @@ class RefUpdate:
     old_object_id: ObjectId | None
     new_object_id: ObjectId
     updated: bool
-
-
-__all__ = [
-    "Derivation",
-    "Object",
-    "ObjectId",
-    "Ref",
-    "RefName",
-    "RefUpdate",
-    "trace_object_id",
-]
