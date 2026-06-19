@@ -97,7 +97,7 @@ def shell_handoff_result(
     expected = str(handoff.get("command") or "")
     handoff_time = event_time(handoff)
     turns_after_handoff = [
-        normalize_shell_turn(turn) for turn in turns if event_time(turn) > handoff_time
+        shell_turn_summary(turn) for turn in turns if event_time(turn) > handoff_time
     ]
     matching_turn = first_matching_turn(expected, turns_after_handoff)
     if matching_turn is None:
@@ -147,7 +147,7 @@ def executed_shell_result(
     """Return a tool result for the command the model staged, edited or not."""
     command = str(turn.get("command") or "")
     expected = str(handoff.get("command") or command)
-    edited = normalize_command(command) != normalize_command(expected)
+    edited = " ".join(command.split()) != " ".join(expected.split())
     status = turn.get("status")
     lines = [f"{command} (exit {status})"]
     stderr = turn.get("stderr_snippet")
@@ -231,7 +231,7 @@ def cancelled_shell_result(
 
 def no_pending_handoff_result(turns: list[dict[str, Any]]) -> dict[str, Any]:
     """Return a deterministic resume event when no shell handoff is pending."""
-    shell_turns = [normalize_shell_turn(turn) for turn in turns]
+    shell_turns = [shell_turn_summary(turn) for turn in turns]
     return {
         "ok": True,
         "schema": SHELL_HANDOFF_RESULT_SCHEMA,
@@ -265,10 +265,10 @@ def command_matches_staged(expected: str, command: str) -> bool:
     extended with extra arguments still counts as executed rather than
     cancelled.
     """
-    normalized_expected = normalize_command(expected)
+    normalized_expected = " ".join(expected.split())
     if not normalized_expected:
         return False
-    normalized = normalize_command(command)
+    normalized = " ".join(command.split())
     if normalized == normalized_expected:
         return True
     return normalized.startswith(f"{normalized_expected} ")
@@ -285,11 +285,6 @@ def matching_pending_handoff(
     if not command_matches_staged(str(handoff.get("command") or ""), command):
         return {}
     return handoff
-
-
-def normalize_command(text: str) -> str:
-    """Collapse whitespace runs so formatting edits do not change matching."""
-    return " ".join(text.split())
 
 
 def latest_unresolved_shell_handoff(
@@ -357,7 +352,7 @@ def shell_handoff_summary(handoff: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def normalize_shell_turn(turn: dict[str, Any]) -> dict[str, Any]:
+def shell_turn_summary(turn: dict[str, Any]) -> dict[str, Any]:
     """Return a stable representation of a recorded user shell command."""
     normalized = {
         "id": str(turn.get("id") or ""),

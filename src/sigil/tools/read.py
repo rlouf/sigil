@@ -158,12 +158,8 @@ def html_to_text(text: str) -> str:
     body = re.sub(r"(?i)<\s*(p|div|section|article|br|li)[^>]*>", "\n", body)
     body = re.sub(r"(?i)<\s*/\s*(p|div|section|article|li)\s*>", "\n", body)
     body = re.sub(r"(?is)<[^>]+>", "", body)
-    lines = [normalize_spaces(unescape(line)) for line in body.splitlines()]
+    lines = [" ".join(unescape(line).split()) for line in body.splitlines()]
     return "\n".join(line for line in lines if line).strip() + "\n"
-
-
-def normalize_spaces(text: str) -> str:
-    return " ".join(text.split())
 
 
 def snapshot_tag(file_hash: str) -> str:

@@ -318,7 +318,7 @@ def format_search_markdown(
                 f"[{index}] [{escape_markdown_link(source.title)}]({source.url})"
             )
             if source.snippet:
-                lines.append(f"    {normalize_ws(source.snippet)[:240]}")
+                lines.append(f"    {' '.join(source.snippet.split())[:240]}")
     return "\n".join(lines).strip() + "\n"
 
 
@@ -397,10 +397,6 @@ def text_or_none(value: Any) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
-
-
-def normalize_ws(text: str) -> str:
-    return " ".join(text.split())
 
 
 def escape_markdown_link(text: str) -> str:
