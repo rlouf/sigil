@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import json
-import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
-from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
-from types import TracebackType
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from zeta import runtime_events
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import ExecutionMode, proposed_effect
 from zeta.capabilities.registry import CapabilityProjection, CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.context import prompt_transform_from_env
+from zeta.context import prompt_transform_from_policy
 from zeta.context.builder import (
     PreparedPrompt,
     PromptBuilder,
@@ -27,16 +24,11 @@ from zeta.context.builder import (
 from zeta.context.components import PromptTrace, prompt_trace_payload
 from zeta.events import DraftEvent, Event
 from zeta.models import (
-    CODEX_RESPONSES_API,
+    DefaultModelGateway,
     ModelInput,
     ModelOutput,
-    chat_completion_messages,
 )
-from zeta.models.chat_completions import (
-    ChatCompletionStreamSink,
-    model_endpoint_open,
-    tool_call_id,
-)
+from zeta.models.chat_completions import tool_call_id
 from zeta.runtime_events import (
     ModelRuntimeEvent,
     ToolCallRuntimeEvent,
@@ -47,7 +39,6 @@ from zeta.store.substrate import Store
 from zeta.timeline import timeline_event_from_durable_event
 
 AgentEventSink = Callable[[DraftEvent], None]
-ModelStatusFactory = Callable[[], AbstractContextManager[object]]
 DEFAULT_MAX_TURNS = 25
 tool_registry = _runtime_tool_registry
 time_monotonic = time.monotonic
@@ -155,7 +146,11 @@ class RunState:
         self.steps.append(StepResult(step, effects))
 
     def timeline_events(self) -> list[dict[str, Any]]:
-        return [draft_timeline_event(draft) for draft in self.events]
+        return [
+            draft_timeline_event(draft)
+            for draft in self.events
+            if not is_runtime_ui_event(draft)
+        ]
 
 
 AgentTurnState = RunState
@@ -177,16 +172,38 @@ class AgentTurnAborted(RuntimeError):
         self.event_recorded = event_recorded
 
 
+class CancellationToken(Protocol):
+    def is_set(self) -> bool: ...
+
+
+class ModelStream(Protocol):
+    def content_delta(self, text: str) -> None: ...
+
+    def reasoning_delta(self, text: str) -> None: ...
+
+
+class ModelGateway(Protocol):
+    def available(self, config: AgentConfig) -> bool: ...
+
+    def generate(
+        self,
+        model_input: ModelInput,
+        config: AgentConfig,
+        *,
+        stream: ModelStream | None = None,
+        telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+    ) -> ModelOutput: ...
+
+
 @dataclass(frozen=True)
 class TurnContext:
     event_sink: AgentEventSink | None
     trace_store: Store | None
     tool_registry: CapabilityRegistry
     builder: PromptBuilder
-    model_status: ModelStatusFactory | None
-    stream_sink: ChatCompletionStreamSink | None
-    cancellation_event: threading.Event | None
+    cancellation_event: CancellationToken | None
     deadline: float | None
+    model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
 
 
 def run_agent_turn(
@@ -196,17 +213,17 @@ def run_agent_turn(
     *,
     context: str = "",
     event_sink: AgentEventSink | None = None,
-    model_status: ModelStatusFactory | None = None,
-    stream_sink: ChatCompletionStreamSink | None = None,
     prompt_builder: PromptBuilder | None = None,
     trace_store: Store | None = None,
     tool_registry: CapabilityRegistry | None = None,
+    model_gateway: ModelGateway | None = None,
     caused_by: str | None = None,
-    cancellation_event: threading.Event | None = None,
+    cancellation_event: CancellationToken | None = None,
     deadline: float | None = None,
 ) -> AgentTurnResult:
     """Run an assistant/tool loop without mutating session state."""
-    if not agent_model_endpoint_open(config):
+    gateway = model_gateway or DefaultModelGateway()
+    if not gateway.available(config):
         raise RuntimeError("model endpoint is not reachable")
     deadline = agent_deadline(config, deadline)
     active_tool_registry = tool_registry or _runtime_tool_registry
@@ -217,15 +234,14 @@ def run_agent_turn(
     state = AgentTurnState(next_model_caused_by=caused_by)
     builder = prompt_builder or PromptBuilder(
         store=trace_store,
-        transform=prompt_transform_from_env(),
+        transform=prompt_transform_from_policy(config.compaction_policy),
     )
     ctx = TurnContext(
         event_sink=event_sink,
         trace_store=trace_store,
         tool_registry=active_tool_registry,
         builder=builder,
-        model_status=model_status,
-        stream_sink=stream_sink,
+        model_gateway=gateway,
         cancellation_event=cancellation_event,
         deadline=deadline,
     )
@@ -365,8 +381,8 @@ def request_model_turn(
         model_input,
         config=config,
         state=state,
-        model_status=ctx.model_status,
-        stream_sink=ctx.stream_sink,
+        model_gateway=ctx.model_gateway,
+        event_sink=ctx.event_sink,
     )
     assistant, prompt_trace = record_assistant_step(
         prepared_prompt,
@@ -419,17 +435,16 @@ def call_model_step(
     *,
     config: AgentConfig,
     state: RunState,
-    model_status: ModelStatusFactory | None,
-    stream_sink: ChatCompletionStreamSink | None,
+    model_gateway: ModelGateway | None = None,
+    event_sink: AgentEventSink | None,
 ) -> tuple[ModelOutput, bool, dict[str, Any]]:
     state.note_step("call_model")
     model_output, streamed_content, model_telemetry = request_assistant_message(
-        model_input.messages,
-        tools=model_input.tools or [],
-        tool_choice=model_input.tool_choice,
+        model_input,
         config=config,
-        model_status=model_status,
-        stream_sink=stream_sink,
+        model_gateway=model_gateway or DefaultModelGateway(),
+        events=state.events,
+        event_sink=event_sink,
     )
     return model_output, streamed_content, model_telemetry
 
@@ -597,7 +612,7 @@ def raise_if_agent_turn_aborted(
 
 
 def agent_abort_reason(
-    cancellation_event: threading.Event | None,
+    cancellation_event: CancellationToken | None,
     deadline: float | None,
 ) -> str | None:
     if cancellation_event is not None and cancellation_event.is_set():
@@ -616,11 +631,7 @@ def turn_aborted_event(reason: str, *, caused_by: str | None) -> dict[str, Any]:
 
 
 def agent_model_endpoint_open(config: AgentConfig) -> bool:
-    if config.model_api == CODEX_RESPONSES_API:
-        return True
-    if config.model_url is None:
-        return model_endpoint_open()
-    return model_endpoint_open(config.model_url)
+    return DefaultModelGateway().available(config)
 
 
 def agent_allowed_capabilities(
@@ -673,98 +684,76 @@ def turn_indices(max_turns: int | None) -> Iterable[int]:
 
 
 def request_assistant_message(
-    messages: list[dict[str, Any]],
+    model_input: ModelInput,
     *,
-    tools: list[dict[str, Any]],
-    tool_choice: str | dict[str, Any],
     config: AgentConfig,
-    model_status: ModelStatusFactory | None,
-    stream_sink: ChatCompletionStreamSink | None,
+    model_gateway: ModelGateway | None = None,
+    events: list[DraftEvent] | None = None,
+    event_sink: AgentEventSink | None = None,
 ) -> tuple[ModelOutput, bool, dict[str, Any]]:
-    status_context = model_status_context(model_status)
-    status_open = False
     model_telemetry: dict[str, Any] = {}
-
-    def close_status(
-        exc_type: type[BaseException] | None = None,
-        exc: BaseException | None = None,
-        traceback: TracebackType | None = None,
-    ) -> None:
-        nonlocal status_open
-        if not status_open:
-            return
-        status_open = False
-        status_context.__exit__(exc_type, exc, traceback)
-
-    status = status_context.__enter__()
-    status_open = True
-    turn_stream_sink = ModelTurnStreamSink(
-        stream_sink,
-        close_status,
-        reasoning_sink=getattr(status, "reasoning_delta", None),
+    recorded_events = events if events is not None else []
+    turn_stream_sink = ModelTurnStreamSink(recorded_events, event_sink)
+    gateway = model_gateway or DefaultModelGateway()
+    model_output = gateway.generate(
+        model_input,
+        config,
+        stream=turn_stream_sink,
+        telemetry_sink=model_telemetry.update,
     )
-    try:
-        assistant = chat_completion_messages(
-            messages,
-            api=config.model_api,
-            tools=tools,
-            tool_choice=tool_choice,
-            selected_model=config.model_name,
-            selected_url=config.model_url,
-            session_id=config.model_session_id,
-            stream_sink=turn_stream_sink if stream_sink is not None else None,
-            telemetry_sink=model_telemetry.update,
-            thinking=config.thinking,
-        )
-    except BaseException as exc:
-        close_status(type(exc), exc, exc.__traceback__)
-        raise
-    close_status()
     return (
-        ModelOutput(message=assistant),
+        model_output,
         turn_stream_sink.streamed_content,
         model_telemetry,
     )
 
 
 class ModelTurnStreamSink:
-    """Forward model text deltas after clearing the blocking status renderer."""
+    """Record model stream deltas as runtime events."""
 
     def __init__(
         self,
-        stream_sink: ChatCompletionStreamSink | None,
-        close_status: Callable[
-            [type[BaseException] | None, BaseException | None, TracebackType | None],
-            None,
-        ],
-        reasoning_sink: Callable[[str], None] | None = None,
+        events: list[DraftEvent],
+        event_sink: AgentEventSink | None = None,
     ) -> None:
-        self.stream_sink = stream_sink
-        self.close_status = close_status
-        self.reasoning_sink = reasoning_sink
+        self.events = events
+        self.event_sink = event_sink
         self.streamed_content = False
 
     def content_delta(self, text: str) -> None:
         if not text:
             return
         self.streamed_content = True
-        self.close_status(None, None, None)
-        if self.stream_sink is not None:
-            self.stream_sink.content_delta(text)
+        emit_event(
+            self.events,
+            DraftEvent(
+                "runtime.stream.chunk",
+                "zeta",
+                {"text": text, "_timeline_type": "runtime.stream.chunk"},
+            ),
+            self.event_sink,
+        )
 
     def reasoning_delta(self, text: str) -> None:
-        # Reasoning is process, not answer: it feeds the status renderer
-        # while the status is open and never reaches the answer stream.
-        if self.reasoning_sink is not None:
-            self.reasoning_sink(text)
+        if not text:
+            return
+        emit_event(
+            self.events,
+            DraftEvent(
+                "runtime.status.update",
+                "zeta",
+                {
+                    "status": "reasoning_delta",
+                    "text": text,
+                    "_timeline_type": "runtime.status.update",
+                },
+            ),
+            self.event_sink,
+        )
 
 
-def model_status_context(
-    factory: ModelStatusFactory | None,
-) -> AbstractContextManager[object]:
-    if factory is None:
-        return nullcontext()
-    return factory()
+def is_runtime_ui_event(draft: DraftEvent) -> bool:
+    return draft.event_type in {"runtime.stream.chunk", "runtime.status.update"}
 
 
 def draft_event_id(draft: DraftEvent) -> str | None:
@@ -797,7 +786,7 @@ def normalize_draft_event(event: DraftEvent | dict[str, Any]) -> DraftEvent:
 
 def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
     event = Event(
-        id=f"evt_{uuid.uuid4().hex}",
+        id=draft_event_id(draft) or f"evt_{uuid.uuid4().hex}",
         event_type=draft.event_type,
         source=draft.source,
         payload=dict(draft.payload),

@@ -962,9 +962,9 @@ class ThinkingStatus:
 
     def __exit__(
         self,
-        exc_type: type[BaseException] | None = None,
+        _exc_type: type[BaseException] | None = None,
         exc: BaseException | None = None,
-        traceback: TracebackType | None = None,
+        _traceback: TracebackType | None = None,
     ) -> bool:
         if not self.enabled:
             return False

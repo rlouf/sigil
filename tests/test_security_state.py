@@ -52,6 +52,7 @@ from zeta import timeline as zeta_timeline
 from zeta.events import DraftEvent, Event, publish_event
 from zeta.store.events import (
     AppendOutcome,
+    EventStoreProtocol,
     Filter,
     MemoryEventStore,
     SqliteEventStore,
@@ -409,18 +410,47 @@ def test_sqlite_event_store_deduplicates_idempotency_keys(tmp_path: Path) -> Non
 
 
 def test_event_from_draft_uses_uuid_id_and_normalizes_idempotency_key() -> None:
+    payload = {"turn_id": "turn-1"}
     event = Event.from_draft(
         DraftEvent(
             event_type="zeta.turn.completed",
             source="test",
-            payload={"turn_id": "turn-1"},
+            payload=payload,
             idempotency_key=" turn:turn-1 ",
         )
     )
+    payload["turn_id"] = "mutated"
 
     assert event.id.startswith("evt_")
     assert len(event.id) == 36
     assert event.idempotency_key == "turn:turn-1"
+    assert event.payload == {"turn_id": "turn-1"}
+    with pytest.raises(TypeError):
+        cast(Any, event.payload)["turn_id"] = "mutated"
+
+
+def test_event_stores_return_immutable_payloads(tmp_path: Path) -> None:
+    draft = DraftEvent(
+        event_type="zeta.turn.completed",
+        source="test",
+        payload={"turn_id": "turn-1"},
+    )
+    memory_event = MemoryEventStore().accept(draft).event
+    sqlite_event = SqliteEventStore(tmp_path / "events.sqlite3").accept(draft).event
+
+    assert memory_event.payload == {"turn_id": "turn-1"}
+    assert sqlite_event.payload == {"turn_id": "turn-1"}
+    with pytest.raises(TypeError):
+        cast(Any, memory_event.payload)["turn_id"] = "mutated"
+    with pytest.raises(TypeError):
+        cast(Any, sqlite_event.payload)["turn_id"] = "mutated"
+
+
+def test_event_stores_share_the_event_store_protocol(tmp_path: Path) -> None:
+    assert isinstance(MemoryEventStore(), EventStoreProtocol)
+    sqlite_store = SqliteEventStore(tmp_path / "events.sqlite3")
+
+    assert isinstance(sqlite_store, EventStoreProtocol)
 
 
 class RecordingEventSink:

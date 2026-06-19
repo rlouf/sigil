@@ -2,8 +2,19 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Literal
 
 from zeta.capabilities.base import ExecutionMode
+
+CompactionStrategy = Literal["structural_trim", "drop_oldest"]
+
+
+@dataclass(frozen=True)
+class CompactionPolicy:
+    """Select how model-facing working memory is bounded for one turn."""
+
+    strategy: CompactionStrategy = "structural_trim"
+    max_context_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -22,3 +33,4 @@ class AgentConfig:
     thinking: str | None = None
     model_api: str | None = None
     max_wall_seconds: float | None = None
+    compaction_policy: CompactionPolicy | None = None

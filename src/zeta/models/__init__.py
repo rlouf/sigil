@@ -6,6 +6,7 @@ in their transport modules.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -125,6 +126,40 @@ class ModelOutput:
         }
 
 
+class DefaultModelGateway:
+    def available(self, config: Any) -> bool:
+        if getattr(config, "model_api", None) == CODEX_RESPONSES_API:
+            return True
+        from zeta.models.chat_completions import model_endpoint_open
+
+        model_url = getattr(config, "model_url", None)
+        if model_url is None:
+            return model_endpoint_open()
+        return model_endpoint_open(model_url)
+
+    def generate(
+        self,
+        model_input: ModelInput,
+        config: Any,
+        *,
+        stream: Any | None = None,
+        telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+    ) -> ModelOutput:
+        assistant = chat_completion_messages(
+            model_input.messages,
+            api=getattr(config, "model_api", None),
+            tools=model_input.tools or [],
+            tool_choice=model_input.tool_choice,
+            selected_model=getattr(config, "model_name", None),
+            selected_url=getattr(config, "model_url", None),
+            session_id=getattr(config, "model_session_id", None),
+            stream_sink=stream,
+            telemetry_sink=telemetry_sink,
+            thinking=getattr(config, "thinking", None),
+        )
+        return ModelOutput(message=assistant)
+
+
 def provider_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
@@ -156,6 +191,7 @@ __all__ = [
     "DEFAULT_CODEX_BASE_URL",
     "DEFAULT_MODEL_NAME",
     "DEFAULT_MODEL_URL",
+    "DefaultModelGateway",
     "MODEL_APIS",
     "THINKING_EFFORTS",
     "ModelCatalog",

@@ -138,7 +138,7 @@ def can_read_skill_files(
         capability = active_registry.get(capability_id)
         if not capability:
             continue
-        if "read" in capability.spec.effects or "read" in capability.spec.aliases:
+        if "read" in capability.spec.aliases:
             return True
     return False
 

@@ -6,7 +6,7 @@ runtimes, including idempotency and sequence ordering, without creating files.
 
 from __future__ import annotations
 
-from zeta.events import AppendOutcome, DraftEvent, Event, Filter
+from zeta.events import AppendOutcome, DraftEvent, Event, Filter, immutable_payload
 
 
 class MemoryEventStore:
@@ -29,7 +29,7 @@ class MemoryEventStore:
             id=event.id,
             event_type=event.event_type,
             source=event.source,
-            payload=dict(event.payload),
+            payload=immutable_payload(event.payload),
             idempotency_key=event.idempotency_key,
             caused_by=event.caused_by,
             session_id=event.session_id,

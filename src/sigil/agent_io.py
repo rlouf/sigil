@@ -6,10 +6,11 @@ recorder missed. This module owns that skeleton; workflow modules own
 workflow-specific tagging, logging, and handoff handling.
 """
 
+import asyncio
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 from sigil.display.render import render_tool_start
 from sigil.display.state import (
@@ -39,6 +40,7 @@ from zeta.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     AgentTurnResult,
+    is_runtime_ui_event,
     registered_capabilities,
     run_agent_turn,
 )
@@ -255,10 +257,27 @@ class TurnEventRecorder:
             effects = projected_for_effects.get("effects")
             if effects is not None:
                 draft = replace(draft, payload={**draft.payload, "effects": effects})
-        persisted = self.persist(draft)
+        if is_runtime_ui_event(draft):
+            persisted = self.transient(draft)
+        else:
+            persisted = self.persist(draft)
         event_type = str(persisted.get("type") or "")
         if self.turn_recorder is not None:
             self.turn_recorder.note_runtime_event(persisted)
+        if event_type == "runtime.stream.chunk":
+            text = persisted.get("text")
+            if isinstance(text, str) and self.renderer.stream_renderer is not None:
+                self.renderer.stream_renderer.content_delta(text)
+            return
+        if event_type == "runtime.status.update":
+            text = persisted.get("text")
+            if (
+                isinstance(text, str)
+                and self.renderer.progress_renderer is not None
+                and self.renderer.progress_renderer.mode != PROGRESS_MODE_TRACE
+            ):
+                self.renderer.progress_renderer.observe_reasoning_delta(text)
+            return
         if event_type == "tool_call":
             params = persisted.get("input")
             self.handle_tool_call(
@@ -282,6 +301,24 @@ class TurnEventRecorder:
                 self.turn_recorder.turn_id if self.turn_recorder is not None else None
             ),
         )
+
+    def transient(self, draft: DraftEvent) -> dict[str, Any]:
+        payload = {
+            key: value
+            for key, value in draft.payload.items()
+            if key not in self.strip_fields
+        }
+        payload.update(self.tag_fields)
+        tagged = replace(
+            draft,
+            payload=payload,
+            session_id=self.runtime_context.session_id,
+            turn_id=(
+                self.turn_recorder.turn_id if self.turn_recorder is not None else None
+            )
+            or draft.turn_id,
+        )
+        return project_runtime_draft(tagged)
 
     def handle_tool_call(self, name: str, args: dict[str, Any]) -> None:
         self.render_tool_call(name, args)
@@ -419,6 +456,16 @@ def run_zeta_rpc_session(
     publish_event(user_event)
 
     def sink(draft: DraftEvent) -> None:
+        if is_runtime_ui_event(draft):
+            live_event = project_runtime_draft(
+                replace(
+                    draft,
+                    session_id=runtime_context.session_id,
+                    turn_id=turn_recorder.turn_id,
+                )
+            )
+            publish_event(live_event)
+            return
         persisted = record_runtime_draft(
             draft,
             runtime_context=runtime_context,
@@ -518,6 +565,21 @@ def run_zeta_rpc_session(
         "outcome": outcome,
         "final_text": result.final_text,
     }
+
+
+async def run_zeta_rpc_session_task(
+    params: dict[str, Any],
+    *,
+    publish_event: Callable[[dict[str, Any]], None],
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        run_zeta_rpc_session,
+        params,
+        publish_event=publish_event,
+    )
+
+
+cast(Any, run_zeta_rpc_session_task).__rpc_cancel_mode__ = "cooperative"
 
 
 def optional_float_param(params: dict[str, Any], key: str) -> float | None:

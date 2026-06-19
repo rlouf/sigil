@@ -1,5 +1,6 @@
 """The `events` group."""
 
+from collections.abc import Mapping
 from datetime import datetime
 
 import click
@@ -250,7 +251,7 @@ def normalized_event(event: Event) -> dict[str, object]:
         "id": event.id,
         "type": event.event_type,
         "source": event.source,
-        "payload": event.payload,
+        "payload": dict(event.payload),
         "idempotency_key": event.idempotency_key,
         "caused_by": event.caused_by,
         "session_id": event.session_id,
@@ -328,7 +329,7 @@ def format_event_time(value: object) -> str:
     return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def event_workflow(event: dict[str, object]) -> str:
+def event_workflow(event: Mapping[str, object]) -> str:
     """Return the workflow glyph or name for an event."""
     glyph = event.get("glyph")
     if isinstance(glyph, str) and glyph in WORKFLOW_GLYPHS:
@@ -351,7 +352,7 @@ def event_label(event_type: str) -> str:
     return labels.get(event_type, event_type.replace("_", " "))
 
 
-def event_detail(event: dict[str, object], event_type: str) -> str:
+def event_detail(event: Mapping[str, object], event_type: str) -> str:
     """Return the most useful human summary available on an event."""
     if event_type == "ask_requested":
         return clean_summary_text(event.get("input")) or "ask request"
@@ -366,7 +367,7 @@ def event_detail(event: dict[str, object], event_type: str) -> str:
     return fallback_event_detail(event, event_type)
 
 
-def fallback_event_detail(event: dict[str, object], event_type: str) -> str:
+def fallback_event_detail(event: Mapping[str, object], event_type: str) -> str:
     """Return the first available command/output snippet or a readable type."""
     for key in ("command", "output_snippet", "stdout_snippet", "stderr_snippet"):
         detail = clean_summary_text(event.get(key))
@@ -375,7 +376,7 @@ def fallback_event_detail(event: dict[str, object], event_type: str) -> str:
     return event_type.replace("_", " ")
 
 
-def command_status_summary(event: dict[str, object]) -> str:
+def command_status_summary(event: Mapping[str, object]) -> str:
     """Summarize a command-like event with status."""
     command = event.get("command")
     if isinstance(command, list):

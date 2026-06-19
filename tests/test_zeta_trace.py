@@ -20,10 +20,12 @@ from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
 from zeta import loop as zeta_agent
+from zeta import models as zeta_models_api
 from zeta import timeline as zeta_timeline
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
 from zeta.events import DraftEvent
+from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 from zeta.session import Session, default_session
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
@@ -856,9 +858,9 @@ def test_zeta_agent_durable_events_link_trace_objects(
     target.write_text("README\n", encoding="utf-8")
     responses = iter([read_tool_call_response(target), {"content": "done"}])
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )

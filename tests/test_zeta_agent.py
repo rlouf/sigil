@@ -1,5 +1,6 @@
 """Agent loop tests."""
 
+import asyncio
 import json
 import threading
 import time
@@ -12,7 +13,6 @@ from typing import Any, cast
 
 import pytest
 from _zeta_helpers import (
-    DeltaSink,
     assert_prompt_trace_replay_graph,
     assert_tool_call_derivation,
     assert_tool_result_derivation,
@@ -22,9 +22,11 @@ from _zeta_helpers import (
     read_tool_payload,
     required_stream_sink,
     timeline_events,
+    tool_call_fixture,
 )
 from click.testing import CliRunner
 
+from sigil import agent_io as sigil_agent_io
 from sigil.agent_io import run_zeta_rpc_session
 from sigil.cli import cli
 from sigil.tools import ensure_builtin_tools_registered
@@ -35,6 +37,7 @@ from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
 from zeta import runtime_events as zeta_runtime_events
 from zeta import session as zeta_session
+from zeta.agents.capabilities import CompactionPolicy
 from zeta.capabilities.base import (
     Capability,
     CapabilityId,
@@ -48,7 +51,12 @@ from zeta.capabilities.registry import CapabilityRegistry
 from zeta.context import builder as zeta_context
 from zeta.events import DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
-from zeta.store.events import Filter, SqliteEventStore, event_store_path
+from zeta.store.events import (
+    Filter,
+    MemoryEventStore,
+    SqliteEventStore,
+    event_store_path,
+)
 from zeta.store.substrate import InMemoryStore
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
@@ -59,6 +67,7 @@ zeta_events = SimpleNamespace(
     DraftEvent=DraftEvent,
     Event=Event,
     Filter=Filter,
+    MemoryEventStore=MemoryEventStore,
     SqliteEventStore=SqliteEventStore,
 )
 
@@ -114,9 +123,9 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
     ) -> dict[str, Any]:
         return {"content": "done", "reasoning_content": "weighing the options"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     result = zeta_agent.run_agent_turn(
@@ -132,9 +141,9 @@ def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:
 def test_zeta_agent_turn_emits_model_draft(monkeypatch) -> None:
     drafts: list[DraftEvent] = []
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {"content": "done"},
     )
@@ -448,8 +457,6 @@ def test_zeta_record_model_event_sends_same_draft_to_sink() -> None:
         trace_store=None,
         tool_registry=CapabilityRegistry(),
         builder=cast(Any, None),
-        model_status=None,
-        stream_sink=None,
         cancellation_event=None,
         deadline=None,
     )
@@ -479,8 +486,6 @@ def test_zeta_record_model_event_records_draft() -> None:
         trace_store=None,
         tool_registry=CapabilityRegistry(),
         builder=cast(Any, None),
-        model_status=None,
-        stream_sink=None,
         cancellation_event=None,
         deadline=None,
     )
@@ -524,8 +529,6 @@ def test_zeta_handle_tool_call_emits_drafts() -> None:
         trace_store=None,
         tool_registry=registry,
         builder=zeta_context.PromptBuilder(),
-        model_status=None,
-        stream_sink=None,
         cancellation_event=None,
         deadline=None,
     )
@@ -655,16 +658,16 @@ def test_zeta_request_assistant_message_returns_model_output(monkeypatch) -> Non
         return {"role": "assistant", "content": "done"}
 
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     output, streamed_content, telemetry = zeta_agent.request_assistant_message(
-        [{"role": "user", "content": "hi"}],
-        tools=[],
-        tool_choice="auto",
+        zeta_models_api.ModelInput(
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[],
+            tool_choice="auto",
+        ),
         config=zeta_agent.AgentConfig(),
-        model_status=None,
-        stream_sink=None,
     )
 
     assert output == zeta_models_api.ModelOutput(
@@ -722,10 +725,10 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
             return super().commit_prompt_plan(plan)
 
     def fake_request_assistant_message(
-        messages: list[dict[str, Any]],
+        model_input: zeta_models_api.ModelInput,
         **kwargs: object,
     ) -> tuple[zeta_models_api.ModelOutput, bool, dict[str, Any]]:
-        del messages
+        assert model_input.messages
         del kwargs
         return (
             zeta_models_api.ModelOutput(
@@ -751,8 +754,6 @@ def test_zeta_request_model_turn_builds_assistant_from_model_output(
         trace_store=None,
         tool_registry=CapabilityRegistry(),
         builder=builder,
-        model_status=None,
-        stream_sink=None,
         cancellation_event=None,
         deadline=None,
     )
@@ -808,24 +809,26 @@ def test_zeta_build_prompt_step_returns_committed_model_input() -> None:
     )
 
 
-def test_zeta_call_model_step_returns_output_and_telemetry(monkeypatch) -> None:
-    def fake_request_assistant_message(
-        messages: list[dict[str, Any]],
-        **kwargs: object,
-    ) -> tuple[zeta_models_api.ModelOutput, bool, dict[str, Any]]:
-        assert messages == [{"role": "user", "content": "answer"}]
-        assert kwargs["tools"] == []
-        return (
-            zeta_models_api.ModelOutput(message={"content": "done"}),
-            True,
-            {"usage": {"prompt_tokens": 1}},
-        )
+def test_zeta_call_model_step_returns_output_and_telemetry() -> None:
+    class FakeGateway:
+        def available(self, config: zeta_agent.AgentConfig) -> bool:
+            return True
 
-    monkeypatch.setattr(
-        zeta_agent,
-        "request_assistant_message",
-        fake_request_assistant_message,
-    )
+        def generate(
+            self,
+            model_input: zeta_models_api.ModelInput,
+            config: zeta_agent.AgentConfig,
+            *,
+            stream: zeta_agent.ModelStream | None = None,
+            telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        ) -> zeta_models_api.ModelOutput:
+            del config, stream
+            assert model_input.messages == [{"role": "user", "content": "answer"}]
+            assert model_input.tools == []
+            if telemetry_sink is not None:
+                telemetry_sink({"usage": {"prompt_tokens": 1}})
+            return zeta_models_api.ModelOutput(message={"content": "done"})
+
     state = zeta_agent.RunState()
 
     model_output, streamed_content, model_telemetry = zeta_agent.call_model_step(
@@ -836,14 +839,64 @@ def test_zeta_call_model_step_returns_output_and_telemetry(monkeypatch) -> None:
         ),
         config=zeta_agent.AgentConfig(),
         state=state,
-        model_status=None,
-        stream_sink=None,
+        model_gateway=FakeGateway(),
+        event_sink=None,
     )
 
     assert [step.step for step in state.steps] == ["call_model"]
     assert model_output == zeta_models_api.ModelOutput(message={"content": "done"})
-    assert streamed_content is True
+    assert streamed_content is False
     assert model_telemetry == {"usage": {"prompt_tokens": 1}}
+
+
+def test_zeta_agent_compaction_policy_bounds_model_input() -> None:
+    captured: dict[str, zeta_models_api.ModelInput] = {}
+
+    class FakeGateway:
+        def available(self, config: zeta_agent.AgentConfig) -> bool:
+            return True
+
+        def generate(
+            self,
+            model_input: zeta_models_api.ModelInput,
+            config: zeta_agent.AgentConfig,
+            *,
+            stream: zeta_agent.ModelStream | None = None,
+            telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
+        ) -> zeta_models_api.ModelOutput:
+            del config, stream, telemetry_sink
+            captured["model_input"] = model_input
+            return zeta_models_api.ModelOutput(message={"content": "done"})
+
+    prior_timeline = [
+        {
+            "type": "user_message",
+            "content": "old context " * 200,
+        },
+        {
+            "type": "model",
+            "content": "old answer " * 200,
+        },
+    ]
+
+    result = zeta_agent.run_agent_turn(
+        "answer now",
+        prior_timeline,
+        zeta_agent.AgentConfig(
+            max_turns=1,
+            compaction_policy=CompactionPolicy(
+                strategy="drop_oldest",
+                max_context_tokens=80,
+            ),
+        ),
+        model_gateway=FakeGateway(),
+    )
+
+    assert result.final_text == "done"
+    rendered_messages = json.dumps(captured["model_input"].messages)
+    assert "old context" not in rendered_messages
+    assert "old answer" not in rendered_messages
+    assert "answer now" in rendered_messages
 
 
 def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
@@ -892,8 +945,6 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         trace_store=None,
         tool_registry=registry,
         builder=zeta_context.PromptBuilder(),
-        model_status=None,
-        stream_sink=None,
         cancellation_event=None,
         deadline=None,
     )
@@ -989,8 +1040,6 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
         trace_store=None,
         tool_registry=registry,
         builder=zeta_context.PromptBuilder(),
-        model_status=None,
-        stream_sink=None,
         cancellation_event=None,
         deadline=None,
     )
@@ -1036,7 +1085,7 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
     output = StringIO()
     server = zeta_rpc.JsonRpcServer(input_stream, output)
 
-    server.serve()
+    asyncio.run(server.serve())
 
     assert rpc_messages(output) == [
         {
@@ -1047,6 +1096,77 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
     ]
 
 
+def test_zeta_async_rpc_initialize_returns_server_metadata() -> None:
+    async def run() -> None:
+        input_stream = StringIO(
+            json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize"}) + "\n"
+        )
+        output = StringIO()
+        server = zeta_rpc.JsonRpcServer(input_stream, output)
+
+        await server.serve()
+
+        assert rpc_messages(output) == [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"server": "zeta", "protocol": "0.1"},
+            }
+        ]
+
+    asyncio.run(run())
+
+
+def test_zeta_async_rpc_session_runs_in_task_group() -> None:
+    async def run() -> None:
+        input_stream = StringIO(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "session.run",
+                    "params": {"objective": "one"},
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "session.run",
+                    "params": {"objective": "two"},
+                }
+            )
+            + "\n"
+        )
+        output = StringIO()
+        started: list[str] = []
+        release = asyncio.Event()
+
+        async def session_runner(params: dict[str, Any]) -> dict[str, Any]:
+            objective = cast(str, params["objective"])
+            started.append(objective)
+            if len(started) == 2:
+                release.set()
+            await release.wait()
+            return {"run_id": params["_zeta_run_id"], "outcome": objective}
+
+        server = zeta_rpc.JsonRpcServer(
+            input_stream,
+            output,
+            session_runner=session_runner,
+        )
+
+        await server.serve()
+
+        messages = rpc_messages(output)
+        assert started == ["one", "two"]
+        assert {message["id"] for message in messages} == {1, 2}
+        assert {message["result"]["outcome"] for message in messages} == {"one", "two"}
+
+    asyncio.run(run())
+
+
 def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
     input_stream = StringIO(
         json.dumps({"jsonrpc": "2.0", "id": 1, "method": "missing.method"}) + "\n"
@@ -1054,7 +1174,7 @@ def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
     output = StringIO()
     server = zeta_rpc.JsonRpcServer(input_stream, output)
 
-    server.serve()
+    asyncio.run(server.serve())
 
     assert rpc_messages(output) == [
         {
@@ -1091,7 +1211,7 @@ def test_zeta_rpc_session_run_requires_objective() -> None:
         ),
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     assert rpc_messages(output) == [
         {
@@ -1107,6 +1227,68 @@ def test_zeta_rpc_session_run_requires_objective() -> None:
             },
         }
     ]
+
+
+def test_zeta_rpc_session_task_uses_shared_runner_boundary(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_rpc_session(
+        params: dict[str, Any],
+        *,
+        publish_event: Callable[[dict[str, Any]], None],
+        runtime_context: zeta_session.Session | None = None,
+    ) -> dict[str, Any]:
+        captured["params"] = params
+        captured["runtime_context"] = runtime_context
+        publish_event({"type": "seen"})
+        return {"run_id": "run-1", "outcome": "answered"}
+
+    published: list[dict[str, Any]] = []
+    monkeypatch.setattr(zeta_rpc, "run_rpc_session", fake_run_rpc_session)
+
+    result = asyncio.run(
+        zeta_rpc.run_rpc_session_task(
+            {"objective": "answer"},
+            publish_event=published.append,
+            runtime_context=None,
+        )
+    )
+
+    assert result == {"run_id": "run-1", "outcome": "answered"}
+    assert captured["params"] == {"objective": "answer"}
+    assert captured["runtime_context"] is None
+    assert published == [{"type": "seen"}]
+
+
+def test_sigil_zeta_rpc_session_task_uses_shared_runner_boundary(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_run_zeta_rpc_session(
+        params: dict[str, Any],
+        *,
+        publish_event: Callable[[dict[str, Any]], None],
+    ) -> dict[str, Any]:
+        captured["params"] = params
+        publish_event({"type": "seen"})
+        return {"turn_id": "turn-1", "outcome": "answered", "final_text": "done"}
+
+    published: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        sigil_agent_io,
+        "run_zeta_rpc_session",
+        fake_run_zeta_rpc_session,
+    )
+
+    result = asyncio.run(
+        sigil_agent_io.run_zeta_rpc_session_task(
+            {"objective": "answer"},
+            publish_event=published.append,
+        )
+    )
+
+    assert result == {"turn_id": "turn-1", "outcome": "answered", "final_text": "done"}
+    assert captured["params"] == {"objective": "answer"}
+    assert published == [{"type": "seen"}]
 
 
 def test_zeta_rpc_session_run_rejects_invalid_workflow() -> None:
@@ -1131,7 +1313,7 @@ def test_zeta_rpc_session_run_rejects_invalid_workflow() -> None:
         ),
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     assert rpc_messages(output) == [
         {
@@ -1256,6 +1438,56 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
         "runtime.work.claimed",
         "runtime.work.completed",
     ]
+
+
+def test_zeta_async_event_dispatcher_runs_matching_agents_in_task_group() -> None:
+    async def run() -> None:
+        event_store = zeta_events.MemoryEventStore()
+        started: list[str] = []
+        release = asyncio.Event()
+
+        async def run_agent(run: zeta_dispatch.AgentRun) -> dict[str, Any]:
+            started.append(run.agent.agent_id)
+            if len(started) == 2:
+                release.set()
+            await release.wait()
+            return {"outcome": "handled", "agent": run.agent.agent_id}
+
+        dispatcher = zeta_dispatch.AsyncEventDispatcher(
+            event_store,
+            agents=[
+                zeta_dispatch.AgentDefinition(
+                    "agent.one",
+                    zeta_dispatch.TriggerRule(event_type="github.issue.opened"),
+                    run=run_agent,
+                ),
+                zeta_dispatch.AgentDefinition(
+                    "agent.two",
+                    zeta_dispatch.TriggerRule(event_type="github.issue.opened"),
+                    run=run_agent,
+                ),
+            ],
+        )
+
+        outcome = await dispatcher.dispatch(
+            zeta_events.DraftEvent("github.issue.opened", "github", {})
+        )
+
+        assert started == ["agent.one", "agent.two"]
+        assert [event.event_type for event in outcome.work_events] == [
+            "runtime.work.pending",
+            "runtime.work.claimed",
+            "runtime.work.completed",
+            "runtime.work.pending",
+            "runtime.work.claimed",
+            "runtime.work.completed",
+        ]
+        assert [result["agent"] for result in outcome.agent_results] == [
+            "agent.one",
+            "agent.two",
+        ]
+
+    asyncio.run(run())
 
 
 def test_zeta_event_dispatcher_matches_exact_event_type(tmp_path: Path) -> None:
@@ -1450,9 +1682,9 @@ def test_sigil_zeta_rpc_cli_serves_stdio_initialize() -> None:
 
 
 def test_zeta_rpc_cli_runs_pure_session_without_sigil_turn(monkeypatch) -> None:
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {"content": "done"},
     )
@@ -1541,14 +1773,14 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
         publish_event=server.publish_event,
     )
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {"content": "done"},
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     messages = rpc_messages(output)
     response = messages[-1]
@@ -1608,9 +1840,9 @@ def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> 
     )
     published: list[dict[str, Any]] = []
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {"content": "done"},
     )
@@ -1683,9 +1915,9 @@ def test_zeta_rpc_session_result_returns_prompt_trace_refs(
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {"content": "done"},
     )
@@ -1745,9 +1977,9 @@ def test_zeta_rpc_tool_run_result_returns_tool_trace_refs(
         ]
     )
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
@@ -1783,9 +2015,9 @@ def test_zeta_rpc_session_trace_refs_degrade_when_trace_data_is_missing(
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {"content": "done"},
     )
@@ -1824,9 +2056,9 @@ def test_zeta_rpc_sequential_runs_get_distinct_run_ids(
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {"content": "done"},
     )
@@ -1868,9 +2100,9 @@ def test_zeta_rpc_session_returns_aborted_on_wall_clock_budget(
         raise AssertionError("expired turn must not request the model")
 
     monkeypatch.setattr(zeta_agent, "time_monotonic", lambda: 10.0)
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fail_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fail_chat_completion_messages
     )
 
     result = zeta_rpc.run_rpc_session(
@@ -1923,7 +2155,7 @@ def test_zeta_rpc_cancel_unknown_and_completed_runs() -> None:
     server.runs["run_done"] = zeta_rpc.RpcRunState(
         run_id="run_done",
         request_id=1,
-        cancellation_event=threading.Event(),
+        cancellation_event=asyncio.Event(),
         status="completed",
     )
 
@@ -1934,90 +2166,182 @@ def test_zeta_rpc_cancel_unknown_and_completed_runs() -> None:
     }
 
 
-def test_zeta_rpc_session_cancel_aborts_active_run(
-    monkeypatch,
-    tmp_path: Path,
+def test_zeta_async_rpc_session_cancel_sets_async_cancellation_event(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-    context = zeta_session.Session(
-        session_id="ctx-session",
-        event_sink=event_store,
-        trace_store=zeta_trace.InMemoryStore(),
-        tool_registry=CapabilityRegistry(),
-        state_dir=tmp_path,
-        session_dir=tmp_path / "sessions" / "ctx-session",
-    )
-    input_stream = StringIO(
-        json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "session.run",
-                "params": {"objective": "answer", "tools": [], "context": ""},
-            }
+    async def run() -> None:
+        input_stream = StringIO(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "session.run",
+                    "params": {"objective": "wait"},
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "session.cancel",
+                    "params": {"run_id": "run_async_cancel"},
+                }
+            )
+            + "\n"
         )
-        + "\n"
-        + json.dumps(
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "session.cancel",
-                "params": {"run_id": "run_cancel", "reason": "user_request"},
+        output = StringIO()
+
+        async def session_runner(params: dict[str, Any]) -> dict[str, Any]:
+            cancellation_event = params["_zeta_cancellation_event"]
+            await cancellation_event.wait()
+            return {
+                "run_id": params["_zeta_run_id"],
+                "outcome": "aborted",
+                "final_text": "",
             }
+
+        server = zeta_rpc.JsonRpcServer(
+            input_stream,
+            output,
+            session_runner=session_runner,
         )
-        + "\n"
-    )
-    output = StringIO()
-    server = zeta_rpc.JsonRpcServer(input_stream, output)
-    server.session_runner = lambda params: zeta_rpc.run_rpc_session(
-        params,
-        publish_event=server.publish_event,
-        runtime_context=context,
-    )
 
-    def wait_for_cancel(*args: object, **kwargs: object) -> dict[str, str]:
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
-            run = server.runs.get("run_cancel")
-            if run is not None and run.cancellation_event.is_set():
-                return {"content": "cancel observed"}
-            time.sleep(0.001)
-        raise AssertionError("cancel request was not delivered")
+        monkeypatch.setattr(zeta_rpc, "rpc_run_id", lambda: "run_async_cancel")
+        await server.serve()
 
-    monkeypatch.setattr(zeta_rpc, "rpc_run_id", lambda: "run_cancel")
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
-    monkeypatch.setattr(zeta_agent, "chat_completion_messages", wait_for_cancel)
+        messages = rpc_messages(output)
+        cancel_response = next(
+            message for message in messages if message.get("id") == 2
+        )
+        run_response = next(message for message in messages if message.get("id") == 1)
 
-    server.serve()
+        assert cancel_response["result"] == {
+            "cancelled": True,
+            "run_id": "run_async_cancel",
+        }
+        assert run_response["result"]["outcome"] == "aborted"
+        assert run_response["result"]["run_id"] == "run_async_cancel"
 
-    messages = rpc_messages(output)
-    cancel_response = next(message for message in messages if message.get("id") == 2)
-    run_response = next(message for message in messages if message.get("id") == 1)
-    published = [
-        message["params"]["event"]
-        for message in messages
-        if message.get("method") == "events.publish"
-    ]
+    asyncio.run(run())
 
-    assert cancel_response["result"] == {
-        "cancelled": True,
-        "run_id": "run_cancel",
-    }
-    assert run_response["result"]["outcome"] == "aborted"
-    assert run_response["result"]["run_id"] == "run_cancel"
-    assert published[-1]["type"] == "runtime.work.cancelled"
-    assert published[-2]["type"] == "turn_aborted"
-    assert published[-2]["reason"] == "cancelled"
-    assert [
-        event.event_type for event in event_store.list_events(zeta_events.Filter())
-    ] == [
-        "session.turn.requested",
-        "runtime.work.pending",
-        "runtime.work.claimed",
-        "zeta.user_message",
-        "zeta.turn.failed",
-        "runtime.work.cancelled",
-    ]
+
+def test_zeta_async_rpc_session_cancel_cancels_native_async_runner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        input_stream = StringIO(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "session.run",
+                    "params": {"objective": "wait"},
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "session.cancel",
+                    "params": {"run_id": "run_native_cancel"},
+                }
+            )
+            + "\n"
+        )
+        output = StringIO()
+        cancelled = asyncio.Event()
+
+        async def session_runner(params: dict[str, Any]) -> dict[str, Any]:
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return {
+                "run_id": params["_zeta_run_id"],
+                "outcome": "completed",
+            }
+
+        server = zeta_rpc.JsonRpcServer(
+            input_stream,
+            output,
+            session_runner=session_runner,
+        )
+
+        monkeypatch.setattr(zeta_rpc, "rpc_run_id", lambda: "run_native_cancel")
+        await server.serve()
+
+        messages = rpc_messages(output)
+        cancel_response = next(
+            message for message in messages if message.get("id") == 2
+        )
+        run_response = next(message for message in messages if message.get("id") == 1)
+
+        assert cancelled.is_set()
+        assert cancel_response["result"] == {
+            "cancelled": True,
+            "run_id": "run_native_cancel",
+        }
+        assert run_response["result"] == {
+            "run_id": "run_native_cancel",
+            "outcome": "aborted",
+            "final_text": "",
+        }
+
+    asyncio.run(run())
+
+
+def test_zeta_async_rpc_session_cancel_keeps_cooperative_task_runner_alive() -> None:
+    async def run() -> None:
+        output = StringIO()
+        server = zeta_rpc.JsonRpcServer(StringIO(), output)
+        released = asyncio.Event()
+        completed = asyncio.Event()
+
+        async def cooperative_runner(params: dict[str, Any]) -> dict[str, Any]:
+            await released.wait()
+            completed.set()
+            return {
+                "run_id": params["_zeta_run_id"],
+                "outcome": "aborted",
+                "final_text": "",
+            }
+
+        cast(Any, cooperative_runner).__rpc_cancel_mode__ = "cooperative"
+        state = zeta_rpc.RpcRunState(
+            run_id="run_cooperative_cancel",
+            request_id=1,
+            cancellation_event=asyncio.Event(),
+            cancel_mode="cooperative",
+        )
+        server.runs[state.run_id] = state
+        server.session_runner = cooperative_runner
+
+        state.task = asyncio.create_task(
+            server.complete_session_run(
+                state,
+                {
+                    "_zeta_run_id": state.run_id,
+                    "_zeta_cancellation_event": state.cancellation_event,
+                },
+            )
+        )
+        cancel_result = server.cancel_session({"run_id": state.run_id})
+
+        assert cancel_result == {"cancelled": True, "run_id": state.run_id}
+        assert state.cancellation_event.is_set()
+        assert state.task is not None
+        assert not state.task.cancelled()
+
+        released.set()
+        await state.task
+
+        assert completed.is_set()
+        assert state.status == "cancelled"
+
+    asyncio.run(run())
 
 
 def test_zeta_rpc_registers_client_tool_on_server_registry() -> None:
@@ -2132,7 +2456,7 @@ def test_zeta_rpc_rejects_missing_client_tool_schema() -> None:
         input_stream, output, tool_registry=CapabilityRegistry()
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     message = rpc_messages(output)[0]
     assert message["error"]["code"] == -32602
@@ -2166,7 +2490,7 @@ def test_zeta_rpc_rejects_invalid_client_tool_schema() -> None:
         input_stream, output, tool_registry=CapabilityRegistry()
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     message = rpc_messages(output)[0]
     assert message["error"]["code"] == -32602
@@ -2252,7 +2576,7 @@ def test_zeta_rpc_allows_client_alias_to_coexist_with_other_provider() -> None:
         tool_registry=registry,
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     assert rpc_messages(output) == [
         {
@@ -2354,7 +2678,7 @@ def test_zeta_rpc_rejects_privileged_client_tool_trust() -> None:
         input_stream, output, tool_registry=CapabilityRegistry()
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     message = rpc_messages(output)[0]
     assert message["error"]["code"] == -32602
@@ -2390,7 +2714,7 @@ def test_zeta_rpc_rejects_non_rpc_client_tool_provider() -> None:
         input_stream, output, tool_registry=CapabilityRegistry()
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     message = rpc_messages(output)[0]
     assert message["error"]["code"] == -32602
@@ -2433,7 +2757,7 @@ def test_zeta_rpc_rejects_reregistering_client_owned_tool() -> None:
         tool_registry=CapabilityRegistry(),
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     assert rpc_messages(output) == [
         {
@@ -2602,11 +2926,19 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
     )
     output = StringIO()
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda *args: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda *args: True)
+
+    def fake_chat_completion_messages(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        stream = kwargs.get("stream_sink")
+        assert stream is not None
+        stream.content_delta("do")
+        stream.content_delta("ne")
+        return {"content": "done"}
+
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
-        lambda *args, **kwargs: {"content": "done"},
+        fake_chat_completion_messages,
     )
 
     server = zeta_rpc.JsonRpcServer(input_stream, output)
@@ -2615,7 +2947,7 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
         publish_event=server.publish_event,
     )
 
-    server.serve()
+    asyncio.run(server.serve())
 
     messages = rpc_messages(output)
     published = [
@@ -2627,6 +2959,8 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
 
     assert [event["type"] for event in published] == [
         "user_message",
+        "runtime.stream.chunk",
+        "runtime.stream.chunk",
         "model",
         "zeta.turn.completed",
     ]
@@ -2638,10 +2972,14 @@ def test_zeta_rpc_session_run_streams_events_and_returns_turn(
         model_events = event_store.list_events(
             Filter(event_type="zeta.model_call.completed")
         )
+        stream_events = event_store.list_events(
+            Filter(event_type="runtime.stream.chunk")
+        )
     finally:
         event_store.close()
     assert len(model_events) == 1
-    assert model_events[0].id == published[1]["id"]
+    assert stream_events == []
+    assert model_events[0].id == published[3]["id"]
     assert model_events[0].caused_by == published[0]["id"]
 
 
@@ -2690,7 +3028,7 @@ def test_zeta_rpc_events_list_pages_in_append_order(tmp_path: Path) -> None:
     output = StringIO()
     server = zeta_rpc.JsonRpcServer(input_stream, output, event_reader=event_store)
 
-    server.serve()
+    asyncio.run(server.serve())
 
     first, second = rpc_messages(output)
     assert [event["content"] for event in first["result"]["events"]] == ["one", "two"]
@@ -2736,7 +3074,7 @@ def test_zeta_rpc_events_list_filters_by_session_and_run(tmp_path: Path) -> None
     output = StringIO()
     server = zeta_rpc.JsonRpcServer(input_stream, output, event_reader=event_store)
 
-    server.serve()
+    asyncio.run(server.serve())
 
     assert [
         event["content"] for event in rpc_messages(output)[0]["result"]["events"]
@@ -2761,7 +3099,7 @@ def test_zeta_rpc_events_subscribe_filters_after_cursor() -> None:
     output = StringIO()
     server = zeta_rpc.JsonRpcServer(input_stream, output)
 
-    server.serve()
+    asyncio.run(server.serve())
     server.publish_event({"type": "user_message", "content": "old", "cursor": "1"})
     server.publish_event({"type": "user_message", "content": "new", "cursor": "2"})
 
@@ -2789,7 +3127,7 @@ def test_zeta_rpc_events_subscribe_filters_by_session_and_run() -> None:
     output = StringIO()
     server = zeta_rpc.JsonRpcServer(input_stream, output)
 
-    server.serve()
+    asyncio.run(server.serve())
     server.publish_event(
         {
             "type": "user_message",
@@ -2877,9 +3215,9 @@ def test_zeta_agent_turn_uses_explicit_tool_registry(monkeypatch) -> None:
         ]
     )
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
@@ -2932,9 +3270,9 @@ def test_zeta_agent_turn_resolves_model_alias_through_projection(monkeypatch) ->
         invoked.append((capability_id, params))
         return {"ok": True, "content": [{"type": "text", "text": "ok"}]}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
@@ -2975,9 +3313,9 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     zeta_agent.run_agent_turn(
@@ -3024,9 +3362,9 @@ def test_zeta_agent_tool_call_is_caused_by_assistant_event(
             ],
         }
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     result = zeta_agent.run_agent_turn(
@@ -3059,9 +3397,9 @@ def test_zeta_agent_turn_finalizes_text(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     result = zeta_agent.run_agent_turn(
@@ -3099,9 +3437,9 @@ def test_zeta_agent_turn_stores_prompt_and_assistant_trace(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     result = zeta_agent.run_agent_turn(
@@ -3162,9 +3500,9 @@ def test_zeta_agent_turn_captures_model_telemetry(monkeypatch) -> None:
         )
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     result = zeta_agent.run_agent_turn(
@@ -3242,9 +3580,9 @@ def test_zeta_agent_turn_attaches_model_telemetry_to_first_tool_result(
         telemetry_sink(telemetry)
         return response
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     result = zeta_agent.run_agent_turn(
@@ -3272,9 +3610,9 @@ def test_zeta_agent_turn_records_one_prompt_trace_per_model_request(
     store = zeta_trace.InMemoryStore()
     responses = iter([read_tool_call_response(target), {"content": "done"}])
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda messages, **kwargs: next(responses),
     )
@@ -3320,9 +3658,9 @@ def test_zeta_agent_turn_records_tool_result_derivation(
     store = zeta_trace.InMemoryStore()
     responses = iter([read_tool_call_response(target), {"content": "done"}])
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda messages, **kwargs: next(responses),
     )
@@ -3349,45 +3687,8 @@ def test_zeta_agent_turn_records_tool_result_derivation(
         assert_prompt_trace_replay_graph(store, trace)
 
 
-def test_zeta_agent_turn_wraps_model_request_in_status(monkeypatch) -> None:
-    events: list[str] = []
-
-    class Status:
-        def __enter__(self) -> object:
-            events.append("start")
-            return self
-
-        def __exit__(self, *exc: object) -> bool:
-            events.append("stop")
-            return False
-
-    def fake_chat_completion_messages(
-        *args: object, **kwargs: object
-    ) -> dict[str, Any]:
-        del args, kwargs
-        assert events == ["start"]
-        return {"content": "done"}
-
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(
-        zeta_agent,
-        "chat_completion_messages",
-        fake_chat_completion_messages,
-    )
-
-    result = zeta_agent.run_agent_turn(
-        "answer",
-        [],
-        zeta_agent.AgentConfig(),
-        model_status=Status,
-    )
-
-    assert result.final_text == "done"
-    assert events == ["start", "stop"]
-
-
-def test_zeta_agent_turn_forwards_content_deltas_and_marks_final(monkeypatch) -> None:
-    sink = DeltaSink()
+def test_zeta_agent_turn_emits_stream_chunks_and_marks_final(monkeypatch) -> None:
+    emitted: list[DraftEvent] = []
 
     def fake_chat_completion_messages(
         *args: object,
@@ -3399,9 +3700,9 @@ def test_zeta_agent_turn_forwards_content_deltas_and_marks_final(monkeypatch) ->
         stream_sink.content_delta("lo")
         return {"content": "hello"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -3410,31 +3711,19 @@ def test_zeta_agent_turn_forwards_content_deltas_and_marks_final(monkeypatch) ->
         "answer",
         [],
         zeta_agent.AgentConfig(max_turns=1),
-        stream_sink=sink,
+        event_sink=emitted.append,
     )
 
-    assert sink.deltas == ["hel", "lo"]
+    stream_chunks = [
+        draft for draft in emitted if draft.event_type == "runtime.stream.chunk"
+    ]
+    assert [draft.payload["text"] for draft in stream_chunks] == ["hel", "lo"]
     assert result.final_text == "hello"
     assert result.final_text_streamed is True
 
 
-def test_zeta_agent_reasoning_deltas_feed_status_without_closing_it(
-    monkeypatch,
-) -> None:
-    events: list[str] = []
-
-    class Status:
-        def __enter__(self) -> object:
-            events.append("start")
-            return self
-
-        def __exit__(self, *exc: object) -> bool:
-            events.append("stop")
-            return False
-
-        def reasoning_delta(self, text: str) -> None:
-            assert "stop" not in events
-            events.append(f"reasoning:{text}")
+def test_zeta_agent_reasoning_deltas_emit_status_updates(monkeypatch) -> None:
+    emitted: list[DraftEvent] = []
 
     def fake_chat_completion_messages(
         *args: object,
@@ -3446,9 +3735,9 @@ def test_zeta_agent_reasoning_deltas_feed_status_without_closing_it(
         stream_sink.content_delta("done")
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -3457,95 +3746,54 @@ def test_zeta_agent_reasoning_deltas_feed_status_without_closing_it(
         "answer",
         [],
         zeta_agent.AgentConfig(max_turns=1),
-        stream_sink=DeltaSink(),
-        model_status=Status,
+        event_sink=emitted.append,
     )
 
     assert result.final_text == "done"
-    assert events == ["start", "reasoning:mull", "stop"]
+    status_updates = [
+        draft for draft in emitted if draft.event_type == "runtime.status.update"
+    ]
+    assert [draft.payload["text"] for draft in status_updates] == ["mull"]
 
 
-def test_zeta_agent_reasoning_deltas_are_dropped_without_status(monkeypatch) -> None:
-    # A bare sink (no status renderer) must not receive reasoning text in
-    # its answer stream, and nothing may crash.
-    sink = DeltaSink()
+def test_zeta_agent_runtime_ui_events_do_not_feed_next_prompt(monkeypatch) -> None:
+    captured: list[list[dict[str, Any]]] = []
+    responses = iter(
+        [
+            {"content": "streaming answer", "tool_calls": tool_call_fixture()},
+            {"content": "done"},
+        ]
+    )
 
     def fake_chat_completion_messages(
-        *args: object,
+        messages: list[dict[str, Any]],
         **kwargs: object,
     ) -> dict[str, Any]:
-        del args
+        captured.append(messages)
         stream_sink = required_stream_sink(kwargs)
-        stream_sink.reasoning_delta("mull")
-        stream_sink.content_delta("done")
-        return {"content": "done"}
+        stream_sink.content_delta("streaming answer")
+        return next(responses)
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
+    )
+    monkeypatch.setattr(
+        zeta_agent,
+        "invoke_capability",
+        lambda name, params: {"ok": True, "content": [{"type": "text", "text": name}]},
     )
 
     result = zeta_agent.run_agent_turn(
         "answer",
         [],
-        zeta_agent.AgentConfig(max_turns=1),
-        stream_sink=sink,
+        zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
     )
 
     assert result.final_text == "done"
-    assert sink.deltas == ["done"]
-    assert sink.reasoning_deltas == []
-
-
-def test_zeta_agent_turn_stops_status_before_first_stream_delta(monkeypatch) -> None:
-    events: list[str] = []
-
-    class Status:
-        def __enter__(self) -> object:
-            events.append("start")
-            return self
-
-        def __exit__(self, *exc: object) -> bool:
-            events.append("stop")
-            return False
-
-    class AssertingSink:
-        def content_delta(self, text: str) -> None:
-            assert text == "done"
-            assert events == ["start", "stop"]
-            events.append("delta")
-
-        def reasoning_delta(self, text: str) -> None:
-            del text
-
-    def fake_chat_completion_messages(
-        *args: object,
-        **kwargs: object,
-    ) -> dict[str, Any]:
-        del args
-        stream_sink = required_stream_sink(kwargs)
-        stream_sink.content_delta("done")
-        return {"content": "done"}
-
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
-    monkeypatch.setattr(
-        zeta_agent,
-        "chat_completion_messages",
-        fake_chat_completion_messages,
-    )
-
-    result = zeta_agent.run_agent_turn(
-        "answer",
-        [],
-        zeta_agent.AgentConfig(max_turns=1),
-        model_status=Status,
-        stream_sink=AssertingSink(),
-    )
-
-    assert result.final_text == "done"
-    assert events == ["start", "stop", "delta"]
+    assert all("runtime.stream.chunk" not in str(message) for message in captured[1])
 
 
 def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
@@ -3563,9 +3811,9 @@ def test_zeta_agent_turn_uses_request_model(monkeypatch) -> None:
         captured["kwargs"] = kwargs
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", fake_model_endpoint_open)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", fake_model_endpoint_open)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     result = zeta_agent.run_agent_turn(
@@ -3614,9 +3862,9 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     )
     ran: list[tuple[str, dict[str, Any]]] = []
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
@@ -3663,7 +3911,7 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
 
 
 def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
-    sink = DeltaSink()
+    emitted: list[DraftEvent] = []
     responses = iter(
         [
             {
@@ -3695,9 +3943,9 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
             stream_sink.content_delta(str(response["content"]))
         return response
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -3714,13 +3962,24 @@ def test_zeta_agent_turn_streams_text_between_tool_turns(monkeypatch) -> None:
         "inspect",
         [],
         zeta_agent.AgentConfig(allowed_capabilities=("read",), max_turns=2),
-        stream_sink=sink,
+        event_sink=emitted.append,
     )
 
-    assert sink.deltas == ["I'll inspect README.", "It is a README."]
+    stream_chunks = [
+        draft for draft in emitted if draft.event_type == "runtime.stream.chunk"
+    ]
+    assert [draft.payload["text"] for draft in stream_chunks] == [
+        "I'll inspect README.",
+        "It is a README.",
+    ]
     assert result.final_text == "It is a README."
     assert result.final_text_streamed is True
-    assert timeline_events(result.events)[0]["content"] == "I'll inspect README."
+    model_events = [
+        event
+        for event in timeline_events(result.events)
+        if event.get("type") == "model"
+    ]
+    assert model_events[0]["content"] == "I'll inspect README."
 
 
 def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> None:
@@ -3734,9 +3993,9 @@ def test_zeta_agent_turn_does_not_duplicate_current_objective(monkeypatch) -> No
         captured["messages"] = messages
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -3788,9 +4047,9 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
         captured.append(messages)
         return next(responses)
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -3833,9 +4092,9 @@ def test_zeta_agent_turn_orders_prior_timeline_before_current_events(
 def test_zeta_agent_turn_streams_tool_call_before_running_tool(monkeypatch) -> None:
     streamed: list[DraftEvent] = []
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {
             "tool_calls": [
@@ -3911,9 +4170,9 @@ def test_zeta_agent_turn_stops_after_staged_tool(monkeypatch) -> None:
             ]
         }
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
     monkeypatch.setattr(
         zeta_agent,
@@ -3985,9 +4244,9 @@ def test_zeta_agent_turn_stops_after_capability_policy_stage_success(
             ]
         }
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -4040,9 +4299,9 @@ def test_zeta_agent_direct_mode_continues_after_bash(monkeypatch) -> None:
         requests += 1
         return next(responses)
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     result = zeta_agent.run_agent_turn(
@@ -4083,9 +4342,9 @@ def test_zeta_agent_turn_stops_after_default_max_turns(monkeypatch) -> None:
             ]
         }
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
     monkeypatch.setattr(
         zeta_agent, "invoke_capability", lambda name, params, **kwargs: {"ok": True}
@@ -4109,9 +4368,9 @@ def test_zeta_agent_turn_aborts_before_model_when_cancelled(monkeypatch) -> None
     def fail_chat_completion_messages(*args: object, **kwargs: object) -> dict:
         raise AssertionError("cancelled turn must not request the model")
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fail_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fail_chat_completion_messages
     )
 
     with pytest.raises(zeta_agent.AgentTurnAborted) as raised:
@@ -4155,9 +4414,9 @@ def test_zeta_agent_turn_aborts_on_deadline_between_model_turns(
     monotonic = iter([0.0, 0.0, 0.0, 2.0])
 
     monkeypatch.setattr(zeta_agent, "time_monotonic", lambda: next(monotonic))
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
@@ -4236,9 +4495,9 @@ def test_zeta_agent_turn_converts_tool_crash_to_error_result(monkeypatch) -> Non
         del args, kwargs
         return next(responses)
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
     monkeypatch.setattr(zeta_agent, "invoke_capability", crash_invoke)
 
@@ -4268,9 +4527,9 @@ def test_zeta_agent_turn_rejects_schema_mismatch_before_running(monkeypatch) -> 
         ran = True
         return {"ok": True}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {
             "tool_calls": [
@@ -4312,9 +4571,9 @@ def test_zeta_agent_turn_rejects_disallowed_tool_before_running(monkeypatch) -> 
         ran = True
         return {"ok": True}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: {
             "tool_calls": [
@@ -4388,9 +4647,9 @@ def test_zeta_agent_direct_mode_continues_after_edit(
         requests += 1
         return next(responses)
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -4414,7 +4673,7 @@ def test_zeta_agent_codex_api_skips_endpoint_probe(monkeypatch) -> None:
     def fail_probe(url: str | None = None) -> bool:
         raise AssertionError("codex profiles must not probe a local endpoint")
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", fail_probe)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", fail_probe)
 
     config = zeta_agent.AgentConfig(model_api="codex-responses")
 
@@ -4431,9 +4690,9 @@ def test_zeta_agent_turn_passes_api_to_the_model(monkeypatch) -> None:
         captured.update(kwargs)
         return {"content": "done"}
 
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent, "chat_completion_messages", fake_chat_completion_messages
+        zeta_models_api, "chat_completion_messages", fake_chat_completion_messages
     )
 
     zeta_agent.run_agent_turn(

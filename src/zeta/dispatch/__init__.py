@@ -3,6 +3,7 @@
 from zeta.dispatch.dispatcher import (
     AgentDefinition,
     AgentRun,
+    AsyncEventDispatcher,
     DispatchMode,
     DispatchOutcome,
     EventDispatcher,
@@ -14,6 +15,7 @@ from zeta.dispatch.dispatcher import (
 __all__ = [
     "AgentDefinition",
     "AgentRun",
+    "AsyncEventDispatcher",
     "DispatchMode",
     "DispatchOutcome",
     "EventDispatcher",

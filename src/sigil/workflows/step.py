@@ -5,7 +5,7 @@ CLI workflow steps on the same Zeta service layer without an external agent.
 """
 
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
@@ -20,7 +20,7 @@ from sigil.agent_io import (
     render_final_text,
 )
 from sigil.display.render import render_tool_result_summary
-from sigil.display.state import PROGRESS_MODE_TRACE, thinking_status_factory
+from sigil.display.state import PROGRESS_MODE_TRACE
 from sigil.display.summarize import render_handoff_lines
 from sigil.protocols import (
     SHELL_HANDOFF_RESULT_SCHEMA,
@@ -191,15 +191,6 @@ def step(
             ),
             context=context,
             event_sink=recorder.record,
-            model_status=thinking_status_factory(
-                output,
-                before_start=(
-                    context_footer.clear if context_footer is not None else None
-                ),
-                detail=turn_status_detail(renderer),
-                reasoning_observer=progress_reasoning_observer(renderer),
-            ),
-            stream_sink=renderer.stream_renderer,
             trace_store=runtime_context.trace_store,
             tool_registry=runtime_context.tool_registry,
             caused_by=turn_recorder.root_event_id,
@@ -388,28 +379,6 @@ def record_user_message(
         )
     )
     return timeline_event_from_durable_event(outcome.event)
-
-
-def turn_status_detail(renderer: TurnRenderer) -> Callable[[], str]:
-    def detail() -> str:
-        if renderer.progress_renderer is not None:
-            progress = renderer.progress_renderer.status_detail()
-            if progress:
-                return progress
-        if renderer.context_footer is not None:
-            return renderer.context_footer.current_line()
-        return ""
-
-    return detail
-
-
-def progress_reasoning_observer(renderer: TurnRenderer) -> Callable[[str], None] | None:
-    if (
-        renderer.progress_renderer is None
-        or renderer.progress_renderer.mode == PROGRESS_MODE_TRACE
-    ):
-        return None
-    return renderer.progress_renderer.observe_reasoning_delta
 
 
 def finalize_progress(renderer: TurnRenderer, turn: dict[str, Any]) -> None:

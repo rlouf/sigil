@@ -1,10 +1,12 @@
 """Command-line entrypoint for the Zeta runtime."""
 
+import asyncio
 import sys
+from functools import partial
 
 import click
 
-from zeta.rpc import JsonRpcServer, run_rpc_session, session_event_dispatcher
+from zeta.rpc import JsonRpcServer, run_rpc_session_task, session_event_dispatcher
 from zeta.session import default_session
 from zeta.store.events import EventReader
 
@@ -33,8 +35,9 @@ def rpc(stdio: bool) -> int:
         event_reader=event_reader,
         event_sink=runtime_context.event_sink,
     )
-    server.session_runner = lambda params: run_rpc_session(
-        params,
+
+    server.session_runner = partial(
+        run_rpc_session_task,
         publish_event=server.publish_event,
         runtime_context=runtime_context,
     )
@@ -42,7 +45,7 @@ def rpc(stdio: bool) -> int:
         runtime_context,
         publish_event=server.publish_event,
     )
-    server.serve()
+    asyncio.run(server.serve())
     return 0
 
 

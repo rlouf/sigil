@@ -1,19 +1,19 @@
 """Newline-delimited JSON-RPC transport for the Zeta runtime."""
 
+import asyncio
+import inspect
 import json
 import os
 import select
-import threading
 import time
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass, field, replace
-from typing import Any, Literal, TextIO, cast
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any, Literal, Protocol, TextIO, cast
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.base import (
     EFFECT_KINDS,
     READ_ONLY_EFFECT_KINDS,
@@ -28,28 +28,38 @@ from zeta.capabilities.base import (
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.dispatch import AgentDefinition, AgentRun, EventDispatcher, TriggerRule
+from zeta.dispatch import EventDispatcher
 from zeta.events import DraftEvent, Event, EventSink
-from zeta.loop import (
-    AgentTurnAborted,
-    AgentTurnResult,
-    registered_capabilities,
-    run_agent_turn,
-)
 from zeta.runtime_events import runtime_event_draft
-from zeta.session import Session, default_session
-from zeta.store.events import EventReader, Filter
-from zeta.timeline import (
-    current_timeline,
-    timeline_event_from_durable_event,
+from zeta.session import (
+    Session,
+    SessionRequestError,
+    default_session,
+    durable_event_for_session_event,
+    empty_session_trace_result,
+    generic_session_event_from_durable_event,
+    session_event_dispatcher,
+    session_event_from_durable_event,
+    session_event_with_cursor,
+    session_run_id,
+    session_turn_requested_draft,
 )
+from zeta.store.events import EventReader, Filter
 
 RpcSessionRunner = Callable[[dict[str, Any]], dict[str, Any]]
+AsyncRpcSessionRunner = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
 RpcRunStatus = Literal["running", "cancelling", "completed", "cancelled", "failed"]
+RpcCancelMode = Literal["cooperative", "task"]
 READ_TIMEOUT = object()
 RPC_RUN_ID_PARAM = "_zeta_run_id"
 RPC_CANCELLATION_EVENT_PARAM = "_zeta_cancellation_event"
+
+
+class RpcCancellation(Protocol):
+    def is_set(self) -> bool: ...
+
+    def set(self) -> Any: ...
 
 
 @dataclass
@@ -65,8 +75,10 @@ class ClientToolCall:
 class RpcRunState:
     run_id: str
     request_id: Any
-    cancellation_event: threading.Event
+    cancellation_event: asyncio.Event
+    task: asyncio.Task[None] | None = None
     status: RpcRunStatus = "running"
+    cancel_mode: RpcCancelMode = "cooperative"
 
 
 @dataclass(frozen=True)
@@ -77,43 +89,16 @@ class EventSubscription:
     run_id: str | None = None
 
 
-def record_user_message(
-    event: dict[str, Any],
-    *,
-    runtime_context: Session,
-) -> dict[str, Any]:
-    payload = {key: value for key, value in event.items() if key != "type"}
-    payload["_timeline_type"] = "user_message"
-    outcome = runtime_context.event_sink.accept(
-        DraftEvent(
-            event_type="zeta.user_message",
-            source="zeta",
-            payload=payload,
-            idempotency_key=None,
-            caused_by=None,
-            session_id=runtime_context.session_id,
-            turn_id=event.get("turn_id")
-            if isinstance(event.get("turn_id"), str)
-            else None,
-        )
-    )
-    return timeline_event_from_durable_event(outcome.event)
-
-
-def record_runtime_draft(
-    draft: DraftEvent,
-    *,
-    runtime_context: Session,
-    run_id: str,
-) -> dict[str, Any]:
-    tagged = replace(
-        draft,
-        payload={**draft.payload, "run_id": run_id},
-        session_id=runtime_context.session_id,
-        turn_id=run_id,
-    )
-    outcome = runtime_context.event_sink.accept(tagged)
-    return timeline_event_from_durable_event(outcome.event)
+def rpc_session_runner_cancel_mode(
+    runner: RpcSessionRunner | AsyncRpcSessionRunner,
+) -> RpcCancelMode:
+    target = getattr(runner, "func", runner)
+    mode = getattr(target, "__rpc_cancel_mode__", None)
+    if mode in ("cooperative", "task"):
+        return cast(RpcCancelMode, mode)
+    if inspect.iscoroutinefunction(runner):
+        return "task"
+    return "cooperative"
 
 
 @dataclass(frozen=True)
@@ -161,18 +146,21 @@ def run_rpc_session(
     runtime_context: Session | None = None,
 ) -> dict[str, Any]:
     runtime_context = runtime_context or default_session()
-    run_id = rpc_run_id_param(params) or rpc_run_id()
+    run_id = rpc_run_id_param(params) or session_run_id()
     cancellation_event = rpc_cancellation_event_param(params)
-    draft = session_turn_requested_draft(
-        params,
-        run_id=run_id,
-        runtime_context=runtime_context,
-    )
-    dispatcher = session_event_dispatcher(
-        runtime_context,
-        publish_event=publish_event,
-        cancellation_event=cancellation_event,
-    )
+    try:
+        draft = session_turn_requested_draft(
+            params,
+            run_id=run_id,
+            runtime_context=runtime_context,
+        )
+        dispatcher = session_event_dispatcher(
+            runtime_context,
+            publish_event=publish_event,
+            cancellation_event=cancellation_event,
+        )
+    except SessionRequestError as exc:
+        raise rpc_error_from_session_request(exc) from exc
     outcome = dispatcher.dispatch(draft)
     if outcome.agent_results:
         return outcome.agent_results[0]
@@ -184,164 +172,29 @@ def run_rpc_session(
     }
 
 
-def run_session_turn_from_event(
-    run: AgentRun,
+async def run_rpc_session_task(
+    params: dict[str, Any],
     *,
-    runtime_context: Session,
     publish_event: Callable[[dict[str, Any]], None],
-    cancellation_event: threading.Event | None = None,
+    runtime_context: Session | None = None,
 ) -> dict[str, Any]:
-    params = dict(run.triggering_event.payload)
-    run_id = run.triggering_event.turn_id or optional_string(params.get("run_id"))
-    if run_id is None:
-        run_id = rpc_run_id()
-    return run_session_turn(
+    return await asyncio.to_thread(
+        run_rpc_session,
         params,
-        run_id=run_id,
-        caused_by=run.triggering_event.id,
         publish_event=publish_event,
         runtime_context=runtime_context,
-        cancellation_event=cancellation_event,
     )
 
 
-def run_session_turn(
-    params: dict[str, Any],
-    *,
-    run_id: str,
-    caused_by: str,
-    publish_event: Callable[[dict[str, Any]], None],
-    runtime_context: Session,
-    cancellation_event: threading.Event | None,
-) -> dict[str, Any]:
-    objective = rpc_objective(params)
-    workflow = rpc_workflow(params)
-    enabled_capabilities = registered_capabilities(
-        rpc_allowed_tools(params),
-        tool_registry=runtime_context.tool_registry,
-    )
-    execution_mode: ExecutionMode = "direct" if workflow == "do" else "stage"
-    prior_timeline = current_timeline(runtime_context=runtime_context)
-    user_event = record_user_message(
-        {
-            "type": "user_message",
-            "content": objective,
-            "workflow": workflow,
-            "runtime": "zeta-rpc",
-            "available_tools": list(enabled_capabilities),
-            "run_id": run_id,
-            "turn_id": run_id,
-        },
-        runtime_context=runtime_context,
-    )
-    publish_event(rpc_event_with_cursor(runtime_context, user_event, run_id))
-
-    def sink(draft: DraftEvent) -> None:
-        persisted = record_runtime_draft(
-            draft,
-            runtime_context=runtime_context,
-            run_id=run_id,
-        )
-        publish_event(rpc_event_with_cursor(runtime_context, persisted, run_id))
-
-    try:
-        result = run_agent_turn(
-            objective,
-            prior_timeline,
-            rpc_agent_config(
-                params,
-                enabled_capabilities=enabled_capabilities,
-                execution_mode=execution_mode,
-                session_id=runtime_context.session_id,
-            ),
-            context=rpc_context(params),
-            event_sink=sink,
-            trace_store=runtime_context.trace_store,
-            tool_registry=runtime_context.tool_registry,
-            caused_by=caused_by,
-            cancellation_event=cancellation_event,
-        )
-    except AgentTurnAborted as exc:
-        return rpc_session_result(
-            "aborted",
-            "",
-            run_id=run_id,
-            runtime_context=runtime_context,
-            agent_result=exc.result,
-        )
-    return rpc_session_result(
-        rpc_outcome(result.staged_effect, result.final_text),
-        result.final_text,
-        run_id=run_id,
-        runtime_context=runtime_context,
-        agent_result=result,
-    )
-
-
-def session_event_dispatcher(
-    runtime_context: Session,
-    *,
-    publish_event: Callable[[dict[str, Any]], None],
-    cancellation_event: threading.Event | None = None,
-) -> EventDispatcher:
-    return EventDispatcher(
-        runtime_context.event_sink,
-        agents=[
-            AgentDefinition(
-                "zeta.session.turn",
-                TriggerRule(event_type="session.turn.requested"),
-                run=lambda run: run_session_turn_from_event(
-                    run,
-                    runtime_context=runtime_context,
-                    publish_event=publish_event,
-                    cancellation_event=cancellation_event,
-                ),
-            )
-        ],
-        publish_event=lambda event: publish_event(rpc_event_from_durable_event(event)),
-    )
-
-
-def session_turn_requested_draft(
-    params: dict[str, Any],
-    *,
-    run_id: str,
-    runtime_context: Session,
-) -> DraftEvent:
-    objective = rpc_objective(params)
-    workflow = rpc_workflow(params)
-    payload: dict[str, Any] = {
-        "objective": objective,
-        "workflow": workflow,
-        "runtime": "zeta-rpc",
-        "run_id": run_id,
-        "tools": list(rpc_allowed_tools(params) or ()),
-        "context": rpc_context(params),
-    }
-    for key in (
-        "system",
-        "model",
-        "url",
-        "thinking",
-        "api",
-        "max_steps",
-        "max_wall_seconds",
-    ):
-        value = params.get(key)
-        if isinstance(value, str | int | float) and not isinstance(value, bool):
-            payload[key] = value
-    return DraftEvent(
-        "session.turn.requested",
-        "zeta",
-        payload,
-        idempotency_key=f"session.turn.requested:{run_id}",
-        session_id=runtime_context.session_id,
-        turn_id=run_id,
-    )
+cast(Any, run_rpc_session_task).__rpc_cancel_mode__ = "cooperative"
 
 
 def rpc_run_id() -> str:
-    return f"run_{uuid.uuid4().hex}"
+    return session_run_id()
+
+
+def rpc_error_from_session_request(exc: SessionRequestError) -> RpcError:
+    return RpcError(-32602, exc.code, "Invalid params", exc.data)
 
 
 def rpc_run_id_param(params: dict[str, Any]) -> str | None:
@@ -349,10 +202,10 @@ def rpc_run_id_param(params: dict[str, Any]) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def rpc_cancellation_event_param(params: dict[str, Any]) -> threading.Event | None:
+def rpc_cancellation_event_param(params: dict[str, Any]) -> RpcCancellation | None:
     value = params.get(RPC_CANCELLATION_EVENT_PARAM)
     if hasattr(value, "is_set") and hasattr(value, "set"):
-        return cast(threading.Event, value)
+        return cast(RpcCancellation, value)
     return None
 
 
@@ -363,101 +216,8 @@ def rpc_event_with_run_id(event: dict[str, Any], run_id: str) -> dict[str, Any]:
     return scoped
 
 
-def rpc_session_result(
-    outcome: str,
-    final_text: str,
-    *,
-    run_id: str,
-    runtime_context: Session,
-    agent_result: AgentTurnResult | None = None,
-) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "run_id": run_id,
-        "outcome": outcome,
-        "final_text": final_text,
-        "trace": rpc_trace_result(agent_result),
-    }
-    cursor = final_event_cursor(runtime_context, run_id)
-    if cursor is not None:
-        result["final_event_cursor"] = cursor
-    return result
-
-
-def rpc_trace_result(agent_result: AgentTurnResult | None) -> dict[str, list[str]]:
-    trace = empty_rpc_trace_result()
-    if agent_result is None:
-        return trace
-    for prompt_trace in agent_result.prompt_traces:
-        add_unique(trace["prompt_ids"], prompt_trace.prompt_object_id)
-        add_unique(
-            trace["assistant_message_ids"],
-            prompt_trace.assistant_message_object_id,
-        )
-    for draft in agent_result.events:
-        event = draft_timeline_event(draft)
-        event_type = str(event.get("type") or "")
-        if event_type == "model":
-            add_unique(trace["model_event_ids"], event.get("id"))
-            add_unique_list(trace["tool_call_ids"], event.get("tool_call_object_ids"))
-            continue
-        if event_type == "tool_call":
-            add_unique(trace["tool_event_ids"], event.get("id"))
-            add_unique(trace["tool_call_ids"], event.get("tool_call_object_id"))
-            continue
-        if event_type == "tool_result":
-            add_unique(trace["tool_event_ids"], event.get("id"))
-            add_unique(trace["tool_call_ids"], event.get("tool_call_object_id"))
-            add_unique(trace["tool_result_ids"], event.get("tool_result_object_id"))
-    return trace
-
-
 def empty_rpc_trace_result() -> dict[str, list[str]]:
-    return {
-        "prompt_ids": [],
-        "assistant_message_ids": [],
-        "model_event_ids": [],
-        "tool_event_ids": [],
-        "tool_call_ids": [],
-        "tool_result_ids": [],
-    }
-
-
-def add_unique(values: list[str], value: Any) -> None:
-    if isinstance(value, str) and value and value not in values:
-        values.append(value)
-
-
-def add_unique_list(values: list[str], raw_values: Any) -> None:
-    if not isinstance(raw_values, list | tuple):
-        return
-    for value in raw_values:
-        add_unique(values, value)
-
-
-def draft_timeline_event(draft: DraftEvent) -> dict[str, Any]:
-    event = Event(
-        id=f"evt_{uuid.uuid4().hex}",
-        event_type=draft.event_type,
-        source=draft.source,
-        payload=dict(draft.payload),
-        idempotency_key=draft.idempotency_key,
-        caused_by=draft.caused_by,
-        session_id=draft.session_id,
-        turn_id=draft.turn_id,
-        timestamp_micros=time.time_ns() // 1_000,
-    )
-    return timeline_event_from_durable_event(event)
-
-
-def final_event_cursor(runtime_context: Session, run_id: str) -> str | None:
-    if not isinstance(runtime_context.event_sink, EventReader):
-        return None
-    events = runtime_context.event_sink.list_events(
-        Filter(session_id=runtime_context.session_id, turn_id=run_id)
-    )
-    if not events:
-        return None
-    return str(events[-1].seq)
+    return empty_session_trace_result()
 
 
 def rpc_event_with_cursor(
@@ -465,10 +225,7 @@ def rpc_event_with_cursor(
     event: dict[str, Any],
     run_id: str,
 ) -> dict[str, Any]:
-    durable_event = durable_event_for_rpc_event(runtime_context, event, run_id)
-    if durable_event is None:
-        return event
-    return rpc_event_from_durable_event(durable_event)
+    return session_event_with_cursor(runtime_context, event, run_id)
 
 
 def durable_event_for_rpc_event(
@@ -476,120 +233,15 @@ def durable_event_for_rpc_event(
     event: dict[str, Any],
     run_id: str,
 ) -> Event | None:
-    if not isinstance(runtime_context.event_sink, EventReader):
-        return None
-    event_id = event.get("id")
-    if not isinstance(event_id, str):
-        return None
-    events = runtime_context.event_sink.list_events(
-        Filter(session_id=runtime_context.session_id, turn_id=run_id)
-    )
-    for durable_event in events:
-        if durable_event.id == event_id:
-            return durable_event
-    return None
+    return durable_event_for_session_event(runtime_context, event, run_id)
 
 
 def rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
-    projected = timeline_event_from_durable_event(event)
-    if not projected:
-        projected = generic_rpc_event_from_durable_event(event)
-    projected["cursor"] = str(event.seq)
-    return projected
+    return session_event_from_durable_event(event)
 
 
 def generic_rpc_event_from_durable_event(event: Event) -> dict[str, Any]:
-    projected = {
-        "type": event.event_type,
-        "id": event.id,
-        "source": event.source,
-        "time": event.timestamp_micros / 1_000_000,
-        **event.payload,
-    }
-    if event.session_id is not None:
-        projected["session"] = event.session_id
-    if event.turn_id is not None:
-        projected["turn_id"] = event.turn_id
-    if event.caused_by is not None:
-        projected["caused_by"] = event.caused_by
-    return projected
-
-
-def rpc_objective(params: dict[str, Any]) -> str:
-    objective = str(params.get("objective") or "")
-    if not objective:
-        raise RpcError(
-            -32602,
-            "missing_objective",
-            "Invalid params",
-            {"message": "session.run requires objective"},
-        )
-    return objective
-
-
-def rpc_workflow(params: dict[str, Any]) -> str:
-    workflow = str(params.get("workflow") or "ask")
-    if workflow not in {"ask", "propose", "do"}:
-        raise RpcError(
-            -32602,
-            "invalid_workflow",
-            "Invalid params",
-            {
-                "message": "workflow must be ask, propose, or do",
-                "workflow": workflow,
-            },
-        )
-    return workflow
-
-
-def rpc_allowed_tools(params: dict[str, Any]) -> tuple[str, ...] | None:
-    requested_tools = params.get("tools")
-    if not isinstance(requested_tools, list):
-        return None
-    return tuple(str(tool) for tool in requested_tools if isinstance(tool, str))
-
-
-def rpc_agent_config(
-    params: dict[str, Any],
-    *,
-    enabled_capabilities: tuple[str, ...],
-    execution_mode: ExecutionMode,
-    session_id: str,
-) -> AgentConfig:
-    return AgentConfig(
-        system_prompt=optional_str_param(params, "system"),
-        allowed_capabilities=enabled_capabilities,
-        max_turns=params.get("max_steps")
-        if isinstance(params.get("max_steps"), int)
-        else None,
-        stop_on_staged_effect=True,
-        execution_mode=execution_mode,
-        model_name=optional_str_param(params, "model"),
-        model_url=optional_str_param(params, "url"),
-        model_session_id=session_id,
-        thinking=optional_str_param(params, "thinking"),
-        model_api=optional_str_param(params, "api"),
-        max_wall_seconds=optional_float_param(params, "max_wall_seconds"),
-    )
-
-
-def rpc_context(params: dict[str, Any]) -> str:
-    context = params.get("context")
-    return str(context) if isinstance(context, str) else ""
-
-
-def optional_str_param(params: dict[str, Any], key: str) -> str | None:
-    value = params.get(key)
-    return value if isinstance(value, str) else None
-
-
-def optional_float_param(params: dict[str, Any], key: str) -> float | None:
-    value = params.get(key)
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int | float):
-        return float(value)
-    return None
+    return generic_session_event_from_durable_event(event)
 
 
 def client_tool_timeout_sec(item: dict[str, Any]) -> float | None:
@@ -923,7 +575,7 @@ def event_matches_subscription(
     return cursor_seq > subscription.after_seq
 
 
-class JsonRpcServer:
+class JsonRpcProtocol:
     def __init__(
         self,
         input: TextIO,
@@ -947,17 +599,7 @@ class JsonRpcServer:
         self.tool_calls: dict[str, ClientToolCall] = {}
         self.client_tools: set[str] = set()
         self.runs: dict[str, RpcRunState] = {}
-        self.run_workers: list[threading.Thread] = []
-        self.runs_lock = threading.Lock()
-        self.output_lock = threading.Lock()
         self.event_subscriptions: dict[str, EventSubscription] = {}
-
-    def serve(self) -> None:
-        try:
-            while (message := self.read_message()) is not None:
-                self.handle_message(message)
-        finally:
-            self.join_session_runs()
 
     def read_message(self) -> dict[str, Any] | None:
         for line in self.input:
@@ -999,45 +641,9 @@ class JsonRpcServer:
             return True
         return bool(readable)
 
-    def handle_message(self, message: dict[str, Any]) -> None:
-        request_id = message.get("id")
-        method = str(message.get("method") or "")
-        params = message.get("params")
-        params = params if isinstance(params, dict) else {}
-        try:
-            if (
-                method == "session.run"
-                and request_id is not None
-                and self.session_runner is not None
-            ):
-                self.start_session_run(request_id, params)
-                return
-            result = self.dispatch(method, params)
-        except RpcError as exc:
-            if request_id is not None:
-                self.write_error(
-                    request_id,
-                    exc.jsonrpc_code,
-                    exc.summary,
-                    data=exc.error_data(),
-                )
-            return
-        except Exception as exc:
-            if request_id is not None:
-                self.write_error(
-                    request_id,
-                    -32603,
-                    "Internal error",
-                    data={
-                        "code": "internal_error",
-                        "message": f"{type(exc).__name__}: {exc}",
-                    },
-                )
-            return
-        if request_id is not None:
-            self.write_response(request_id, result)
-
-    def dispatch(self, method: str, params: dict[str, Any]) -> dict[str, Any] | None:
+    def dispatch_sync(
+        self, method: str, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
         if method == "initialize":
             return {"server": "zeta", "protocol": "0.1"}
         if method == "tools.register":
@@ -1051,8 +657,6 @@ class JsonRpcServer:
             return self.subscribe_events(params)
         if method == "events.publish":
             return self.publish_runtime_event(params)
-        if method == "session.cancel":
-            return self.cancel_session(params)
         if method == "session.run":
             if self.session_runner is None:
                 raise RpcError(
@@ -1139,98 +743,6 @@ class JsonRpcServer:
             ],
             "agent_results": outcome.agent_results,
         }
-
-    def start_session_run(self, request_id: Any, params: dict[str, Any]) -> None:
-        if self.session_runner is None:
-            raise RpcError(
-                -32000,
-                "session_run_unavailable",
-                "Server error",
-                {"message": "session.run is not configured"},
-            )
-        run_id = rpc_run_id()
-        cancellation_event = threading.Event()
-        state = RpcRunState(
-            run_id=run_id,
-            request_id=request_id,
-            cancellation_event=cancellation_event,
-        )
-        with self.runs_lock:
-            self.runs[run_id] = state
-        worker_params = {
-            **params,
-            RPC_RUN_ID_PARAM: run_id,
-            RPC_CANCELLATION_EVENT_PARAM: cancellation_event,
-        }
-        worker = threading.Thread(
-            target=self.complete_session_run,
-            args=(state, worker_params),
-        )
-        self.run_workers.append(worker)
-        worker.start()
-
-    def complete_session_run(
-        self,
-        state: RpcRunState,
-        params: dict[str, Any],
-    ) -> None:
-        try:
-            assert self.session_runner is not None
-            result = self.session_runner(params)
-        except RpcError as exc:
-            state.status = "failed"
-            self.write_error(
-                state.request_id,
-                exc.jsonrpc_code,
-                exc.summary,
-                data=exc.error_data(),
-            )
-            return
-        except Exception as exc:
-            state.status = "failed"
-            self.write_error(
-                state.request_id,
-                -32603,
-                "Internal error",
-                data={
-                    "code": "internal_error",
-                    "message": f"{type(exc).__name__}: {exc}",
-                },
-            )
-            return
-        state.status = (
-            "cancelled"
-            if state.cancellation_event.is_set() and result.get("outcome") == "aborted"
-            else "completed"
-        )
-        self.write_response(state.request_id, result)
-
-    def join_session_runs(self) -> None:
-        for worker in self.run_workers:
-            worker.join()
-
-    def cancel_session(self, params: dict[str, Any]) -> dict[str, Any]:
-        run_id = optional_string(params.get("run_id"))
-        if run_id is None:
-            raise RpcError(
-                -32602,
-                "invalid_run_id",
-                "Invalid params",
-                {"message": "run_id must be a non-empty string"},
-            )
-        with self.runs_lock:
-            state = self.runs.get(run_id)
-            if state is None:
-                return {"cancelled": False, "run_id": run_id, "status": "unknown"}
-            if state.status not in {"running", "cancelling"}:
-                return {
-                    "cancelled": False,
-                    "run_id": run_id,
-                    "status": state.status,
-                }
-            state.status = "cancelling"
-            state.cancellation_event.set()
-        return {"cancelled": True, "run_id": run_id}
 
     def register_client_tools(self, tools: Any) -> list[dict[str, Any]]:
         if not isinstance(tools, list):
@@ -1342,8 +854,39 @@ class JsonRpcServer:
                 if isinstance(response_params, dict):
                     self.record_tool_response(response_params)
                 continue
-            self.handle_message(rpc_message)
+            self.handle_nested_message(rpc_message)
         return self.tool_responses.pop(call_id)
+
+    def handle_nested_message(self, message: dict[str, Any]) -> None:
+        request_id = message.get("id")
+        method = str(message.get("method") or "")
+        params = message.get("params")
+        params = params if isinstance(params, dict) else {}
+        try:
+            result = self.dispatch_sync(method, params)
+        except RpcError as exc:
+            if request_id is not None:
+                self.write_error(
+                    request_id,
+                    exc.jsonrpc_code,
+                    exc.summary,
+                    data=exc.error_data(),
+                )
+            return
+        except Exception as exc:
+            if request_id is not None:
+                self.write_error(
+                    request_id,
+                    -32603,
+                    "Internal error",
+                    data={
+                        "code": "internal_error",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+            return
+        if request_id is not None:
+            self.write_response(request_id, result)
 
     def publish_event(self, event: dict[str, Any]) -> None:
         if self.event_subscriptions:
@@ -1376,6 +919,199 @@ class JsonRpcServer:
         self.write_message({"jsonrpc": "2.0", "method": method, "params": params})
 
     def write_message(self, message: dict[str, Any]) -> None:
-        with self.output_lock:
-            self.output.write(json.dumps(message, separators=(",", ":")) + "\n")
-            self.output.flush()
+        self.output.write(json.dumps(message, separators=(",", ":")) + "\n")
+        self.output.flush()
+
+
+class JsonRpcServer(JsonRpcProtocol):
+    """Async JSON-RPC transport variant for daemon-style session scheduling."""
+
+    def __init__(
+        self,
+        input: TextIO,
+        output: TextIO,
+        *,
+        session_runner: RpcSessionRunner | AsyncRpcSessionRunner | None = None,
+        tool_registry: CapabilityRegistry | None = None,
+        event_reader: EventReader | None = None,
+        event_sink: EventSink | None = None,
+    ) -> None:
+        super().__init__(
+            input,
+            output,
+            session_runner=cast(RpcSessionRunner | None, session_runner),
+            tool_registry=tool_registry,
+            event_reader=event_reader,
+            event_sink=event_sink,
+        )
+        self.session_runner = session_runner
+        self._task_group: asyncio.TaskGroup | None = None
+
+    async def serve(self) -> None:
+        async with asyncio.TaskGroup() as task_group:
+            self._task_group = task_group
+            try:
+                while (
+                    message := await asyncio.to_thread(super().read_message)
+                ) is not None:
+                    await self.handle_message(message)
+            finally:
+                self._task_group = None
+
+    async def handle_message(self, message: dict[str, Any]) -> None:
+        request_id = message.get("id")
+        method = str(message.get("method") or "")
+        params = message.get("params")
+        params = params if isinstance(params, dict) else {}
+        try:
+            if (
+                method == "session.run"
+                and request_id is not None
+                and self.session_runner is not None
+            ):
+                self.start_session_run(request_id, params)
+                return
+            result = await self.dispatch(method, params)
+        except RpcError as exc:
+            if request_id is not None:
+                self.write_error(
+                    request_id,
+                    exc.jsonrpc_code,
+                    exc.summary,
+                    data=exc.error_data(),
+                )
+            return
+        except Exception as exc:
+            if request_id is not None:
+                self.write_error(
+                    request_id,
+                    -32603,
+                    "Internal error",
+                    data={
+                        "code": "internal_error",
+                        "message": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+            return
+        if request_id is not None:
+            self.write_response(request_id, result)
+
+    async def dispatch(
+        self,
+        method: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if method == "session.cancel":
+            return self.cancel_session(params)
+        return super().dispatch_sync(method, params)
+
+    def start_session_run(self, request_id: Any, params: dict[str, Any]) -> None:
+        if self.session_runner is None:
+            raise RpcError(
+                -32000,
+                "session_run_unavailable",
+                "Server error",
+                {"message": "session.run is not configured"},
+            )
+        if self._task_group is None:
+            raise RpcError(
+                -32000,
+                "session_run_unavailable",
+                "Server error",
+                {"message": "session.run requires an active async server"},
+            )
+        run_id = rpc_run_id()
+        cancellation_event = asyncio.Event()
+        state = RpcRunState(
+            run_id=run_id,
+            request_id=request_id,
+            cancellation_event=cancellation_event,
+            cancel_mode=rpc_session_runner_cancel_mode(self.session_runner),
+        )
+        self.runs[run_id] = state
+        worker_params = {
+            **params,
+            RPC_RUN_ID_PARAM: run_id,
+            RPC_CANCELLATION_EVENT_PARAM: cancellation_event,
+        }
+        state.task = self._task_group.create_task(
+            self.complete_session_run(state, worker_params)
+        )
+
+    async def complete_session_run(
+        self,
+        state: RpcRunState,
+        params: dict[str, Any],
+    ) -> None:
+        try:
+            assert self.session_runner is not None
+            result = await self.call_session_runner(params)
+        except asyncio.CancelledError:
+            state.status = "cancelled"
+            self.write_response(
+                state.request_id,
+                {"run_id": state.run_id, "outcome": "aborted", "final_text": ""},
+            )
+            return
+        except RpcError as exc:
+            state.status = "failed"
+            self.write_error(
+                state.request_id,
+                exc.jsonrpc_code,
+                exc.summary,
+                data=exc.error_data(),
+            )
+            return
+        except Exception as exc:
+            state.status = "failed"
+            self.write_error(
+                state.request_id,
+                -32603,
+                "Internal error",
+                data={
+                    "code": "internal_error",
+                    "message": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            return
+        state.status = (
+            "cancelled"
+            if state.cancellation_event.is_set() and result.get("outcome") == "aborted"
+            else "completed"
+        )
+        self.write_response(state.request_id, result)
+
+    async def call_session_runner(self, params: dict[str, Any]) -> dict[str, Any]:
+        assert self.session_runner is not None
+        result = self.session_runner(params)
+        if inspect.isawaitable(result):
+            return await cast(Awaitable[dict[str, Any]], result)
+        return cast(dict[str, Any], result)
+
+    def cancel_session(self, params: dict[str, Any]) -> dict[str, Any]:
+        run_id = optional_string(params.get("run_id"))
+        if run_id is None:
+            raise RpcError(
+                -32602,
+                "invalid_run_id",
+                "Invalid params",
+                {"message": "run_id must be a non-empty string"},
+            )
+        state = self.runs.get(run_id)
+        if state is None:
+            return {"cancelled": False, "run_id": run_id, "status": "unknown"}
+        if state.status not in {"running", "cancelling"}:
+            return {
+                "cancelled": False,
+                "run_id": run_id,
+                "status": state.status,
+            }
+        state.status = "cancelling"
+        state.cancellation_event.set()
+        if (
+            state.cancel_mode == "task"
+            and state.task is not None
+            and not state.task.done()
+        ):
+            state.task.cancel()
+        return {"cancelled": True, "run_id": run_id}

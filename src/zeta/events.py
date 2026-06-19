@@ -9,7 +9,9 @@ layout.
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -24,7 +26,7 @@ class DraftEvent:
 
     event_type: str
     source: str
-    payload: dict[str, Any]
+    payload: Mapping[str, Any]
     idempotency_key: str | None = None
     caused_by: str | None = None
     session_id: str | None = None
@@ -43,7 +45,7 @@ class Event:
     id: str
     event_type: str
     source: str
-    payload: dict[str, Any]
+    payload: Mapping[str, Any]
     idempotency_key: str | None
     caused_by: str | None
     session_id: str | None
@@ -61,7 +63,7 @@ class Event:
             id=f"evt_{uuid4().hex}",
             event_type=draft.event_type,
             source=draft.source,
-            payload=dict(draft.payload),
+            payload=immutable_payload(draft.payload),
             idempotency_key=idempotency_key,
             caused_by=draft.caused_by,
             session_id=draft.session_id,
@@ -107,11 +109,16 @@ def publish_event(draft: DraftEvent, *, sink: EventSink) -> AppendOutcome:
     return sink.accept(draft)
 
 
+def immutable_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    return MappingProxyType(dict(payload))
+
+
 __all__ = [
     "AppendOutcome",
     "DraftEvent",
     "Event",
     "EventSink",
     "Filter",
+    "immutable_payload",
     "publish_event",
 ]

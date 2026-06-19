@@ -1,13 +1,17 @@
 """Append events, publish them, and route matching agents."""
 
-from collections.abc import Callable, Iterable
+import asyncio
+import inspect
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from zeta.events import DraftEvent, Event, EventSink
+from zeta.events import DraftEvent, Event
+from zeta.store.events import EventWriter
 
 DispatchMode = Literal["one_shot", "session_scoped"]
-AgentRunner = Callable[["AgentRun"], dict[str, Any]]
+AgentResult = dict[str, Any] | Awaitable[dict[str, Any]]
+AgentRunner = Callable[["AgentRun"], AgentResult]
 
 
 @dataclass(frozen=True)
@@ -65,7 +69,7 @@ class EventDispatcher:
 
     def __init__(
         self,
-        event_sink: EventSink,
+        event_sink: EventWriter,
         *,
         agents: Iterable[AgentDefinition] = (),
         publish_event: Callable[[Event], None] | None = None,
@@ -117,6 +121,8 @@ class EventDispatcher:
         events.append(claimed)
         try:
             result = agent.run(AgentRun(agent, triggering_event, work_id, pending))
+            if inspect.isawaitable(result):
+                raise TypeError("async agent runner requires AsyncEventDispatcher")
         except Exception as exc:
             failed = self._append_work_event(
                 "runtime.work.failed",
@@ -179,6 +185,155 @@ class EventDispatcher:
     def _publish(self, event: Event) -> None:
         if self.publish_event is not None:
             self.publish_event(event)
+
+
+class AsyncEventDispatcher:
+    """Async event dispatcher that routes matching agents in a task group."""
+
+    def __init__(
+        self,
+        event_sink: EventWriter,
+        *,
+        agents: Iterable[AgentDefinition] = (),
+        publish_event: Callable[[Event], None] | None = None,
+    ) -> None:
+        self.event_sink = event_sink
+        self.agents = tuple(agents)
+        self.publish_event = publish_event
+
+    async def dispatch(self, draft: DraftEvent) -> DispatchOutcome:
+        outcome = self.event_sink.accept(draft)
+        if not outcome.inserted:
+            return DispatchOutcome(outcome.event, False, [], [])
+        self._publish(outcome.event)
+        work_events: list[Event] = []
+        agent_results: list[dict[str, Any]] = []
+        matching_agents = self.matching_agents(outcome.event)
+        task_results: list[tuple[dict[str, Any] | None, list[Event]] | None] = [
+            None
+        ] * len(matching_agents)
+        async with asyncio.TaskGroup() as task_group:
+            for index, agent in enumerate(matching_agents):
+                task_group.create_task(
+                    self._run_agent_into(task_results, index, agent, outcome.event)
+                )
+        for task_result in task_results:
+            if task_result is None:
+                continue
+            result, events = task_result
+            work_events.extend(events)
+            if result is not None:
+                agent_results.append(result)
+        return DispatchOutcome(outcome.event, True, work_events, agent_results)
+
+    def matching_agents(self, event: Event) -> list[AgentDefinition]:
+        return [agent for agent in self.agents if agent.trigger.matches(event)]
+
+    async def _run_agent_into(
+        self,
+        results: list[tuple[dict[str, Any] | None, list[Event]] | None],
+        index: int,
+        agent: AgentDefinition,
+        triggering_event: Event,
+    ) -> None:
+        results[index] = await self._run_agent(agent, triggering_event)
+
+    async def _run_agent(
+        self,
+        agent: AgentDefinition,
+        triggering_event: Event,
+    ) -> tuple[dict[str, Any] | None, list[Event]]:
+        work_id = work_id_for_event(agent, triggering_event)
+        pending = self._append_work_event(
+            "runtime.work.pending",
+            agent,
+            triggering_event,
+            work_id,
+            {"status": "pending"},
+        )
+        events = [pending]
+        if agent.run is None:
+            return None, events
+        claimed = self._append_work_event(
+            "runtime.work.claimed",
+            agent,
+            triggering_event,
+            work_id,
+            {"status": "claimed"},
+        )
+        events.append(claimed)
+        try:
+            result = await maybe_await(
+                agent.run(AgentRun(agent, triggering_event, work_id, pending))
+            )
+        except Exception as exc:
+            failed = self._append_work_event(
+                "runtime.work.failed",
+                agent,
+                triggering_event,
+                work_id,
+                {
+                    "status": "failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            events.append(failed)
+            return {
+                "outcome": "failed",
+                "error": str(exc),
+                "final_event_cursor": str(failed.seq),
+            }, events
+        terminal_type = terminal_work_event_type(result)
+        completed = self._append_work_event(
+            terminal_type,
+            agent,
+            triggering_event,
+            work_id,
+            {"status": terminal_type.rsplit(".", 1)[-1], "result": result},
+        )
+        events.append(completed)
+        result = {
+            **result,
+            "final_event_cursor": str(completed.seq),
+        }
+        return result, events
+
+    def _append_work_event(
+        self,
+        event_type: str,
+        agent: AgentDefinition,
+        triggering_event: Event,
+        work_id: str,
+        payload: dict[str, Any],
+    ) -> Event:
+        draft = DraftEvent(
+            event_type,
+            "zeta",
+            {
+                "work_id": work_id,
+                "agent_id": agent.agent_id,
+                "triggering_event_id": triggering_event.id,
+                "triggering_event_type": triggering_event.event_type,
+                **payload,
+            },
+            idempotency_key=f"{event_type}:{work_id}",
+            caused_by=triggering_event.id,
+            session_id=triggering_event.session_id,
+            turn_id=triggering_event.turn_id,
+        )
+        event = self.event_sink.accept(draft).event
+        self._publish(event)
+        return event
+
+    def _publish(self, event: Event) -> None:
+        if self.publish_event is not None:
+            self.publish_event(event)
+
+
+async def maybe_await(result: AgentResult) -> dict[str, Any]:
+    if inspect.isawaitable(result):
+        return await cast(Awaitable[dict[str, Any]], result)
+    return result
 
 
 def work_id_for_event(agent: AgentDefinition, event: Event) -> str:

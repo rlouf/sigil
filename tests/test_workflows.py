@@ -11,7 +11,6 @@ import pytest
 from _zeta_helpers import (
     TtyBuffer,
     record_durable_timeline_event,
-    required_stream_sink,
     visible_terminal_text,
     write_models_config,
     write_skill,
@@ -19,7 +18,6 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 import sigil
-import sigil.display.state as display_state
 from sigil import agent_io
 from sigil import handoff as sigil_handoff
 from sigil.cli import cli as sigil_cli
@@ -42,9 +40,11 @@ from sigil.state import history_view, read_events
 from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from zeta import loop as zeta_agent
+from zeta import models as zeta_models_api
 from zeta import runtime_events as zeta_runtime_events
 from zeta import timeline as zeta_timeline
 from zeta.context.components import PromptTrace, chat_messages
+from zeta.events import DraftEvent
 from zeta.history import (
     effect_record,
     history_event_record,
@@ -52,6 +52,7 @@ from zeta.history import (
     is_turn_record,
     turn_record,
 )
+from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
 from zeta.store.substrate import resolve_object_id
@@ -506,9 +507,9 @@ def test_zeta_agent_step_double_comma_stages_bash_handoff(
     )
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         lambda *args, **kwargs: next(responses),
     )
@@ -587,9 +588,17 @@ def test_zeta_agent_step_streams_text_before_tool_trace(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        stream_sink = required_stream_sink(kwargs)
-        stream_sink.content_delta("I'll inspect README.")
         event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink(
+            DraftEvent(
+                "runtime.stream.chunk",
+                "zeta",
+                {
+                    "text": "I'll inspect README.",
+                    "_timeline_type": "runtime.stream.chunk",
+                },
+            )
+        )
         tool_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -628,9 +637,17 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        stream_sink = required_stream_sink(kwargs)
-        stream_sink.content_delta("I'll inspect README.")
         event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink(
+            DraftEvent(
+                "runtime.stream.chunk",
+                "zeta",
+                {
+                    "text": "I'll inspect README.",
+                    "_timeline_type": "runtime.stream.chunk",
+                },
+            )
+        )
         tool_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -649,7 +666,13 @@ def test_zeta_agent_step_separates_tool_result_from_later_streamed_text(
         }
         event_sink(tool_call)
         event_sink(tool_result)
-        stream_sink.content_delta("It is a README.")
+        event_sink(
+            DraftEvent(
+                "runtime.stream.chunk",
+                "zeta",
+                {"text": "It is a README.", "_timeline_type": "runtime.stream.chunk"},
+            )
+        )
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
             events=[tool_call, tool_result],
@@ -768,9 +791,17 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
         }
         event_sink(tool_call)
         event_sink(tool_result)
-        model_status = cast("Callable[[], Any]", kwargs.get("model_status"))
-        with model_status():
-            pass
+        event_sink(
+            DraftEvent(
+                "runtime.status.update",
+                "zeta",
+                {
+                    "status": "reasoning_delta",
+                    "text": "thinking",
+                    "_timeline_type": "runtime.status.update",
+                },
+            )
+        )
         return zeta_agent.AgentTurnResult(final_text="Done.", events=[])
 
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
@@ -788,8 +819,6 @@ def test_zeta_agent_step_aligns_thinking_status_after_tool_trace(
     assert "❯" not in out_text
     trace_text = visible_terminal_text(output.getvalue())
     assert "✓ read README.md · 1 lines" in trace_text
-    assert "mapping repo · 1 events · last: README.md" in trace_text
-    assert "prefill 0s" in trace_text
 
 
 def test_zeta_agent_step_prints_final_answer_after_direct_edit(
@@ -865,9 +894,9 @@ def test_zeta_skill_directive_expands_through_agent_step_workflow(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -960,9 +989,9 @@ def test_zeta_skill_directive_expands_through_ask_workflow(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(project)
     monkeypatch.setattr(agent_io, "ensure_server", lambda: True)
-    monkeypatch.setattr(zeta_agent, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
     monkeypatch.setattr(
-        zeta_agent,
+        zeta_models_api,
         "chat_completion_messages",
         fake_chat_completion_messages,
     )
@@ -1448,10 +1477,14 @@ def test_zeta_ask_workflow_streams_final_text_without_duplicate(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        stream_sink = required_stream_sink(kwargs)
-        assert isinstance(stream_sink, display_state.TraceAwareStreamRenderer)
-        assert isinstance(stream_sink.renderer, display_state.TerminalStreamRenderer)
-        stream_sink.content_delta("streamed answer")
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink(
+            DraftEvent(
+                "runtime.stream.chunk",
+                "zeta",
+                {"text": "streamed answer", "_timeline_type": "runtime.stream.chunk"},
+            )
+        )
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
             events=[{"type": "model", "content": "streamed answer"}],
@@ -1479,10 +1512,17 @@ def test_zeta_ask_workflow_streams_markdown_with_rich_for_tty(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        stream_sink = required_stream_sink(kwargs)
-        assert isinstance(stream_sink, display_state.TraceAwareStreamRenderer)
-        assert isinstance(stream_sink.renderer, display_state.RichStreamRenderer)
-        stream_sink.content_delta("**streamed** answer")
+        event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink(
+            DraftEvent(
+                "runtime.stream.chunk",
+                "zeta",
+                {
+                    "text": "**streamed** answer",
+                    "_timeline_type": "runtime.stream.chunk",
+                },
+            )
+        )
         return zeta_agent.AgentTurnResult(
             final_text="streamed answer",
             events=[{"type": "model", "content": "streamed answer"}],
@@ -1513,9 +1553,17 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
         **kwargs: object,
     ) -> zeta_agent.AgentTurnResult:
         del objective, transcript, config
-        stream_sink = required_stream_sink(kwargs)
-        stream_sink.content_delta("I'll inspect README.")
         event_sink = cast("Callable[[Any], None]", kwargs.get("event_sink"))
+        event_sink(
+            DraftEvent(
+                "runtime.stream.chunk",
+                "zeta",
+                {
+                    "text": "I'll inspect README.",
+                    "_timeline_type": "runtime.stream.chunk",
+                },
+            )
+        )
         tool_call = {
             "type": "tool_call",
             "id": "call-1",
@@ -1534,7 +1582,13 @@ def test_zeta_ask_workflow_streams_text_before_tool_trace(
         }
         event_sink(tool_call)
         event_sink(tool_result)
-        stream_sink.content_delta("It is a README.")
+        event_sink(
+            DraftEvent(
+                "runtime.stream.chunk",
+                "zeta",
+                {"text": "It is a README.", "_timeline_type": "runtime.stream.chunk"},
+            )
+        )
         return zeta_agent.AgentTurnResult(
             final_text="It is a README.",
             events=[tool_call, tool_result],

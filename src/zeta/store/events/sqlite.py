@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from zeta.events import AppendOutcome, DraftEvent, Event, Filter
+from zeta.events import AppendOutcome, DraftEvent, Event, Filter, immutable_payload
 
 EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"
@@ -90,7 +90,9 @@ class SqliteEventStore:
         return self.append(Event.from_draft(draft))
 
     def append(self, event: Event) -> AppendOutcome:
-        payload = json.dumps(event.payload, ensure_ascii=False, separators=(",", ":"))
+        payload = json.dumps(
+            dict(event.payload), ensure_ascii=False, separators=(",", ":")
+        )
         cursor = self.connection.execute(
             """
             INSERT INTO events
@@ -301,7 +303,7 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         id=str(row["id"]),
         event_type=str(row["type"]),
         source=str(row["source"]),
-        payload=payload,
+        payload=immutable_payload(payload),
         idempotency_key=_optional_str(row["idempotency_key"]),
         caused_by=_optional_str(row["caused_by"]),
         session_id=_optional_str(row["session_id"]),
