@@ -311,7 +311,6 @@ def stream_json_sse(
 ) -> Iterator[str]:
     """POST JSON and yield Server-Sent Event data payloads."""
     import httpx
-    from httpx_sse import SSEError, connect_sse
 
     timeout = model_stream_timeout(
         first_output_timeout=model_first_output_timeout()
@@ -326,16 +325,14 @@ def stream_json_sse(
     }
     try:
         with httpx.Client(timeout=timeout) as client:
-            with connect_sse(
-                client,
+            with client.stream(
                 "POST",
                 url,
                 json=body,
                 headers=request_headers,
-            ) as event_source:
-                event_source.response.raise_for_status()
-                for event in event_source.iter_sse():
-                    yield event.data
+            ) as response:
+                response.raise_for_status()
+                yield from parse_sse_lines(response.iter_lines())
     except httpx.HTTPStatusError as exc:
         raise RuntimeError(f"model request failed: {http_error_detail(exc)}") from exc
     except (
@@ -343,10 +340,26 @@ def stream_json_sse(
         httpx.NetworkError,
         httpx.ProtocolError,
         httpx.RequestError,
-        SSEError,
         json.JSONDecodeError,
     ) as exc:
         raise RuntimeError(f"model request failed: {exc}") from exc
+
+
+def parse_sse_lines(lines: Iterable[str]) -> Iterator[str]:
+    """Yield SSE data frames without requiring a Content-Type header."""
+    data: list[str] = []
+    for line in lines:
+        if line == "":
+            if data:
+                yield "\n".join(data)
+                data = []
+            continue
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            data.append(line[5:].lstrip(" "))
+    if data:
+        yield "\n".join(data)
 
 
 def model_stream_timeout(

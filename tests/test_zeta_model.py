@@ -1120,6 +1120,55 @@ def test_zeta_model_context_tokens_returns_none_when_unavailable(
     assert tokens is None
 
 
+def test_zeta_stream_json_sse_accepts_missing_content_type(monkeypatch) -> None:
+    class FakeStreamResponse:
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self) -> list[str]:
+            return [
+                "event: response.output_text.delta",
+                'data: {"type":"response.output_text.delta","delta":"ok"}',
+                "",
+                "data: [DONE]",
+                "",
+            ]
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def stream(self, *args: object, **kwargs: object) -> FakeStreamResponse:
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+
+    events = list(
+        zeta_model.stream_json_sse(
+            "https://chatgpt.com/backend-api/codex/responses",
+            {"model": "gpt-5.5"},
+            headers={"Accept": "text/event-stream"},
+        )
+    )
+
+    assert events == [
+        '{"type":"response.output_text.delta","delta":"ok"}',
+        "[DONE]",
+    ]
+
+
 def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
