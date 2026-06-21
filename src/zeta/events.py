@@ -92,6 +92,8 @@ def event_view(event: _Event) -> dict[str, Any]:
         projected["source"] = event.source
     if event.session_id is not None:
         projected["session"] = event.session_id
+    if event.run_id is not None:
+        projected["run_id"] = event.run_id
     if event.turn_id is not None:
         projected["turn_id"] = event.turn_id
     if event.caused_by is not None:
@@ -111,6 +113,7 @@ def draft_event_view(draft: _DraftEvent) -> dict[str, Any]:
         idempotency_key=draft.idempotency_key,
         caused_by=draft.caused_by,
         session_id=draft.session_id,
+        run_id=draft.run_id,
         turn_id=draft.turn_id,
         timestamp_ms=time.time_ns() // 1_000_000,
     )
@@ -148,6 +151,7 @@ def runtime_event_draft(
     *,
     session_id: str | None,
     turn_id: str | None,
+    run_id: str | None = None,
 ) -> _DraftEvent:
     event_type = str(event.get("type") or "")
     caused_by = (
@@ -159,6 +163,7 @@ def runtime_event_draft(
         return model_call_draft(
             payload=durable_model_event_payload(event_dict),
             turn_id=turn_id,
+            run_id=run_id,
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
@@ -167,6 +172,7 @@ def runtime_event_draft(
         return tool_call_draft(
             payload=durable_tool_event_payload(event_dict),
             turn_id=turn_id,
+            run_id=run_id,
             session_id=session_id,
             caused_by=caused_by,
             event_id=event_id,
@@ -179,6 +185,7 @@ def runtime_event_draft(
             else None,
             session_id=session_id,
             turn_id=turn_id,
+            run_id=run_id,
             caused_by=caused_by,
         )
     return _DraftEvent(
@@ -188,6 +195,7 @@ def runtime_event_draft(
         idempotency_key=None,
         caused_by=caused_by,
         session_id=session_id,
+        run_id=run_id,
         turn_id=turn_id,
     )
 
@@ -202,18 +210,21 @@ def boundary_event_draft(
     event_session_id = str(payload.get("session") or session_id)
     if event_type in {"model", "tool_call", "tool_result", "turn_aborted"}:
         turn_id = optional_event_string(payload.get("turn_id"))
+        run_id = optional_event_string(payload.get("run_id"))
         return runtime_event_draft(
             payload,
             session_id=event_session_id,
             turn_id=turn_id,
+            run_id=run_id,
         )
     event_id = optional_event_string(payload.get("id"))
     turn_id = optional_event_string(payload.get("turn_id"))
+    run_id = optional_event_string(payload.get("run_id"))
     caused_by = optional_event_string(payload.get("caused_by"))
     domain_payload = {
         key: value
         for key, value in payload.items()
-        if key not in {"id", "type", "time", "session", "source", "caused_by"}
+        if key not in {"id", "type", "time", "session", "source", "caused_by", "run_id"}
     }
     if event_type == "model_usage":
         domain_payload["_timeline_type"] = "model_usage"
@@ -231,6 +242,7 @@ def boundary_event_draft(
         ),
         caused_by=caused_by,
         session_id=event_session_id,
+        run_id=run_id,
         turn_id=turn_id,
     )
 
@@ -264,6 +276,7 @@ def model_call_draft(
     payload: dict[str, Any],
     turn_id: str | None,
     session_id: str | None,
+    run_id: str | None = None,
     caused_by: str | None = None,
     event_id: str | None = None,
 ) -> _DraftEvent:
@@ -271,6 +284,7 @@ def model_call_draft(
         "zeta.model_call.completed",
         payload=payload,
         turn_id=turn_id,
+        run_id=run_id,
         session_id=session_id,
         caused_by=caused_by,
         event_id=event_id,
@@ -282,6 +296,7 @@ def tool_call_draft(
     payload: dict[str, Any],
     turn_id: str | None,
     session_id: str | None,
+    run_id: str | None = None,
     caused_by: str | None = None,
     event_id: str | None = None,
 ) -> _DraftEvent:
@@ -289,6 +304,7 @@ def tool_call_draft(
         tool_call_event_type(payload),
         payload=payload,
         turn_id=turn_id,
+        run_id=run_id,
         session_id=session_id,
         caused_by=caused_by,
         event_id=event_id,
@@ -300,6 +316,7 @@ def turn_aborted_draft(
     reason: str,
     session_id: str | None,
     turn_id: str | None,
+    run_id: str | None = None,
     caused_by: str | None = None,
     content: str | None = None,
 ) -> _DraftEvent:
@@ -315,6 +332,7 @@ def turn_aborted_draft(
         idempotency_key=None,
         caused_by=caused_by,
         session_id=session_id,
+        run_id=run_id,
         turn_id=turn_id,
     )
 
@@ -340,6 +358,7 @@ def user_message_draft(
     *,
     session_id: str | None,
     turn_id: str | None,
+    run_id: str | None = None,
     caused_by: str | None = None,
 ) -> _DraftEvent:
     return _DraftEvent(
@@ -349,6 +368,7 @@ def user_message_draft(
         idempotency_key=None,
         caused_by=caused_by,
         session_id=session_id,
+        run_id=run_id,
         turn_id=turn_id,
     )
 
@@ -359,6 +379,7 @@ def durable_event_draft(
     payload: dict[str, Any],
     turn_id: str | None,
     session_id: str | None,
+    run_id: str | None = None,
     caused_by: str | None,
     event_id: str | None,
 ) -> _DraftEvent:
@@ -369,6 +390,7 @@ def durable_event_draft(
         idempotency_key=event_idempotency_key(event_type, event_id),
         caused_by=caused_by,
         session_id=session_id,
+        run_id=run_id,
         turn_id=turn_id,
     )
 

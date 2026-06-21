@@ -48,15 +48,19 @@ class AgentDefinition:
 
 @dataclass(frozen=True)
 class AgentInvocation:
-    """The domain input for one event-triggered agent invocation.
+    """The dispatch context passed to one event-triggered agent invocation.
 
-    Agent runners receive the definition that matched and the durable event
-    that triggered the run.
+    Runners receive the matched definition, the durable triggering event, and
+    optional queue/attempt/run ids. The explicit context keeps routing metadata
+    out of domain payloads while still letting agents publish correlated events.
     """
 
     agent: AgentDefinition
     triggering_event: Event
     publish_event: AgentEventPublisher | None = None
+    queue_item_id: str | None = None
+    attempt_id: str | None = None
+    run_id: str | None = None
 
     async def publish(self, draft: DraftEvent) -> Event:
         if self.publish_event is None:

@@ -26,7 +26,12 @@ AttemptStatus = Literal[
 
 @dataclass(frozen=True)
 class QueueItem:
-    """A routed event that should be processed by one target agent."""
+    """The durable assignment of one event to one target agent.
+
+    Queue items describe routing state, not execution. Runtime lifecycle events
+    record their status changes while the original event envelope carries
+    session and run correlation.
+    """
 
     queue_item_id: QueueItemId
     event_id: str
@@ -36,7 +41,12 @@ class QueueItem:
 
 @dataclass(frozen=True)
 class Attempt:
-    """One worker try at processing one queue item."""
+    """One execution try for a queue item.
+
+    Attempts carry session and run context so lifecycle events can be queried
+    without decoding the triggering event, while retries remain tied to the
+    same queue item through `attempt_number`.
+    """
 
     attempt_id: AttemptId
     queue_item_id: QueueItemId
@@ -48,13 +58,4 @@ class Attempt:
     finished_at: str | None = None
     error: str | None = None
     session_id: str | None = None
-
-
-__all__ = [
-    "Attempt",
-    "AttemptId",
-    "AttemptStatus",
-    "QueueItem",
-    "QueueItemId",
-    "QueueItemStatus",
-]
+    run_id: str | None = None

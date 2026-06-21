@@ -10,19 +10,22 @@ from typing import Any, Literal
 from zeta.capabilities.base import error_result
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.dispatch import EventDispatcher, ReservedRuntimeEventError
+from zeta.execute import (
+    SESSION_TURN_AGENT_ID,
+    session_run_id,
+    session_turn_requested_draft,
+)
 from zeta.kernel.capabilities import Capability, CapabilityId
 from zeta.kernel.events import DraftEvent, Event
+from zeta.kernel.runs import RunStatus
 from zeta.rpc.jsonrpc import JsonRpcConnection, RpcError
 from zeta.session import (
-    SESSION_TURN_AGENT_ID,
     Session,
-    SessionRunParams,
-    session_run_id,
+    SessionRequestError,
 )
 from zeta.store.events import EventReader, Filter
 
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
-RunStatus = Literal["running", "cancelling", "completed", "cancelled", "failed"]
 
 
 @dataclass
@@ -118,7 +121,7 @@ def event_to_wire(event: Event) -> dict[str, Any]:
         "idempotency_key": event.idempotency_key,
         "caused_by": event.caused_by,
         "session_id": event.session_id,
-        "turn_id": event.turn_id,
+        "run_id": event.run_id,
         "timestamp_ms": event.timestamp_ms,
         "cursor": event.cursor,
     }
@@ -241,44 +244,24 @@ async def events_list(params: dict[str, Any], client: RpcClient) -> dict[str, An
 async def session_run(params: dict[str, Any], client: RpcClient) -> dict[str, Any]:
     """Start a session run by publishing the requested-turn event and routing it."""
 
+    run_id = session_run_id()
     try:
-        request = SessionRunParams(**params)
-    except TypeError as exc:
+        draft = session_turn_requested_draft(
+            params,
+            run_id=run_id,
+            runtime_context=client.session,
+        )
+    except SessionRequestError as exc:
         raise invalid_params(
-            "invalid_params",
-            f"SessionRunParams parameters are invalid: {exc}",
+            exc.code,
+            exc.message,
+            **{key: value for key, value in exc.data.items() if key != "message"},
         ) from exc
 
-    if not request.objective:
-        raise invalid_params("invalid_objective", "objective must be non-empty")
-    if request.workflow not in {"ask", "propose", "do"}:
-        raise invalid_params(
-            "invalid_workflow",
-            "workflow must be ask, propose, or do",
-            workflow=request.workflow,
-        )
-    if request.tools is not None:
-        for tool in request.tools:
-            if not isinstance(tool, str) or not tool:
-                raise invalid_params(
-                    "invalid_tools",
-                    "tools must contain non-empty strings",
-                )
-
-    run_id = session_run_id()
     cancellation_event = asyncio.Event()
     state = RunState(run_id=run_id, cancellation_event=cancellation_event)
 
     client.pending_runs[run_id] = state
-
-    draft = DraftEvent(
-        "session.turn.requested",
-        "zeta",
-        request.turn_payload(run_id),
-        idempotency_key=f"session.turn.requested:{run_id}",
-        session_id=client.session.session_id,
-        turn_id=run_id,
-    )
     outcome = await client.dispatcher.publish_event(draft, route=False)
     state.task = asyncio.create_task(route_run(client, state, outcome.event))
 

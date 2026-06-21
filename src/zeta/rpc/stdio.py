@@ -6,6 +6,7 @@ import asyncio
 from typing import Any, TextIO
 
 from zeta.dispatch import EventDispatcher
+from zeta.execute import session_turn_agent
 from zeta.kernel.events import Event
 from zeta.loop import CancellationToken
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter
@@ -21,7 +22,7 @@ from zeta.rpc.routes import (
     tools_register,
     tools_respond,
 )
-from zeta.session import default_session, session_turn_agent
+from zeta.session import default_session
 
 
 def run_stdio(input: TextIO, output: TextIO) -> None:

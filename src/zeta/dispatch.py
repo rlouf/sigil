@@ -1,7 +1,6 @@
 """Append events, publish them, and route matching agents."""
 
 import asyncio
-import inspect
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -12,8 +11,7 @@ from zeta.kernel.dispatch import Attempt, AttemptStatus, QueueItem, QueueItemSta
 from zeta.kernel.events import DraftEvent, Event
 from zeta.store.events import EventWriter
 
-AgentResult = dict[str, Any] | Awaitable[dict[str, Any]]
-AgentRunner = Callable[["AgentInvocation"], AgentResult]
+AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 
 __all__ = [
     "AgentDefinition",
@@ -168,6 +166,7 @@ class EventDispatcher:
             status="running",
             started_at=started_at,
             session_id=triggering_event.session_id,
+            run_id=triggering_event.run_id,
         )
         started = self._append_lifecycle_event(
             "runtime.attempt.started",
@@ -181,18 +180,19 @@ class EventDispatcher:
         )
         events.append(started)
         try:
-            result = await maybe_await(
-                agent.run(
-                    AgentInvocation(
-                        agent.definition,
+            result = await agent.run(
+                AgentInvocation(
+                    agent.definition,
+                    triggering_event,
+                    publish_event=self._agent_event_publisher(
+                        agent,
                         triggering_event,
-                        publish_event=self._agent_event_publisher(
-                            agent,
-                            triggering_event,
-                            queue_item_id,
-                            attempt_id,
-                        ),
-                    )
+                        queue_item_id,
+                        attempt_id,
+                    ),
+                    queue_item_id=queue_item_id,
+                    attempt_id=attempt_id,
+                    run_id=triggering_event.run_id,
                 )
             )
         except Exception as exc:
@@ -208,6 +208,7 @@ class EventDispatcher:
                 finished_at=event_timestamp(),
                 error=error,
                 session_id=triggering_event.session_id,
+                run_id=triggering_event.run_id,
             )
             failed_attempt = self._append_lifecycle_event(
                 "runtime.attempt.failed",
@@ -250,6 +251,7 @@ class EventDispatcher:
             started_at=started_at,
             finished_at=event_timestamp(),
             session_id=triggering_event.session_id,
+            run_id=triggering_event.run_id,
         )
         completed_attempt = self._append_lifecycle_event(
             attempt_terminal_type,
@@ -298,6 +300,7 @@ class EventDispatcher:
             idempotency_key=idempotency_key,
             caused_by=triggering_event.id,
             session_id=triggering_event.session_id,
+            run_id=triggering_event.run_id,
             turn_id=triggering_event.turn_id,
         )
         event = self.event_sink.accept(draft).event
@@ -344,18 +347,13 @@ class EventDispatcher:
                 idempotency_key=draft.idempotency_key,
                 caused_by=draft.caused_by or triggering_event.id,
                 session_id=draft.session_id or triggering_event.session_id,
+                run_id=draft.run_id or triggering_event.run_id,
                 turn_id=draft.turn_id or triggering_event.turn_id,
             )
             outcome = await self.publish_event(tagged)
             return outcome.event
 
         return publish
-
-
-async def maybe_await(result: AgentResult) -> dict[str, Any]:
-    if inspect.isawaitable(result):
-        return await cast(Awaitable[dict[str, Any]], result)
-    return result
 
 
 def reject_reserved_runtime_event(draft: DraftEvent) -> None:

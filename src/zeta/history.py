@@ -538,6 +538,7 @@ def event_from_effect_record(record: dict[str, Any]) -> Event:
         session_id=(
             str(record["session"]) if isinstance(record.get("session"), str) else None
         ),
+        run_id=None,
         turn_id=(
             str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None
         ),
@@ -564,6 +565,9 @@ def event_from_record(record: dict[str, Any]) -> Event:
         ),
         session_id=(
             str(record["session"]) if isinstance(record.get("session"), str) else None
+        ),
+        run_id=(
+            str(record["run_id"]) if isinstance(record.get("run_id"), str) else None
         ),
         turn_id=(
             str(record["turn_id"]) if isinstance(record.get("turn_id"), str) else None

@@ -49,6 +49,9 @@ class EventStoreProtocol(EventReader, EventWriter, Protocol):
     def events_for_turn(self, turn_id: str) -> list[Event]:
         """Return events associated with a turn."""
 
+    def events_for_run(self, run_id: str) -> list[Event]:
+        """Return events associated with a run."""
+
     def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
         """Delete events in one session matching a type prefix."""
 

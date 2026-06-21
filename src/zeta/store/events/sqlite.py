@@ -61,9 +61,20 @@ class SqliteEventStore:
               idempotency_key TEXT,
               caused_by TEXT,
               session_id TEXT,
+              run_id TEXT,
               turn_id TEXT,
               timestamp INTEGER NOT NULL
             ) STRICT;
+            """
+        )
+        columns = {
+            str(row["name"])
+            for row in self.connection.execute("PRAGMA table_info(events)").fetchall()
+        }
+        if "run_id" not in columns:
+            self.connection.execute("ALTER TABLE events ADD COLUMN run_id TEXT")
+        self.connection.executescript(
+            """
             CREATE INDEX IF NOT EXISTS idx_events_type_ts
               ON events(type, timestamp);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idempotency_key
@@ -78,6 +89,12 @@ class SqliteEventStore:
             CREATE INDEX IF NOT EXISTS idx_events_caused_by_ts
               ON events(caused_by, timestamp)
               WHERE caused_by IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_events_run_ts
+              ON events(run_id, timestamp)
+              WHERE run_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_events_run_seq
+              ON events(run_id, seq)
+              WHERE run_id IS NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_events_turn_ts
               ON events(turn_id, timestamp)
               WHERE turn_id IS NOT NULL;
@@ -99,8 +116,8 @@ class SqliteEventStore:
             """
             INSERT INTO events
               (id, type, source, payload, idempotency_key, caused_by, session_id,
-               turn_id, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               run_id, turn_id, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT DO NOTHING
             """,
             (
@@ -111,6 +128,7 @@ class SqliteEventStore:
                 event.idempotency_key,
                 event.caused_by,
                 event.session_id,
+                event.run_id,
                 event.turn_id,
                 event.timestamp_ms,
             ),
@@ -127,7 +145,7 @@ class SqliteEventStore:
         row = self.connection.execute(
             """
             SELECT seq, id, type, source, payload, idempotency_key, caused_by,
-                   session_id, turn_id, timestamp
+                   session_id, run_id, turn_id, timestamp
             FROM events
             WHERE id = ?
             """,
@@ -147,6 +165,9 @@ class SqliteEventStore:
         if filter.session_id is not None:
             clauses.append("session_id = ?")
             params.append(filter.session_id)
+        if filter.run_id is not None:
+            clauses.append("run_id = ?")
+            params.append(filter.run_id)
         if filter.turn_id is not None:
             clauses.append("turn_id = ?")
             params.append(filter.turn_id)
@@ -164,7 +185,7 @@ class SqliteEventStore:
         rows = self.connection.execute(
             f"""
             SELECT seq, id, type, source, payload, idempotency_key, caused_by,
-                   session_id, turn_id, timestamp
+                   session_id, run_id, turn_id, timestamp
             FROM events
             {where}
             ORDER BY seq ASC
@@ -193,6 +214,9 @@ class SqliteEventStore:
     def events_for_turn(self, turn_id: str) -> list[Event]:
         return self.list_events(Filter(turn_id=turn_id))
 
+    def events_for_run(self, run_id: str) -> list[Event]:
+        return self.list_events(Filter(run_id=run_id))
+
     def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
         cursor = self.connection.execute(
             """
@@ -209,7 +233,7 @@ class SqliteEventStore:
             row = self.connection.execute(
                 """
                 SELECT seq, id, type, source, payload, idempotency_key, caused_by,
-                       session_id, turn_id, timestamp
+                       session_id, run_id, turn_id, timestamp
                 FROM events
                 WHERE id = ? OR idempotency_key = ?
                 ORDER BY id = ? DESC
@@ -221,7 +245,7 @@ class SqliteEventStore:
             row = self.connection.execute(
                 """
                 SELECT seq, id, type, source, payload, idempotency_key, caused_by,
-                       session_id, turn_id, timestamp
+                       session_id, run_id, turn_id, timestamp
                 FROM events
                 WHERE id = ?
                 """,
@@ -252,6 +276,7 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         idempotency_key=_optional_str(row["idempotency_key"]),
         caused_by=_optional_str(row["caused_by"]),
         session_id=_optional_str(row["session_id"]),
+        run_id=_optional_str(row["run_id"]),
         turn_id=_optional_str(row["turn_id"]),
         timestamp_ms=int(row["timestamp"]),
         cursor=int(row["seq"]),

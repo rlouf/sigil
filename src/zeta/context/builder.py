@@ -167,6 +167,7 @@ def project_trace_drafts(
                 idempotency_key=draft.idempotency_key,
                 caused_by=draft.caused_by,
                 session_id=draft.session_id,
+                run_id=draft.run_id,
                 turn_id=draft.turn_id,
                 timestamp_ms=0,
             )

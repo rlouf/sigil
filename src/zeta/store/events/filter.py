@@ -10,6 +10,7 @@ class Filter:
     event_type: str | None = None
     event_type_prefix: str | None = None
     session_id: str | None = None
+    run_id: str | None = None
     turn_id: str | None = None
     caused_by: str | None = None
     after_cursor: int | None = None

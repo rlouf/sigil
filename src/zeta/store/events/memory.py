@@ -35,6 +35,7 @@ class MemoryEventStore:
             idempotency_key=event.idempotency_key,
             caused_by=event.caused_by,
             session_id=event.session_id,
+            run_id=event.run_id,
             turn_id=event.turn_id,
             timestamp_ms=event.timestamp_ms,
             cursor=self._next_seq,
@@ -73,6 +74,9 @@ class MemoryEventStore:
 
     def events_for_turn(self, turn_id: str) -> list[Event]:
         return self.list_events(Filter(turn_id=turn_id))
+
+    def events_for_run(self, run_id: str) -> list[Event]:
+        return self.list_events(Filter(run_id=run_id))
 
     def clear_session_events(self, session_id: str, *, event_type_prefix: str) -> int:
         original_count = len(self._events)
@@ -115,6 +119,8 @@ def matches_filter(event: Event, filter: Filter) -> bool:
     ):
         return False
     if filter.session_id is not None and event.session_id != filter.session_id:
+        return False
+    if filter.run_id is not None and event.run_id != filter.run_id:
         return False
     if filter.turn_id is not None and event.turn_id != filter.turn_id:
         return False

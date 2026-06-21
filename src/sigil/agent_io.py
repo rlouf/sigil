@@ -21,6 +21,7 @@ from sigil.display.state import (
     progress_mode_from_env,
 )
 from sigil.turn import TurnRecorder
+from zeta.context.builder import project_trace_events
 from zeta.events import (
     draft_event_id,
     draft_event_view,
@@ -38,7 +39,7 @@ from zeta.models import (
     ModelSelection,
 )
 from zeta.models.chat_completions import ensure_server
-from zeta.session import Session, project_trace_for_turn
+from zeta.session import Session
 from zeta.store.events import EventReader, Filter, SqliteEventStore
 from zeta.store.substrate import Store, warn_trace_failure_once
 
@@ -59,6 +60,24 @@ def current_timeline(*, runtime_context: Session) -> list[Event]:
     except Exception as exc:
         warn_trace_failure_once("current_timeline", exc)
         return []
+
+
+def project_trace_for_turn(runtime_context: Session, turn_id: str | None) -> None:
+    if turn_id is None or not isinstance(runtime_context.event_sink, EventReader):
+        return
+    try:
+        project_trace_events(
+            runtime_context.event_sink.list_events(
+                Filter(
+                    session_id=runtime_context.session_id,
+                    turn_id=turn_id,
+                    event_type_prefix="zeta.",
+                )
+            ),
+            runtime_context.trace_store,
+        )
+    except Exception as exc:
+        warn_trace_failure_once("project_trace_for_turn", exc)
 
 
 def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
