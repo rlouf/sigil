@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from zeta.agents.capabilities import AgentConfig
 from zeta.context.builder import event_timeline_type, project_trace_events
-from zeta.dispatch import EventDispatcher, RegisteredAgent
+from zeta.dispatch import RegisteredAgent
 from zeta.events import (
     draft_event_id,
     user_message_draft,
@@ -185,6 +185,8 @@ def zeta_state_dir() -> Path:
 
 
 RuntimePublishedEvent = Event | DraftEvent
+CancellationEventForRun = Callable[[str], CancellationToken | None]
+SESSION_TURN_AGENT_ID = "zeta.session.turn"
 
 
 def current_timeline(*, runtime_context: Session) -> list[Event]:
@@ -202,24 +204,39 @@ def current_timeline(*, runtime_context: Session) -> list[Event]:
         return []
 
 
-async def run_session_turn_from_event(
-    run: AgentInvocation,
-    *,
+def session_turn_agent(
     runtime_context: Session,
+    *,
     publish_event: Callable[[RuntimePublishedEvent], None],
-    cancellation_event: CancellationToken | None = None,
-) -> dict[str, Any]:
-    params = dict(run.triggering_event.payload)
-    run_id = run.triggering_event.turn_id or optional_string(params.get("run_id"))
-    if run_id is None:
-        run_id = session_run_id()
-    return await run_session_turn(
-        params,
-        run_id=run_id,
-        caused_by=run.triggering_event.id,
-        publish_event=publish_event,
-        runtime_context=runtime_context,
-        cancellation_event=cancellation_event,
+    cancellation_event_for_run: CancellationEventForRun | None = None,
+) -> RegisteredAgent:
+    async def run_agent(invocation: AgentInvocation) -> dict[str, Any]:
+        params = dict(invocation.triggering_event.payload)
+        run_id = invocation.triggering_event.turn_id or optional_string(
+            params.get("run_id")
+        )
+        if run_id is None:
+            run_id = session_run_id()
+        cancellation_event = (
+            cancellation_event_for_run(run_id)
+            if cancellation_event_for_run is not None
+            else None
+        )
+        return await run_session_turn(
+            params,
+            run_id=run_id,
+            caused_by=invocation.triggering_event.id,
+            publish_event=publish_event,
+            runtime_context=runtime_context,
+            cancellation_event=cancellation_event,
+        )
+
+    return RegisteredAgent(
+        AgentDefinition(
+            SESSION_TURN_AGENT_ID,
+            (EventPattern("session.turn.requested"),),
+        ),
+        run=run_agent,
     )
 
 
@@ -301,32 +318,6 @@ async def run_session_turn(
         run_id=run_id,
         runtime_context=runtime_context,
         agent_result=result,
-    )
-
-
-def session_event_dispatcher(
-    runtime_context: Session,
-    *,
-    publish_event: Callable[[RuntimePublishedEvent], None],
-    cancellation_event: CancellationToken | None = None,
-) -> EventDispatcher:
-    return EventDispatcher(
-        runtime_context.event_sink,
-        agents=[
-            RegisteredAgent(
-                AgentDefinition(
-                    "zeta.session.turn",
-                    (EventPattern("session.turn.requested"),),
-                ),
-                run=lambda run: run_session_turn_from_event(
-                    run,
-                    runtime_context=runtime_context,
-                    publish_event=publish_event,
-                    cancellation_event=cancellation_event,
-                ),
-            )
-        ],
-        publish_event=publish_event,
     )
 
 

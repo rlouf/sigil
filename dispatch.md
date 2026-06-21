@@ -30,13 +30,13 @@ event-triggered agents.
 - Agent failures produce failed attempts rather than crashing the dispatcher.
 - Existing model/tool loop behavior stays inside `loop.py`.
 
-## Current Pain
+## Original Pain
 
 - `session.run` creates `session.turn.requested`, routes it through a generic
-  dispatcher, and then unwraps `agent_results[0]`.
-- `DispatchOutcome` mixes append results, lifecycle events, and agent return
+  dispatcher, and then unwraps a direct agent return value.
+- `DispatchOutcome` mixed append results, lifecycle events, and agent return
   values.
-- The legacy `runtime.work.*` model was vague: it conflated queue item state,
+- The previous work-event model was vague: it conflated queue item state,
   attempt state, and final agent results.
 - Interactive runs and event-triggered runs are conceptually separate even
   though they need the same lifecycle.
@@ -51,6 +51,90 @@ Make attempts the durable record of one worker trying to process one queue item.
 
 Make synchronous interactive RPC a client-side observation mode over a queue
 item or attempt, not a special execution path.
+
+## Refactor TODOs
+
+Use this checklist when continuing the refactor. Keep each slice small, start
+with tests, and clean up obsolete code in the same slice that makes it
+unnecessary.
+
+- [x] Add kernel `QueueItem` and `Attempt` shapes.
+- [x] Replace vague work events with queue item and attempt
+  lifecycle events.
+- [x] Rename dispatch output to `lifecycle_events`.
+- [x] Make `session.run` derive its final RPC result from terminal lifecycle
+  events.
+- [x] Remove the direct agent result field from `DispatchOutcome`.
+  - Added tests proving RPC still returns the same response from lifecycle
+    events.
+  - Removed the direct agent result field from `DispatchOutcome`.
+  - Removed result accumulation from `EventDispatcher.dispatch`.
+  - Removed the `run_rpc_session` compatibility fallback.
+  - Removed direct agent results from `events.publish` responses and updated
+    tests.
+- [x] Split `EventDispatcher.dispatch` into append/publish and route/execute
+  operations.
+  - Added tests for duplicate idempotency keys, reserved runtime lifecycle event
+    ingress, and route-disabled appends.
+  - [x] Normalize lifecycle idempotency keys to the stable format described below:
+    `queue_item:<event_id>:<target_agent>:created` and
+    `attempt:<queue_item_id>:<attempt_number>:started`, not the current
+    event-type-prefixed compatibility format.
+  - Introduced explicit `publish_event(draft, route=True)` and `route(event)`
+    methods or equally small names that match the codebase.
+  - Kept lifecycle event appends internal so callers cannot inject
+    `runtime.queue_item.*` or `runtime.attempt.*` as external facts.
+  - Deleted any helper or test fixture that only exists to preserve the old
+    all-in-one dispatch API.
+- [x] Serialize kernel queue item and attempt objects into lifecycle events.
+  - Constructed `QueueItem` and `Attempt` from `zeta.kernel.dispatch` in the
+    dispatcher.
+  - Serialized those kernel objects into lifecycle event payloads.
+  - Removed separate queue item and attempt projection objects from dispatch.
+  - Kept lifecycle events as the durable source of truth.
+  - Added `session_id` to attempt lifecycle payloads.
+- [x] Broaden terminal lifecycle result coverage.
+  - Added focused tests for `runtime.queue_item.failed` and
+    `runtime.queue_item.cancelled` mapping to RPC results.
+  - Kept `runtime.queue_item.completed` as the happy-path terminal result.
+  - Replaced `terminal_agent_result` with terminal lifecycle event result
+    derivation.
+- [x] Register the interactive runner as a normal built-in agent.
+  - Added `session_turn_agent(...)` as the built-in
+    `session.turn.requested` agent registration.
+  - Kept the runner as a thin adapter from `session.turn.requested` to the
+    existing loop.
+  - Wired the CLI to reuse one dispatcher with the built-in session agent.
+  - Deleted the old one-off session dispatcher helper from `session.py`.
+  - Deleted the event-to-turn adapter glue from `session.py`.
+  - Kept `run_session_turn` as the reusable boundary around session request
+    validation, timeline projection, and loop execution.
+- [x] Change `session.run` to append and observe.
+  - Validate params and append `session.turn.requested`.
+  - Observe the terminal queue item for the interactive session agent.
+  - Map the terminal lifecycle event to the current JSON-RPC response shape.
+  - Kept `events.publish` response semantics focused on appended event plus
+    lifecycle/route observation data, not direct agent return values.
+  - Deleted direct unwrapping of dispatch execution results.
+- [x] Keep `loop.py` as the model/tool execution engine unless a specific
+  cleanup becomes obvious.
+  - Did not move queue item or attempt ownership into `loop.py`.
+  - Kept attempt lifecycle context in dispatcher/session wiring, not in the loop
+    engine.
+  - Found no loop cleanup made demonstrably safe by this slice.
+- [x] Add agent-published events.
+  - Added `AgentInvocation.publish(...)` for agent-authored event drafts.
+  - Attached active `caused_by`, `session_id`, `turn_id`, queue item, attempt,
+    target agent, triggering event, and dispatch hop context.
+  - Added a conservative hop limit.
+  - Rejected obvious recursive self-publication until there is a real use case.
+- [x] Final cleanup pass.
+  - Searched for and removed obsolete compatibility names, dead adapters, stale
+    tests, and unused helpers introduced during the migration.
+  - Ran structural/string searches for old direct-result, work-event, one-off
+    session dispatcher, and return-oriented dispatch concepts.
+  - Kept only tests that assert old response fields are absent.
+  - Did not keep backward compatibility for removed internal APIs.
 
 ## Step 1: Lock Existing Behavior
 
@@ -218,45 +302,21 @@ route(event: Event) -> None
 - execute matching attempts concurrently where current behavior requires it
 - emit terminal attempt and queue item events after execution
 
-At the end of this step, `DispatchOutcome.agent_results` should no longer be the
+At the end of this step, direct agent return values should no longer be the
 primary state carrier. The durable event log should be.
 
-## Step 5: Add Queue Item And Attempt Projections
+## Step 5: Serialize Kernel Queue Items And Attempts
 
-Add small projections that derive current queue items and attempts from runtime
-lifecycle events.
+Construct `QueueItem` and `Attempt` values from `zeta.kernel.dispatch` when
+emitting lifecycle events.
 
-The projections should be rebuildable from the event store and updated as new
-runtime lifecycle events are appended.
+The lifecycle event payloads should be serialized from those kernel objects,
+with terminal result or error fields added explicitly. Do not introduce a
+second set of projection objects for queue item or attempt state in dispatch.
 
-Minimal projected queue item fields:
-
-```text
-queue_item_id
-event_id
-target_agent
-status
-last_event_id
-```
-
-Minimal projected attempt fields:
-
-```text
-attempt_id
-queue_item_id
-event_id
-attempt_number
-target_agent
-status
-started_at
-finished_at
-error
-session_id
-last_event_id
-```
-
-These projections are for observation and waiting. They are not authoritative
-state.
+The durable lifecycle events remain the source of truth. If a future worker or
+dashboard needs replayed state, add that read model at the observation boundary,
+not in the hot dispatch path.
 
 ## Step 6: Make Interactive Turns A Built-In Agent
 
@@ -266,14 +326,14 @@ Represent interactive execution as an agent accepting:
 session.turn.requested
 ```
 
-Move the current `session_event_dispatcher` idea into dispatcher registration,
-not a special helper that builds a one-agent dispatcher per run.
+Move the one-off session dispatcher idea into dispatcher registration, not a
+special helper that builds a one-agent dispatcher per run.
 
 The interactive runner should call the existing session turn logic:
 
 ```text
 session.turn.requested event
-  -> QueueItem(target_agent=zeta.interactive)
+  -> QueueItem(target_agent=zeta.session.turn)
   -> Attempt
   -> SessionRunParams
   -> async_run_agent_turn
@@ -291,12 +351,12 @@ Change `run_rpc_session` so it:
 1. validates params
 2. chooses or reads `run_id`
 3. appends `session.turn.requested`
-4. waits for the queue item / attempt for `(event_id, zeta.interactive)` when
+4. waits for the queue item / attempt for `(event_id, zeta.session.turn)` when
    synchronous
-5. maps the terminal attempt / turn projection to the existing JSON-RPC result
+5. maps the terminal lifecycle event to the existing JSON-RPC result
    shape
 
-This removes the need to unwrap `outcome.agent_results[0]`.
+This removes the need to unwrap a direct dispatch execution result.
 
 The request/response API can remain stable while the internal source of truth
 moves to events.
@@ -324,10 +384,10 @@ unless a concrete use case appears.
 
 Once tests pass through the event-sourced path:
 
-- remove `run_session_turn_from_event` if it is only adapter glue
-- remove per-run construction of `session_event_dispatcher`
-- remove compatibility references to the old `DispatchOutcome.work_events` name
-- reduce or remove `DispatchOutcome.agent_results`
+- remove obsolete session-event adapter glue
+- remove per-run construction of one-off session dispatchers
+- remove compatibility references to old dispatch output names
+- remove direct agent result fields from dispatch outcomes
 - remove any remaining compatibility references to legacy work-event names
 - keep compatibility aliases only where external callers still need them
 

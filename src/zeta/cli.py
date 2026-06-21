@@ -2,12 +2,19 @@
 
 import asyncio
 import sys
-from functools import partial
+from typing import Any, cast
 
 import click
 
-from zeta.rpc import JsonRpcServer, run_rpc_session, session_event_dispatcher
-from zeta.session import default_session
+from zeta.dispatch import EventDispatcher
+from zeta.loop import CancellationToken
+from zeta.rpc import (
+    JsonRpcServer,
+    rpc_cancellation_event_param,
+    rpc_run_id_param,
+    run_rpc_session,
+)
+from zeta.session import default_session, session_turn_agent
 from zeta.store.events import EventReader
 
 
@@ -35,16 +42,37 @@ def rpc(stdio: bool) -> int:
         event_reader=event_reader,
         event_sink=runtime_context.event_sink,
     )
+    cancellation_events: dict[str, CancellationToken] = {}
+    dispatcher = EventDispatcher(
+        runtime_context.event_sink,
+        agents=[
+            session_turn_agent(
+                runtime_context,
+                publish_event=server.publish_event,
+                cancellation_event_for_run=cancellation_events.get,
+            )
+        ],
+        publish_event=server.publish_event,
+    )
+    server.event_dispatcher = dispatcher
 
-    server.session_runner = partial(
-        run_rpc_session,
-        publish_event=server.publish_event,
-        runtime_context=runtime_context,
-    )
-    server.event_dispatcher = session_event_dispatcher(
-        runtime_context,
-        publish_event=server.publish_event,
-    )
+    async def run_shared_rpc_session(params: dict[str, Any]) -> dict[str, Any]:
+        run_id = rpc_run_id_param(params)
+        cancellation_event = rpc_cancellation_event_param(params)
+        if run_id is not None and cancellation_event is not None:
+            cancellation_events[run_id] = cast(CancellationToken, cancellation_event)
+        try:
+            return await run_rpc_session(
+                params,
+                publish_event=server.publish_event,
+                runtime_context=runtime_context,
+                event_dispatcher=dispatcher,
+            )
+        finally:
+            if run_id is not None:
+                cancellation_events.pop(run_id, None)
+
+    server.session_runner = run_shared_rpc_session
     asyncio.run(server.serve())
     return 0
 

@@ -115,13 +115,13 @@ def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:
     }.issubset(set(zeta_kernel_dispatch.__all__))
 
     queue_item = QueueItem(
-        queue_item_id="qi_evt_123_zeta_interactive",
+        queue_item_id="qi_evt_123_zeta_session_turn",
         event_id="evt_123",
-        target_agent="zeta.interactive",
+        target_agent="zeta.session.turn",
         status="available",
     )
     attempt = Attempt(
-        attempt_id="att_qi_evt_123_zeta_interactive_1",
+        attempt_id="att_qi_evt_123_zeta_session_turn_1",
         queue_item_id=queue_item.queue_item_id,
         event_id=queue_item.event_id,
         attempt_number=1,

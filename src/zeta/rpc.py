@@ -18,7 +18,11 @@ from zeta.capabilities.base import (
 )
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.capabilities.registry import registry as _runtime_tool_registry
-from zeta.dispatch import EventDispatcher, terminal_agent_result
+from zeta.dispatch import (
+    EventDispatcher,
+    ReservedRuntimeEventError,
+    terminal_queue_item_result,
+)
 from zeta.events import (
     EventSink,
     boundary_event_draft,
@@ -32,12 +36,13 @@ from zeta.kernel.capabilities import (
 )
 from zeta.kernel.events import DraftEvent, Event
 from zeta.session import (
+    SESSION_TURN_AGENT_ID,
     Session,
     SessionRequestError,
     default_session,
     empty_session_trace_result,
-    session_event_dispatcher,
     session_run_id,
+    session_turn_agent,
     session_turn_requested_draft,
 )
 from zeta.store.events import EventReader, Filter
@@ -191,6 +196,7 @@ async def run_rpc_session(
     *,
     publish_event: Callable[[RuntimePublishedEvent], None],
     runtime_context: Session | None = None,
+    event_dispatcher: EventDispatcher | None = None,
 ) -> dict[str, Any]:
     runtime_context = runtime_context or default_session()
     run_id = rpc_run_id_param(params) or session_run_id()
@@ -201,19 +207,27 @@ async def run_rpc_session(
             run_id=run_id,
             runtime_context=runtime_context,
         )
-        dispatcher = session_event_dispatcher(
-            runtime_context,
-            publish_event=publish_event,
-            cancellation_event=cancellation_event,
-        )
     except SessionRequestError as exc:
         raise rpc_error_from_session_request(exc) from exc
-    outcome = await dispatcher.dispatch(draft)
-    result = terminal_agent_result(outcome.lifecycle_events)
+    dispatcher = event_dispatcher or EventDispatcher(
+        runtime_context.event_sink,
+        agents=[
+            session_turn_agent(
+                runtime_context,
+                publish_event=publish_event,
+                cancellation_event_for_run=lambda _: cancellation_event,
+            )
+        ],
+        publish_event=publish_event,
+    )
+    outcome = await dispatcher.publish_event(draft)
+    result = terminal_queue_item_result(
+        outcome.lifecycle_events,
+        event_id=outcome.event.id,
+        target_agent=SESSION_TURN_AGENT_ID,
+    )
     if result is not None:
         return result
-    if outcome.agent_results:
-        return outcome.agent_results[0]
     return {
         "run_id": run_id,
         "outcome": "duplicate" if not outcome.inserted else "unhandled",
@@ -918,14 +932,26 @@ class JsonRpcServer(JsonRpcProtocol):
                 self.event_sink,
                 publish_event=self.publish_event,
             )
-        outcome = await dispatcher.dispatch(rpc_publish_event_draft(params))
+        try:
+            outcome = await dispatcher.publish_event(rpc_publish_event_draft(params))
+        except ReservedRuntimeEventError as exc:
+            raise RpcError(
+                -32602,
+                "reserved_runtime_event",
+                "Invalid params",
+                {
+                    "message": (
+                        "events.publish cannot accept runtime lifecycle events"
+                    ),
+                    "event_type": exc.event_type,
+                },
+            ) from exc
         return {
             "inserted": outcome.inserted,
             "event": event_view(outcome.event),
             "lifecycle_events": [
                 event_view(event) for event in outcome.lifecycle_events
             ],
-            "agent_results": outcome.agent_results,
         }
 
     def start_session_run(self, request_id: Any, params: dict[str, Any]) -> None:

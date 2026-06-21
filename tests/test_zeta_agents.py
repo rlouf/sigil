@@ -262,7 +262,7 @@ User asked: {{ event.payload.text }}
     dispatcher = zeta_dispatch.EventDispatcher(store, agents=[compiled])
 
     outcome = asyncio.run(
-        dispatcher.dispatch(
+        dispatcher.publish_event(
             zeta_events.DraftEvent(
                 "slack.dm.received",
                 "test",
@@ -279,6 +279,7 @@ User asked: {{ event.payload.text }}
     assert calls[0]["config"].system_prompt == "Answers workspace questions in Slack."
     assert tuple(calls[0]["config"].allowed_capabilities or ()) == ("Read",)
     assert calls[0]["kwargs"]["caused_by"] == outcome.event.id
-    assert outcome.agent_results == [
-        {"final_answer": "done", "final_event_cursor": "6"}
-    ]
+    assert zeta_dispatch.terminal_agent_result(outcome.lifecycle_events) == {
+        "final_answer": "done",
+        "final_event_cursor": "6",
+    }

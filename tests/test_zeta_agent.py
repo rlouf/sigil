@@ -5,7 +5,8 @@ import json
 import threading
 import time
 import tomllib
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Coroutine, Iterable
+from dataclasses import asdict
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,6 +51,7 @@ from zeta.kernel.capabilities import (
     Capability,
     CapabilityId,
 )
+from zeta.kernel.dispatch import Attempt, QueueItem
 from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import AgentTurnResult
 from zeta.models import chat_completions as zeta_model
@@ -116,7 +118,7 @@ def dispatch_event(
     dispatcher: zeta_dispatch.EventDispatcher,
     draft: DraftEvent,
 ) -> zeta_dispatch.DispatchOutcome:
-    return asyncio.run(dispatcher.dispatch(draft))
+    return asyncio.run(dispatcher.publish_event(draft))
 
 
 def _test_capability(
@@ -1396,9 +1398,9 @@ def test_zeta_dispatch_terminal_agent_result_comes_from_lifecycle_event() -> Non
         event_type="runtime.queue_item.completed",
         source="zeta",
         payload={
-            "queue_item_id": "qi_evt_request_zeta_interactive",
+            "queue_item_id": "qi_evt_request_zeta_session_turn",
             "event_id": "evt_request",
-            "target_agent": "zeta.interactive",
+            "target_agent": "zeta.session.turn",
             "status": "completed",
             "result": {
                 "run_id": "run_lifecycle",
@@ -1422,7 +1424,7 @@ def test_zeta_dispatch_terminal_agent_result_comes_from_lifecycle_event() -> Non
     }
 
 
-def test_zeta_rpc_session_returns_lifecycle_result_without_agent_results(
+def test_zeta_session_turn_agent_adapts_requested_event_to_turn_runner(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -1434,18 +1436,96 @@ def test_zeta_rpc_session_returns_lifecycle_result_without_agent_results(
         state_dir=tmp_path,
         session_dir=tmp_path / "sessions" / "ctx-session",
     )
+    published: list[Event | DraftEvent] = []
+    captured: dict[str, Any] = {}
+
+    async def fake_run_session_turn(
+        params: dict[str, Any],
+        *,
+        run_id: str,
+        caused_by: str,
+        publish_event: Callable[[Event | DraftEvent], None],
+        runtime_context: zeta_session.Session,
+        cancellation_event: asyncio.Event | None,
+    ) -> dict[str, Any]:
+        captured["params"] = params
+        captured["run_id"] = run_id
+        captured["caused_by"] = caused_by
+        captured["publish_event"] = publish_event
+        captured["runtime_context"] = runtime_context
+        captured["cancellation_event"] = cancellation_event
+        publish_event(DraftEvent("seen", "test", {}))
+        return {"run_id": run_id, "outcome": "completed"}
+
+    cancellation_event = asyncio.Event()
+    monkeypatch.setattr(zeta_session, "run_session_turn", fake_run_session_turn)
+
+    agent = zeta_session.session_turn_agent(
+        context,
+        publish_event=published.append,
+        cancellation_event_for_run=lambda run_id: (
+            cancellation_event if run_id == "run_event" else None
+        ),
+    )
+    triggering_event = Event(
+        id="evt_request",
+        event_type="session.turn.requested",
+        source="zeta",
+        payload={"objective": "answer", "run_id": "run_event"},
+        idempotency_key=None,
+        caused_by=None,
+        session_id="ctx-session",
+        turn_id="run_event",
+        timestamp_ms=1,
+        cursor=1,
+    )
+    runner = agent.run
+    assert runner is not None
+    result = asyncio.run(
+        cast(
+            Coroutine[Any, Any, dict[str, Any]],
+            runner(zeta_dispatch.AgentInvocation(agent.definition, triggering_event)),
+        )
+    )
+
+    assert agent.definition.agent_id == "zeta.session.turn"
+    assert agent.definition.accepts(triggering_event)
+    assert result == {"run_id": "run_event", "outcome": "completed"}
+    assert captured == {
+        "params": {"objective": "answer", "run_id": "run_event"},
+        "run_id": "run_event",
+        "caused_by": "evt_request",
+        "publish_event": published.append,
+        "runtime_context": context,
+        "cancellation_event": cancellation_event,
+    }
+    assert [event["type"] for event in published_event_views(published)] == ["seen"]
+
+
+def test_zeta_rpc_session_returns_lifecycle_result(tmp_path: Path) -> None:
+    context = zeta_session.Session(
+        session_id="ctx-session",
+        event_sink=zeta_events.MemoryEventStore(),
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
 
     class FakeDispatcher:
-        async def dispatch(self, draft: DraftEvent) -> zeta_dispatch.DispatchOutcome:
+        async def publish_event(
+            self,
+            draft: DraftEvent,
+        ) -> zeta_dispatch.DispatchOutcome:
             request_event = Event.from_draft(draft)
             terminal_event = Event(
                 id="evt_terminal",
                 event_type="runtime.queue_item.completed",
                 source="zeta",
                 payload={
-                    "queue_item_id": "qi_evt_request_zeta_interactive",
+                    "queue_item_id": "qi_evt_request_zeta_session_turn",
                     "event_id": request_event.id,
-                    "target_agent": "zeta.interactive",
+                    "target_agent": "zeta.session.turn",
                     "status": "completed",
                     "result": {
                         "run_id": draft.turn_id,
@@ -1460,18 +1540,33 @@ def test_zeta_rpc_session_returns_lifecycle_result_without_agent_results(
                 timestamp_ms=1,
                 cursor=9,
             )
+            other_terminal_event = Event(
+                id="evt_other_terminal",
+                event_type="runtime.queue_item.completed",
+                source="zeta",
+                payload={
+                    "queue_item_id": "qi_evt_request_other",
+                    "event_id": request_event.id,
+                    "target_agent": "other.agent",
+                    "status": "completed",
+                    "result": {
+                        "run_id": draft.turn_id,
+                        "outcome": "completed",
+                        "final_answer": "wrong agent",
+                    },
+                },
+                idempotency_key=None,
+                caused_by=request_event.id,
+                session_id=draft.session_id,
+                turn_id=draft.turn_id,
+                timestamp_ms=1,
+                cursor=10,
+            )
             return zeta_dispatch.DispatchOutcome(
                 request_event,
                 True,
-                [terminal_event],
-                [],
+                [terminal_event, other_terminal_event],
             )
-
-    monkeypatch.setattr(
-        zeta_rpc,
-        "session_event_dispatcher",
-        lambda *args, **kwargs: FakeDispatcher(),
-    )
 
     result = run_rpc_session(
         {
@@ -1482,6 +1577,7 @@ def test_zeta_rpc_session_returns_lifecycle_result_without_agent_results(
         },
         publish_event=lambda event: None,
         runtime_context=context,
+        event_dispatcher=cast(Any, FakeDispatcher()),
     )
 
     assert result == {
@@ -1490,6 +1586,99 @@ def test_zeta_rpc_session_returns_lifecycle_result_without_agent_results(
         "final_answer": "from lifecycle",
         "final_event_cursor": "9",
     }
+
+
+@pytest.mark.parametrize(
+    ("event_type", "status", "payload_extra", "expected"),
+    [
+        (
+            "runtime.queue_item.failed",
+            "failed",
+            {"error": "RuntimeError: boom"},
+            {
+                "outcome": "failed",
+                "error": "RuntimeError: boom",
+                "final_event_cursor": "9",
+            },
+        ),
+        (
+            "runtime.queue_item.cancelled",
+            "cancelled",
+            {
+                "result": {
+                    "run_id": "run_lifecycle",
+                    "outcome": "cancelled",
+                    "final_answer": "",
+                }
+            },
+            {
+                "run_id": "run_lifecycle",
+                "outcome": "cancelled",
+                "final_answer": "",
+                "final_event_cursor": "9",
+            },
+        ),
+    ],
+)
+def test_zeta_rpc_session_returns_terminal_lifecycle_result(
+    tmp_path: Path,
+    event_type: str,
+    status: str,
+    payload_extra: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    context = zeta_session.Session(
+        session_id="ctx-session",
+        event_sink=zeta_events.MemoryEventStore(),
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+
+    class FakeDispatcher:
+        async def publish_event(
+            self,
+            draft: DraftEvent,
+        ) -> zeta_dispatch.DispatchOutcome:
+            request_event = Event.from_draft(draft)
+            terminal_event = Event(
+                id="evt_terminal",
+                event_type=event_type,
+                source="zeta",
+                payload={
+                    "queue_item_id": "qi_evt_request_zeta_session_turn",
+                    "event_id": request_event.id,
+                    "target_agent": "zeta.session.turn",
+                    "status": status,
+                    **payload_extra,
+                },
+                idempotency_key=None,
+                caused_by=request_event.id,
+                session_id=draft.session_id,
+                turn_id=draft.turn_id,
+                timestamp_ms=1,
+                cursor=9,
+            )
+            return zeta_dispatch.DispatchOutcome(
+                request_event,
+                True,
+                [terminal_event],
+            )
+
+    result = run_rpc_session(
+        {
+            "objective": "answer",
+            "tools": [],
+            "context": "",
+            zeta_rpc.RPC_RUN_ID_PARAM: "run_lifecycle",
+        },
+        publish_event=lambda event: None,
+        runtime_context=context,
+        event_dispatcher=cast(Any, FakeDispatcher()),
+    )
+
+    assert result == expected
 
 
 def test_sigil_zeta_rpc_session_uses_shared_runner_boundary(monkeypatch) -> None:
@@ -1640,6 +1829,9 @@ def test_zeta_event_dispatcher_persists_unmatched_event(tmp_path: Path) -> None:
     assert [event.event_type for event in outcome.lifecycle_events] == [
         "runtime.queue_item.unhandled"
     ]
+    assert [event.idempotency_key for event in outcome.lifecycle_events] == [
+        f"queue_item:{outcome.event.id}:unhandled"
+    ]
     assert [event.event_type for event in published] == [
         "github.issue.opened",
         "runtime.queue_item.unhandled",
@@ -1704,7 +1896,45 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
         "issue-triage",
         "issue-triage",
     ]
-    assert outcome.agent_results == [{"outcome": "handled", "final_event_cursor": "6"}]
+    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+    assert [event.idempotency_key for event in outcome.lifecycle_events] == [
+        f"queue_item:{outcome.event.id}:issue-triage:created",
+        f"queue_item:{outcome.event.id}:issue-triage:claimed:1",
+        f"attempt:{queue_item_id}:1:started",
+        f"attempt:{queue_item_id}:1:completed",
+        f"queue_item:{outcome.event.id}:issue-triage:completed",
+    ]
+    assert zeta_dispatch.terminal_agent_result(outcome.lifecycle_events) == {
+        "outcome": "handled",
+        "final_event_cursor": "6",
+    }
+    assert outcome.lifecycle_events[-1].payload == {
+        **asdict(
+            QueueItem(
+                queue_item_id=queue_item_id,
+                event_id=outcome.event.id,
+                target_agent="issue-triage",
+                status="completed",
+            )
+        ),
+        "result": {"outcome": "handled"},
+    }
+    assert outcome.lifecycle_events[3].payload == {
+        **asdict(
+            Attempt(
+                attempt_id=f"att_{queue_item_id}_1",
+                queue_item_id=queue_item_id,
+                event_id=outcome.event.id,
+                attempt_number=1,
+                target_agent="issue-triage",
+                status="completed",
+                started_at=outcome.lifecycle_events[2].payload["started_at"],
+                finished_at=outcome.lifecycle_events[3].payload["finished_at"],
+                session_id="repo",
+            )
+        ),
+        "result": {"outcome": "handled"},
+    }
     assert [event.event_type for event in published] == [
         "github.issue.opened",
         "runtime.queue_item.created",
@@ -1713,6 +1943,259 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
         "runtime.attempt.completed",
         "runtime.queue_item.completed",
     ]
+
+
+def test_zeta_event_dispatcher_can_publish_without_routing(tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    published: list[zeta_events.Event] = []
+    calls = 0
+
+    def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {"outcome": "handled", "event": run.triggering_event.id}
+
+    dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        agents=[
+            zeta_dispatch.RegisteredAgent(
+                zeta_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=run_agent,
+            )
+        ],
+        publish_event=published.append,
+    )
+
+    outcome = asyncio.run(
+        dispatcher.publish_event(
+            zeta_events.DraftEvent(
+                "github.issue.opened",
+                "github",
+                {"title": "Bug"},
+                session_id="repo",
+            ),
+            route=False,
+        )
+    )
+
+    assert outcome.inserted is True
+    assert outcome.lifecycle_events == []
+    assert calls == 0
+    assert [event.event_type for event in published] == ["github.issue.opened"]
+    assert [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ] == ["github.issue.opened"]
+
+
+def test_zeta_event_dispatcher_rejects_external_lifecycle_events(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    published: list[zeta_events.Event] = []
+    dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        publish_event=published.append,
+    )
+
+    with pytest.raises(zeta_dispatch.ReservedRuntimeEventError) as exc_info:
+        asyncio.run(
+            dispatcher.publish_event(
+                zeta_events.DraftEvent(
+                    "runtime.queue_item.completed",
+                    "external",
+                    {"queue_item_id": "qi_1"},
+                    session_id="repo",
+                )
+            )
+        )
+
+    assert exc_info.value.event_type == "runtime.queue_item.completed"
+    assert published == []
+    assert event_store.list_events(zeta_events.Filter()) == []
+
+
+def test_zeta_event_dispatcher_routes_agent_published_events(tmp_path: Path) -> None:
+    async def run() -> None:
+        event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+        async def run_agent(
+            invocation: zeta_dispatch.AgentInvocation,
+        ) -> dict[str, object]:
+            published = await invocation.publish(
+                zeta_events.DraftEvent(
+                    "agent.note.created",
+                    "agent",
+                    {"body": "triaged"},
+                    idempotency_key="agent-note:1",
+                )
+            )
+            return {"outcome": "handled", "published_event_id": published.id}
+
+        dispatcher = zeta_dispatch.EventDispatcher(
+            event_store,
+            agents=[
+                zeta_dispatch.RegisteredAgent(
+                    zeta_dispatch.AgentDefinition(
+                        "issue-triage",
+                        (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    ),
+                    run=run_agent,
+                )
+            ],
+        )
+
+        outcome = await dispatcher.publish_event(
+            zeta_events.DraftEvent(
+                "github.issue.opened",
+                "github",
+                {"title": "Bug"},
+                session_id="repo",
+                turn_id="turn-1",
+            )
+        )
+
+        queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+        attempt_id = f"att_{queue_item_id}_1"
+        stored_events = event_store.list_events(zeta_events.Filter())
+        published_note = next(
+            event for event in stored_events if event.event_type == "agent.note.created"
+        )
+        completed_queue_item = [
+            event
+            for event in stored_events
+            if event.event_type == "runtime.queue_item.completed"
+            and event.payload["target_agent"] == "issue-triage"
+        ][0]
+
+        assert published_note.caused_by == outcome.event.id
+        assert published_note.session_id == "repo"
+        assert published_note.turn_id == "turn-1"
+        assert published_note.payload == {
+            "body": "triaged",
+            "_zeta_queue_item_id": queue_item_id,
+            "_zeta_attempt_id": attempt_id,
+            "_zeta_target_agent": "issue-triage",
+            "_zeta_triggering_event_id": outcome.event.id,
+            "_zeta_dispatch_hop": 1,
+        }
+        assert completed_queue_item.payload["result"] == {
+            "outcome": "handled",
+            "published_event_id": published_note.id,
+        }
+        assert [event.event_type for event in stored_events] == [
+            "github.issue.opened",
+            "runtime.queue_item.created",
+            "runtime.queue_item.claimed",
+            "runtime.attempt.started",
+            "agent.note.created",
+            "runtime.queue_item.unhandled",
+            "runtime.attempt.completed",
+            "runtime.queue_item.completed",
+        ]
+
+    asyncio.run(run())
+
+
+def test_zeta_event_dispatcher_rejects_recursive_agent_publication(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+        async def run_agent(
+            invocation: zeta_dispatch.AgentInvocation,
+        ) -> dict[str, object]:
+            await invocation.publish(
+                zeta_events.DraftEvent("github.issue.reopened", "agent", {})
+            )
+            return {"outcome": "handled"}
+
+        dispatcher = zeta_dispatch.EventDispatcher(
+            event_store,
+            agents=[
+                zeta_dispatch.RegisteredAgent(
+                    zeta_dispatch.AgentDefinition(
+                        "issue-triage",
+                        (zeta_dispatch.EventPattern("github.issue.*"),),
+                    ),
+                    run=run_agent,
+                )
+            ],
+        )
+
+        outcome = await dispatcher.publish_event(
+            zeta_events.DraftEvent("github.issue.opened", "github", {})
+        )
+
+        assert [event.event_type for event in outcome.lifecycle_events] == [
+            "runtime.queue_item.created",
+            "runtime.queue_item.claimed",
+            "runtime.attempt.started",
+            "runtime.attempt.failed",
+            "runtime.queue_item.failed",
+        ]
+        assert (
+            "RecursiveAgentPublicationError"
+            in outcome.lifecycle_events[-1].payload["error"]
+        )
+        assert [
+            event.event_type for event in event_store.list_events(zeta_events.Filter())
+        ] == [
+            "github.issue.opened",
+            "runtime.queue_item.created",
+            "runtime.queue_item.claimed",
+            "runtime.attempt.started",
+            "runtime.attempt.failed",
+            "runtime.queue_item.failed",
+        ]
+
+    asyncio.run(run())
+
+
+def test_zeta_event_dispatcher_limits_agent_publication_hops(
+    tmp_path: Path,
+) -> None:
+    async def run() -> None:
+        event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+        async def run_agent(
+            invocation: zeta_dispatch.AgentInvocation,
+        ) -> dict[str, object]:
+            await invocation.publish(
+                zeta_events.DraftEvent("agent.note.created", "agent", {})
+            )
+            return {"outcome": "handled"}
+
+        dispatcher = zeta_dispatch.EventDispatcher(
+            event_store,
+            agents=[
+                zeta_dispatch.RegisteredAgent(
+                    zeta_dispatch.AgentDefinition(
+                        "issue-triage",
+                        (zeta_dispatch.EventPattern("github.issue.opened"),),
+                    ),
+                    run=run_agent,
+                )
+            ],
+        )
+
+        outcome = await dispatcher.publish_event(
+            zeta_events.DraftEvent(
+                "github.issue.opened",
+                "github",
+                {"_zeta_dispatch_hop": zeta_dispatch.MAX_AGENT_PUBLICATION_HOPS},
+            )
+        )
+
+        assert (
+            "AgentPublicationHopLimitError"
+            in outcome.lifecycle_events[-1].payload["error"]
+        )
+
+    asyncio.run(run())
 
 
 def test_zeta_event_dispatcher_runs_matching_agents_in_task_group() -> None:
@@ -1748,7 +2231,7 @@ def test_zeta_event_dispatcher_runs_matching_agents_in_task_group() -> None:
             ],
         )
 
-        outcome = await dispatcher.dispatch(
+        outcome = await dispatcher.publish_event(
             zeta_events.DraftEvent("github.issue.opened", "github", {})
         )
 
@@ -1765,7 +2248,11 @@ def test_zeta_event_dispatcher_runs_matching_agents_in_task_group() -> None:
             "runtime.attempt.completed",
             "runtime.queue_item.completed",
         ]
-        assert [result["agent"] for result in outcome.agent_results] == [
+        assert [
+            event.payload["result"]["agent"]
+            for event in outcome.lifecycle_events
+            if event.event_type == "runtime.queue_item.completed"
+        ] == [
             "agent.one",
             "agent.two",
         ]
@@ -1849,7 +2336,17 @@ def test_zeta_event_dispatcher_records_pending_work_without_runner(
     assert [event.event_type for event in outcome.lifecycle_events] == [
         "runtime.queue_item.created"
     ]
-    assert outcome.agent_results == []
+    assert [event.idempotency_key for event in outcome.lifecycle_events] == [
+        f"queue_item:{outcome.event.id}:issue-triage:created"
+    ]
+    assert outcome.lifecycle_events[0].payload == asdict(
+        QueueItem(
+            queue_item_id=f"qi_{outcome.event.id}_issue-triage",
+            event_id=outcome.event.id,
+            target_agent="issue-triage",
+            status="available",
+        )
+    )
     assert [event.event_type for event in published] == [
         "github.issue.opened",
         "runtime.queue_item.created",
@@ -1944,9 +2441,44 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
         "runtime.queue_item.failed",
     ]
     assert outcome.lifecycle_events[-1].payload["status"] == "failed"
-    assert outcome.agent_results == [
-        {"outcome": "failed", "error": "boom", "final_event_cursor": "6"}
+    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+    assert [event.idempotency_key for event in outcome.lifecycle_events] == [
+        f"queue_item:{outcome.event.id}:issue-triage:created",
+        f"queue_item:{outcome.event.id}:issue-triage:claimed:1",
+        f"attempt:{queue_item_id}:1:started",
+        f"attempt:{queue_item_id}:1:failed",
+        f"queue_item:{outcome.event.id}:issue-triage:failed",
     ]
+    assert zeta_dispatch.terminal_agent_result(outcome.lifecycle_events) == {
+        "outcome": "failed",
+        "error": "RuntimeError: boom",
+        "final_event_cursor": "6",
+    }
+    assert outcome.lifecycle_events[-1].payload == {
+        **asdict(
+            QueueItem(
+                queue_item_id=queue_item_id,
+                event_id=outcome.event.id,
+                target_agent="issue-triage",
+                status="failed",
+            )
+        ),
+        "error": "RuntimeError: boom",
+    }
+    assert outcome.lifecycle_events[3].payload == asdict(
+        Attempt(
+            attempt_id=f"att_{queue_item_id}_1",
+            queue_item_id=queue_item_id,
+            event_id=outcome.event.id,
+            attempt_number=1,
+            target_agent="issue-triage",
+            status="failed",
+            started_at=outcome.lifecycle_events[2].payload["started_at"],
+            finished_at=outcome.lifecycle_events[3].payload["finished_at"],
+            error="RuntimeError: boom",
+            session_id="repo",
+        )
+    )
 
 
 def test_zeta_rpc_cli_serves_stdio_initialize() -> None:
@@ -2072,8 +2604,14 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
         event_reader=event_store,
         event_sink=event_store,
     )
-    server.event_dispatcher = zeta_rpc.session_event_dispatcher(
-        context,
+    server.event_dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        agents=[
+            zeta_session.session_turn_agent(
+                context,
+                publish_event=server.publish_event,
+            )
+        ],
         publish_event=server.publish_event,
     )
 
@@ -2097,7 +2635,10 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
     assert response["id"] == 1
     assert response["result"]["inserted"] is True
     assert response["result"]["event"]["type"] == "session.turn.requested"
-    assert response["result"]["agent_results"][0]["outcome"] == "completed"
+    assert "agent_results" not in response["result"]
+    assert (
+        response["result"]["lifecycle_events"][-1]["result"]["outcome"] == "completed"
+    )
     assert [event["type"] for event in response["result"]["lifecycle_events"]] == [
         "runtime.queue_item.created",
         "runtime.queue_item.claimed",
@@ -2143,6 +2684,56 @@ def test_zeta_rpc_events_publish_triggers_session_turn(
         "runtime.attempt.completed",
         "runtime.queue_item.completed",
     ]
+
+
+def test_zeta_rpc_events_publish_rejects_lifecycle_event_ingress(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    input_stream = StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "events.publish",
+                "params": {
+                    "type": "runtime.attempt.started",
+                    "payload": {"attempt_id": "att_1"},
+                    "session_id": "ctx-session",
+                },
+            }
+        )
+        + "\n"
+    )
+    output = StringIO()
+    server = zeta_rpc.JsonRpcServer(
+        input_stream,
+        output,
+        event_reader=event_store,
+        event_sink=event_store,
+    )
+
+    asyncio.run(server.serve())
+
+    messages = rpc_messages(output)
+    assert messages == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32602,
+                "message": "Invalid params",
+                "data": {
+                    "code": "reserved_runtime_event",
+                    "event_type": "runtime.attempt.started",
+                    "message": (
+                        "events.publish cannot accept runtime lifecycle events"
+                    ),
+                },
+            },
+        }
+    ]
+    assert event_store.list_events(zeta_events.Filter()) == []
 
 
 def test_zeta_rpc_session_uses_explicit_context(monkeypatch, tmp_path: Path) -> None:

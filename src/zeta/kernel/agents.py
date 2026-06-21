@@ -1,12 +1,14 @@
 """Agent declaration domain shapes."""
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from typing import Literal
 
-from zeta.kernel.events import Event
+from zeta.kernel.events import DraftEvent, Event
 
 DispatchMode = Literal["one_shot", "session_scoped"]
+AgentEventPublisher = Callable[[DraftEvent], Awaitable[Event]]
 
 
 @dataclass(frozen=True)
@@ -54,3 +56,9 @@ class AgentInvocation:
 
     agent: AgentDefinition
     triggering_event: Event
+    publish_event: AgentEventPublisher | None = None
+
+    async def publish(self, draft: DraftEvent) -> Event:
+        if self.publish_event is None:
+            raise RuntimeError("agent invocation cannot publish events")
+        return await self.publish_event(draft)
