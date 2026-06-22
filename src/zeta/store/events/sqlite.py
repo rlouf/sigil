@@ -65,6 +65,59 @@ class SqliteEventStore:
               turn_id TEXT,
               timestamp INTEGER NOT NULL
             ) STRICT;
+
+            CREATE TABLE IF NOT EXISTS queue_items (
+              queue_item_id TEXT PRIMARY KEY,
+              event_id TEXT NOT NULL,
+              target_agent TEXT NOT NULL,
+              status TEXT NOT NULL,
+              available_at INTEGER,
+              claimed_by TEXT,
+              claimed_until INTEGER,
+              attempt_count INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT,
+              updated_at INTEGER NOT NULL
+            ) STRICT;
+
+            CREATE TABLE IF NOT EXISTS attempts (
+              attempt_id TEXT PRIMARY KEY,
+              queue_item_id TEXT NOT NULL,
+              event_id TEXT NOT NULL,
+              attempt_number INTEGER NOT NULL,
+              target_agent TEXT NOT NULL,
+              worker_name TEXT,
+              status TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              heartbeat_at INTEGER,
+              finished_at TEXT,
+              error TEXT,
+              session_id TEXT,
+              run_id TEXT
+            ) STRICT;
+
+            CREATE TABLE IF NOT EXISTS attempt_results (
+              attempt_id TEXT PRIMARY KEY,
+              final_status TEXT NOT NULL,
+              summary TEXT,
+              result_json TEXT,
+              events_json TEXT,
+              tool_calls_json TEXT,
+              usage_json TEXT,
+              finished_at TEXT
+            ) STRICT;
+
+            CREATE TABLE IF NOT EXISTS session_mappings (
+              session_id TEXT PRIMARY KEY,
+              run_id TEXT,
+              updated_at INTEGER NOT NULL
+            ) STRICT;
+
+            CREATE TABLE IF NOT EXISTS locks (
+              key TEXT PRIMARY KEY,
+              owner TEXT NOT NULL,
+              acquired_at INTEGER NOT NULL,
+              expires_at INTEGER NOT NULL
+            ) STRICT;
             """
         )
         columns = {
@@ -138,8 +191,149 @@ class SqliteEventStore:
             inserted = self.get(event.id)
             if inserted is None:
                 raise sqlite3.IntegrityError(f"append failed for event {event.id}")
+            self._project_runtime_event(inserted)
+            self.connection.commit()
             return AppendOutcome(event=inserted, inserted=True)
         return AppendOutcome(event=self._duplicate_for(event), inserted=False)
+
+    def _project_runtime_event(self, event: Event) -> None:
+        if event.event_type.startswith("runtime.queue_item."):
+            self._project_queue_item_event(event)
+            return
+        if event.event_type.startswith("runtime.attempt."):
+            self._project_attempt_event(event)
+
+    def _project_queue_item_event(self, event: Event) -> None:
+        queue_item_id = _payload_str(event, "queue_item_id")
+        event_id = _payload_str(event, "event_id")
+        target_agent = _payload_str(event, "target_agent")
+        if queue_item_id is None or event_id is None or target_agent is None:
+            return
+        status = _runtime_status(event)
+        self.connection.execute(
+            """
+            INSERT INTO queue_items
+              (queue_item_id, event_id, target_agent, status, available_at,
+               last_error, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(queue_item_id) DO UPDATE SET
+              event_id = excluded.event_id,
+              target_agent = excluded.target_agent,
+              status = excluded.status,
+              available_at = COALESCE(queue_items.available_at, excluded.available_at),
+              last_error = excluded.last_error,
+              updated_at = excluded.updated_at
+            """,
+            (
+                queue_item_id,
+                event_id,
+                target_agent,
+                status,
+                event.timestamp_ms if status == "available" else None,
+                _payload_str(event, "error"),
+                event.timestamp_ms,
+            ),
+        )
+
+    def _project_attempt_event(self, event: Event) -> None:
+        attempt_id = _payload_str(event, "attempt_id")
+        queue_item_id = _payload_str(event, "queue_item_id")
+        event_id = _payload_str(event, "event_id")
+        target_agent = _payload_str(event, "target_agent")
+        started_at = _payload_str(event, "started_at")
+        attempt_number = _payload_int(event, "attempt_number")
+        if (
+            attempt_id is None
+            or queue_item_id is None
+            or event_id is None
+            or target_agent is None
+            or started_at is None
+            or attempt_number is None
+        ):
+            return
+        status = _runtime_status(event)
+        self.connection.execute(
+            """
+            INSERT INTO attempts
+              (attempt_id, queue_item_id, event_id, attempt_number, target_agent,
+               worker_name, status, started_at, heartbeat_at, finished_at, error,
+               session_id, run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(attempt_id) DO UPDATE SET
+              status = excluded.status,
+              heartbeat_at = excluded.heartbeat_at,
+              finished_at = excluded.finished_at,
+              error = excluded.error,
+              session_id = excluded.session_id,
+              run_id = excluded.run_id
+            """,
+            (
+                attempt_id,
+                queue_item_id,
+                event_id,
+                attempt_number,
+                target_agent,
+                _payload_str(event, "worker_name"),
+                status,
+                started_at,
+                event.timestamp_ms,
+                _payload_str(event, "finished_at"),
+                _payload_str(event, "error"),
+                event.session_id,
+                event.run_id,
+            ),
+        )
+        if status == "running":
+            self.connection.execute(
+                """
+                UPDATE queue_items
+                SET attempt_count = CASE
+                  WHEN attempt_count < ? THEN ?
+                  ELSE attempt_count
+                END
+                WHERE queue_item_id = ?
+                """,
+                (attempt_number, attempt_number, queue_item_id),
+            )
+        if status in {"completed", "failed", "cancelled"}:
+            self._project_attempt_result(event, attempt_id, status)
+
+    def _project_attempt_result(
+        self,
+        event: Event,
+        attempt_id: str,
+        status: str,
+    ) -> None:
+        result = event.payload.get("result")
+        result_json = None
+        if result is not None:
+            result_json = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+        self.connection.execute(
+            """
+            INSERT INTO attempt_results
+              (attempt_id, final_status, summary, result_json, events_json,
+               tool_calls_json, usage_json, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(attempt_id) DO UPDATE SET
+              final_status = excluded.final_status,
+              summary = excluded.summary,
+              result_json = excluded.result_json,
+              events_json = excluded.events_json,
+              tool_calls_json = excluded.tool_calls_json,
+              usage_json = excluded.usage_json,
+              finished_at = excluded.finished_at
+            """,
+            (
+                attempt_id,
+                status,
+                _payload_str(event, "summary"),
+                result_json,
+                _payload_json(event, "events"),
+                _payload_json(event, "tool_calls"),
+                _payload_json(event, "usage"),
+                _payload_str(event, "finished_at"),
+            ),
+        )
 
     def get(self, event_id: str) -> Event | None:
         row = self.connection.execute(
@@ -281,6 +475,36 @@ def _row_to_event(row: sqlite3.Row) -> Event:
         timestamp_ms=int(row["timestamp"]),
         cursor=int(row["seq"]),
     )
+
+
+def _payload_str(event: Event, key: str) -> str | None:
+    value = event.payload.get(key)
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _payload_int(event: Event, key: str) -> int | None:
+    value = event.payload.get(key)
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _payload_json(event: Event, key: str) -> str | None:
+    value = event.payload.get(key)
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _runtime_status(event: Event) -> str:
+    status = _payload_str(event, "status")
+    if status is not None:
+        return status
+    if event.event_type == "runtime.attempt.started":
+        return "running"
+    return event.event_type.rsplit(".", 1)[-1]
 
 
 def _optional_str(value: object) -> str | None:
