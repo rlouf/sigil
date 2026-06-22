@@ -299,7 +299,7 @@ class AgentRun:
         return RunStepOutcome(kind="continue")
 
 
-async def async_run_agent(
+async def run_agent(
     objective: str,
     timeline: Sequence[TimelineEvent],
     config: AgentConfig,

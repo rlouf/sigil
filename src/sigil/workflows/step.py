@@ -49,8 +49,8 @@ from zeta.kernel.capabilities import ExecutionMode
 from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
-    async_run_agent,
     registered_capabilities,
+    run_agent,
 )
 from zeta.models import (
     active_model_selection,
@@ -90,7 +90,7 @@ as user-chosen context and explain the cancellation plainly if it matters.
 
 
 def run_agent_turn(*args: Any, **kwargs: Any) -> Any:
-    return asyncio.run(async_run_agent(*args, **kwargs))
+    return asyncio.run(run_agent(*args, **kwargs))
 
 
 def step(

@@ -147,6 +147,6 @@ def agent_turn_result_mapping(result: AgentTurnResult) -> dict[str, Any]:
 
 
 def default_agent_turn_runner() -> AgentTurnRunner:
-    from zeta.loop import async_run_agent
+    from zeta.loop import run_agent
 
-    return async_run_agent
+    return run_agent
