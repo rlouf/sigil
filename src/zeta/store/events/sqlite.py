@@ -278,14 +278,17 @@ class SqliteEventStore:
     def list_attempts(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
             """
-            SELECT attempt_id, queue_item_id, event_id, attempt_number,
-                   target_agent, worker_name, status, started_at, heartbeat_at,
-                   finished_at, error, session_id, run_id
-            FROM attempts
-            ORDER BY started_at ASC, attempt_id ASC
+            SELECT a.attempt_id, a.queue_item_id, a.event_id, a.attempt_number,
+                   a.target_agent, a.worker_name, a.status, a.started_at,
+                   a.heartbeat_at, a.finished_at, a.error, a.session_id, a.run_id,
+                   r.final_status, r.summary, r.result_json, r.events_json,
+                   r.tool_calls_json, r.usage_json
+            FROM attempts a
+            LEFT JOIN attempt_results r ON r.attempt_id = a.attempt_id
+            ORDER BY a.started_at ASC, a.attempt_id ASC
             """
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [_row_to_attempt(row) for row in rows]
 
     def list_locks(self) -> list[dict[str, Any]]:
         rows = self.connection.execute(
@@ -797,6 +800,30 @@ def _row_to_event(row: sqlite3.Row) -> Event:
     )
 
 
+def _row_to_attempt(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "attempt_id": str(row["attempt_id"]),
+        "queue_item_id": str(row["queue_item_id"]),
+        "event_id": str(row["event_id"]),
+        "attempt_number": int(row["attempt_number"]),
+        "target_agent": str(row["target_agent"]),
+        "worker_name": _optional_str(row["worker_name"]),
+        "status": str(row["status"]),
+        "started_at": str(row["started_at"]),
+        "heartbeat_at": row["heartbeat_at"],
+        "finished_at": _optional_str(row["finished_at"]),
+        "error": _optional_str(row["error"]),
+        "session_id": _optional_str(row["session_id"]),
+        "run_id": _optional_str(row["run_id"]),
+        "final_status": _optional_str(row["final_status"]),
+        "summary": _optional_str(row["summary"]),
+        "result": _json_column(row["result_json"]),
+        "events": _json_column(row["events_json"]),
+        "tool_calls": _json_column(row["tool_calls_json"]),
+        "usage": _json_column(row["usage_json"]),
+    }
+
+
 def _payload_str(event: Event, key: str) -> str | None:
     value = event.payload.get(key)
     if isinstance(value, str):
@@ -829,6 +856,12 @@ def _runtime_status(event: Event) -> str:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _json_column(value: object) -> Any | None:
+    if not isinstance(value, str):
+        return None
+    return json.loads(value)
 
 
 def _like_prefix(prefix: str) -> str:
