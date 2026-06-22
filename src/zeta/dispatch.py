@@ -557,8 +557,8 @@ class EventDispatcher:
                 triggering_event,
                 queue_item.queue_item_id,
                 queue_item.target_agent,
-                event_suffix="failed",
-                status="failed",
+                event_suffix="unhandled",
+                status="unhandled",
                 error=error,
             )
         ]
@@ -1019,6 +1019,7 @@ TERMINAL_QUEUE_ITEM_EVENT_TYPES = {
     "runtime.queue_item.completed",
     "runtime.queue_item.failed",
     "runtime.queue_item.cancelled",
+    "runtime.queue_item.unhandled",
 }
 
 
