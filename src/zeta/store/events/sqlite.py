@@ -550,19 +550,29 @@ class SqliteEventStore:
         *,
         lease_ms: int,
         now_ms: int,
+        exclude_queue_item_ids: Iterable[str] = (),
     ) -> str | None:
+        excluded = tuple(dict.fromkeys(exclude_queue_item_ids))
+        excluded_clause = ""
+        excluded_params: tuple[str, ...] = ()
+        if excluded:
+            excluded_clause = (
+                f"AND queue_item_id NOT IN ({_sql_placeholders(excluded)})"
+            )
+            excluded_params = excluded
         _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
         try:
             row = self.connection.execute(
-                """
+                f"""
                 SELECT queue_item_id
                 FROM queue_items
                 WHERE status IN ('pending', 'available')
                   AND (available_at IS NULL OR available_at <= ?)
+                  {excluded_clause}
                 ORDER BY available_at ASC, queue_item_id ASC
                 LIMIT 1
                 """,
-                (now_ms,),
+                (now_ms, *excluded_params),
             ).fetchone()
             if row is None:
                 self.connection.commit()

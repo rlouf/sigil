@@ -131,29 +131,32 @@ async def run_once(runtime: RuntimeServices) -> str:
         heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
         lease_ms=QUEUE_LEASE_MS,
     )
-    claimed = claim_available_queue_item(runtime)
-    if claimed is None:
-        return "queue empty"
-    lock_keys = queue_item_lock_keys(runtime, claimed)
-    lock_owner = queue_item_lock_owner(runtime, claimed)
-    now_ms = runtime_time_ms()
-    if not runtime.events.acquire_locks(
-        lock_keys,
-        lock_owner,
-        lease_ms=QUEUE_LEASE_MS,
-        now_ms=now_ms,
-    ):
-        runtime.events.release_queue_claim(
-            claimed,
-            runtime.worker_name,
+    skipped_queue_items: set[str] = set()
+    while True:
+        claimed = claim_available_queue_item(runtime, skipped_queue_items)
+        if claimed is None:
+            return "queue empty"
+        lock_keys = queue_item_lock_keys(runtime, claimed)
+        lock_owner = queue_item_lock_owner(runtime, claimed)
+        now_ms = runtime_time_ms()
+        if not runtime.events.acquire_locks(
+            lock_keys,
+            lock_owner,
+            lease_ms=QUEUE_LEASE_MS,
             now_ms=now_ms,
-        )
-        return "queue empty"
-    try:
-        lifecycle_events = await dispatcher.run_queue_item(claimed)
-        return run_once_message(claimed, lifecycle_events)
-    finally:
-        runtime.events.release_locks(lock_keys, lock_owner)
+        ):
+            runtime.events.release_queue_claim(
+                claimed,
+                runtime.worker_name,
+                now_ms=now_ms,
+            )
+            skipped_queue_items.add(claimed)
+            continue
+        try:
+            lifecycle_events = await dispatcher.run_queue_item(claimed)
+            return run_once_message(claimed, lifecycle_events)
+        finally:
+            runtime.events.release_locks(lock_keys, lock_owner)
 
 
 def enqueue_pending_events(runtime: RuntimeServices) -> int:
@@ -179,7 +182,10 @@ def run_once_message(queue_item_id: str, lifecycle_events: list[Event]) -> str:
     return f"ran {queue_item_id}"
 
 
-def claim_available_queue_item(runtime: RuntimeServices) -> str | None:
+def claim_available_queue_item(
+    runtime: RuntimeServices,
+    skipped_queue_items: set[str] | None = None,
+) -> str | None:
     now_ms = runtime_time_ms()
     runtime.events.reconcile_expired_queue_claims(now_ms=now_ms)
     runtime.events.reconcile_expired_locks(now_ms=now_ms)
@@ -187,6 +193,7 @@ def claim_available_queue_item(runtime: RuntimeServices) -> str | None:
         runtime.worker_name,
         lease_ms=QUEUE_LEASE_MS,
         now_ms=now_ms,
+        exclude_queue_item_ids=skipped_queue_items or (),
     )
 
 
