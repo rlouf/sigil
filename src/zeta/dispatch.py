@@ -160,11 +160,7 @@ class EventDispatcher:
         queue_items: Iterable[RoutedQueueItem],
     ) -> list[Event]:
         lifecycle_events: list[Event] = []
-        runnable_items: list[RoutedQueueItem] = []
-        for queue_item in queue_items:
-            agent = self._agent_for_id(queue_item.target_agent)
-            if agent is not None and agent.run is not None:
-                runnable_items.append(queue_item)
+        runnable_items = list(queue_items)
         task_results: list[list[Event] | None] = [None] * len(runnable_items)
         async with asyncio.TaskGroup() as task_group:
             for index, queue_item in enumerate(runnable_items):
