@@ -129,9 +129,6 @@ class RunState:
         self.steps.append(StepResult(step, effects))
 
 
-AgentTurnState = RunState
-
-
 class AgentTurnAborted(RuntimeError):
     """Raised when a cooperative turn budget or cancellation request aborts."""
 
@@ -327,7 +324,7 @@ async def async_run_agent(
         config,
         tool_registry=active_tool_registry,
     )
-    state = AgentTurnState(next_model_caused_by=caused_by)
+    state = RunState(next_model_caused_by=caused_by)
     builder = prompt_builder or PromptBuilder(
         store=trace_store,
         transform=prompt_transform_from_policy(config.compaction_policy),
@@ -419,7 +416,7 @@ async def request_model_turn(
     allowed_capabilities: tuple[str, ...],
     context: str,
     tools: list[dict[str, Any]],
-    state: AgentTurnState,
+    state: RunState,
     ctx: RunDependencies,
 ) -> ModelTurn:
     prepared_prompt, model_input = build_prompt_step(
@@ -592,7 +589,7 @@ def terminal_capability_result_event(
 
 
 def check_turn_budget(
-    state: AgentTurnState,
+    state: RunState,
     *,
     ctx: RunDependencies,
     check_deadline: bool = True,
@@ -614,7 +611,7 @@ def agent_deadline(config: AgentConfig, deadline: float | None) -> float | None:
 
 
 def raise_if_agent_turn_aborted(
-    state: AgentTurnState,
+    state: RunState,
     *,
     ctx: RunDependencies,
     deadline: float | None,
