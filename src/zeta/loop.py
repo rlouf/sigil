@@ -340,37 +340,12 @@ async def async_run_agent(
     )
     projection = active_tool_registry.project(allowed_capabilities)
     tools = projection.descriptors
-    return await run_agent_steps(
-        objective,
-        timeline,
-        config=config,
-        context=context,
-        allowed_capabilities=allowed_capabilities,
-        projection=projection,
-        tools=tools,
-        state=state,
-        ctx=deps,
-    )
-
-
-async def run_agent_steps(
-    objective: str,
-    timeline: Sequence[TimelineEvent],
-    *,
-    config: AgentConfig,
-    context: str,
-    allowed_capabilities: tuple[str, ...],
-    projection: CapabilityProjection,
-    tools: list[dict[str, Any]],
-    state: RunState,
-    ctx: RunDependencies,
-) -> AgentTurnResult:
     return await AgentRun(
         objective=objective,
         timeline=timeline,
         config=config,
         context=context,
-        deps=ctx,
+        deps=deps,
         allowed_capabilities=allowed_capabilities,
         projection=projection,
         tools=tools,
