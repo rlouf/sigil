@@ -182,10 +182,6 @@ class RunDependencies:
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
 
 
-class TurnContext(RunDependencies):
-    """Compatibility name while loop internals move to run terminology."""
-
-
 @dataclass(frozen=True)
 class RunStepOutcome:
     kind: Literal["continue", "finished", "staged_effect", "aborted"]
