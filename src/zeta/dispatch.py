@@ -159,10 +159,12 @@ class EventDispatcher:
         *,
         agents: Iterable[RegisteredAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
+        worker_name: str | None = None,
     ) -> None:
         self.event_sink = event_sink
         self.agents = tuple(agents)
         self.publish_callback = publish_event
+        self.worker_name = worker_name
 
     async def publish_event(
         self,
@@ -543,6 +545,8 @@ class EventDispatcher:
             session_id=triggering_event.session_id,
             run_id=triggering_event.run_id,
         )
+        if self.worker_name is not None:
+            payload_extra = {"worker_name": self.worker_name, **payload_extra}
         return self._append_lifecycle_event(
             f"runtime.attempt.{event_suffix}",
             triggering_event,

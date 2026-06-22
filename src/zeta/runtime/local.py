@@ -23,6 +23,8 @@ from zeta.runtime.config import zeta_state_dir
 from zeta.runtime.scope import SessionScope
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
 
+LOCAL_WORKER_NAME = "local-runtime"
+
 
 @dataclass(frozen=True)
 class RuntimeServices:
@@ -33,6 +35,7 @@ class RuntimeServices:
     events: SqliteEventStore
     specs: tuple[AgentSpec, ...]
     agents: tuple[RegisteredAgent, ...]
+    worker_name: str = LOCAL_WORKER_NAME
 
     def close(self) -> None:
         self.events.close()
@@ -118,7 +121,11 @@ def is_runtime_event(event: Event) -> bool:
 async def run_once(runtime: RuntimeServices) -> str:
     emit_due_schedules(runtime)
     enqueue_pending_events(runtime)
-    dispatcher = EventDispatcher(runtime.events, agents=runtime.agents)
+    dispatcher = EventDispatcher(
+        runtime.events,
+        agents=runtime.agents,
+        worker_name=runtime.worker_name,
+    )
     claimed = claim_available_queue_item(runtime)
     if claimed is None:
         return "queue empty"
@@ -153,7 +160,7 @@ def claim_available_queue_item(runtime: RuntimeServices) -> str | None:
     now_ms = runtime_time_ms()
     runtime.events.reconcile_expired_queue_claims(now_ms=now_ms)
     return runtime.events.claim_next_queue_item(
-        "local-runtime",
+        runtime.worker_name,
         lease_ms=60_000,
         now_ms=now_ms,
     )
