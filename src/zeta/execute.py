@@ -95,7 +95,7 @@ async def submit_session_turn(
         run_id=run_id,
         runtime_context=runtime_context,
     )
-    outcome = await event_dispatcher.publish_event(draft)
+    outcome = await event_dispatcher.publish_and_run(draft)
     result = terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,

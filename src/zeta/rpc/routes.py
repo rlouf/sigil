@@ -168,7 +168,7 @@ async def events_publish(
         raise invalid_params("invalid_payload", "payload must be an object")
 
     try:
-        outcome = await client.dispatcher.publish_event(draft, route=False)
+        outcome = await client.dispatcher.publish_event(draft)
     except ReservedRuntimeEventError as exc:
         raise invalid_params(
             "reserved_runtime_event",
@@ -260,7 +260,7 @@ async def session_run(params: dict[str, Any], client: RpcClient) -> dict[str, An
     state = RunState(run_id=run_id, cancellation_event=cancellation_event)
 
     client.pending_runs[run_id] = state
-    outcome = await client.dispatcher.publish_event(draft, route=False)
+    outcome = await client.dispatcher.publish_event(draft)
     state.task = asyncio.create_task(route_run(client, state, outcome.event))
 
     return {

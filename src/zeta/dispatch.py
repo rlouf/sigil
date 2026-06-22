@@ -71,19 +71,20 @@ class EventDispatcher:
     async def publish_event(
         self,
         draft: DraftEvent,
-        *,
-        route: bool = True,
     ) -> DispatchOutcome:
         reject_reserved_runtime_event(draft)
         outcome = self.event_sink.accept(draft)
         if not outcome.inserted:
             return DispatchOutcome(outcome.event, False, [])
         self._publish(outcome.event)
-        lifecycle_events = await self.route(outcome.event) if route else []
-        return DispatchOutcome(outcome.event, True, lifecycle_events)
+        return DispatchOutcome(outcome.event, True, [])
 
     async def publish_and_run(self, draft: DraftEvent) -> DispatchOutcome:
-        return await self.publish_event(draft, route=True)
+        outcome = await self.publish_event(draft)
+        if not outcome.inserted:
+            return outcome
+        lifecycle_events = await self.route(outcome.event)
+        return DispatchOutcome(outcome.event, True, lifecycle_events)
 
     async def route(self, event: Event) -> list[Event]:
         lifecycle_events: list[Event] = []
@@ -402,7 +403,7 @@ class EventDispatcher:
                 run_id=draft.run_id or triggering_event.run_id,
                 turn_id=draft.turn_id or triggering_event.turn_id,
             )
-            outcome = await self.publish_event(tagged)
+            outcome = await self.publish_and_run(tagged)
             return outcome.event
 
         return publish
