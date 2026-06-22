@@ -306,7 +306,7 @@ class AgentRun:
         return RunStepOutcome(kind="continue")
 
 
-async def async_run_agent_turn(
+async def async_run_agent(
     objective: str,
     timeline: Sequence[TimelineEvent],
     config: AgentConfig,

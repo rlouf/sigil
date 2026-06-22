@@ -16,7 +16,7 @@ from zeta.kernel.events import DraftEvent, Event
 from zeta.loop import (
     AgentTurnAborted,
     CancellationToken,
-    async_run_agent_turn,
+    async_run_agent,
     is_runtime_ui_event,
     registered_capabilities,
 )
@@ -152,7 +152,7 @@ async def run_session_turn(
         publish_event(persisted)
 
     try:
-        result = await async_run_agent_turn(
+        result = await async_run_agent(
             request.objective,
             prior_timeline,
             session_agent_config(
