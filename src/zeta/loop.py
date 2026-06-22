@@ -277,16 +277,33 @@ class AgentRun:
         model_telemetry: dict[str, Any],
         assistant_event_id: str | None,
     ) -> RunStepOutcome:
-        return await run_capability_calls(
-            tool_calls,
-            config=self.config,
-            allowed_capabilities=self.allowed_capabilities,
-            projection=self.projection,
-            model_telemetry=model_telemetry,
-            assistant_event_id=assistant_event_id,
-            state=self.state,
-            ctx=self.deps,
-        )
+        for index, tool_call in enumerate(tool_calls):
+            result_event = await run_capability_step(
+                tool_call,
+                index=index,
+                config=self.config,
+                allowed_capabilities=self.allowed_capabilities,
+                projection=self.projection,
+                model_telemetry=(model_telemetry if index == 0 else None),
+                assistant_event_id=assistant_event_id,
+                state=self.state,
+                ctx=self.deps,
+            )
+            self.state.events.extend(result_event.events)
+            if result_event.events:
+                project_trace_drafts(self.state.events, self.deps.builder.store())
+            self.state.next_model_caused_by = next_model_parent(result_event.events)
+            if (
+                result_event.staged_effect is not None
+                and self.config.stop_on_staged_effect
+            ):
+                return RunStepOutcome(
+                    kind="staged_effect",
+                    staged_effect=result_event.staged_effect,
+                )
+            if result_event.stop:
+                return RunStepOutcome(kind="finished")
+        return RunStepOutcome(kind="continue")
 
 
 async def async_run_agent_turn(
@@ -516,43 +533,6 @@ def record_assistant_step(
     state.note_prompt_trace(prompt_trace)
     state.note_model_telemetry(model_telemetry)
     return assistant, prompt_trace
-
-
-async def run_capability_calls(
-    tool_calls: list[dict[str, Any]],
-    *,
-    config: AgentConfig,
-    allowed_capabilities: tuple[str, ...],
-    projection: CapabilityProjection,
-    model_telemetry: dict[str, Any],
-    assistant_event_id: str | None,
-    state: AgentTurnState,
-    ctx: RunDependencies,
-) -> RunStepOutcome:
-    for index, tool_call in enumerate(tool_calls):
-        result_event = await run_capability_step(
-            tool_call,
-            index=index,
-            config=config,
-            allowed_capabilities=allowed_capabilities,
-            projection=projection,
-            model_telemetry=(model_telemetry if index == 0 else None),
-            assistant_event_id=assistant_event_id,
-            state=state,
-            ctx=ctx,
-        )
-        state.events.extend(result_event.events)
-        if result_event.events:
-            project_trace_drafts(state.events, ctx.builder.store())
-        state.next_model_caused_by = next_model_parent(result_event.events)
-        if result_event.staged_effect is not None and config.stop_on_staged_effect:
-            return RunStepOutcome(
-                kind="staged_effect",
-                staged_effect=result_event.staged_effect,
-            )
-        if result_event.stop:
-            return RunStepOutcome(kind="finished")
-    return RunStepOutcome(kind="continue")
 
 
 async def run_capability_step(
