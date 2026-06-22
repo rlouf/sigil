@@ -1,11 +1,16 @@
 """Runtime config and config adapters for Zeta turn execution."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from zeta.agents.capabilities import AgentConfig
 from zeta.capabilities.types import ExecutionMode
-from zeta.runtime.requests import SessionRunParams
+
+if TYPE_CHECKING:
+    from zeta.run.thread_run import SessionRunParams
 
 
 def zeta_state_dir() -> Path:

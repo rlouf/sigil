@@ -25,7 +25,6 @@ from zeta import models as zeta_models_api
 from zeta.capabilities import execution as zeta_capability_execution
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
-from zeta.execute import current_timeline
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 from zeta.records.events import DraftEvent, event_view
@@ -46,6 +45,7 @@ from zeta.records.stores import (
 from zeta.records.stores.object_store import IncompatibleSchemaError
 from zeta.run import runtime as zeta_agent
 from zeta.run.runtime import AgentRunResult
+from zeta.run.thread_run import current_timeline
 from zeta.run.threads import SessionScope
 from zeta.runtime.local import default_session
 

@@ -59,10 +59,10 @@ from zeta.records.stores import (
     event_store_path,
 )
 from zeta.run import runtime as zeta_agent
+from zeta.run import thread_run as zeta_requests
 from zeta.run import threads as zeta_scope
 from zeta.run.runtime import AgentRunResult
 from zeta.runtime import local as zeta_runtime_local
-from zeta.runtime import requests as zeta_requests
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
@@ -1738,7 +1738,7 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
     assert event["idempotency_key"] == "session.turn.requested:run_test"
     assert (
         event["payload"]
-        == zeta_execute.session_turn_requested_draft(
+        == zeta_requests.session_turn_requested_draft(
             {"objective": "answer", "tools": []},
             run_id="run_test",
             runtime_context=client.session,
@@ -2046,10 +2046,10 @@ def test_zeta_run_session_turn_records_user_message_and_returns_result(
         captured["kwargs"] = kwargs
         return AgentRunResult(final_answer="done")
 
-    monkeypatch.setattr(zeta_execute, "run_agent", fake_run_agent_turn)
+    monkeypatch.setattr(zeta_requests, "run_agent", fake_run_agent_turn)
 
     result = asyncio.run(
-        zeta_execute.run_session_turn(
+        zeta_requests.run_session_turn(
             {"objective": "answer", "workflow": "ask", "tools": []},
             run_id="run_direct",
             caused_by="evt_request",

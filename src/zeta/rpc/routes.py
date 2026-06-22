@@ -11,17 +11,17 @@ from zeta.capabilities.execution import error_result
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.dispatch import EventDispatcher, ReservedRuntimeEventError
-from zeta.execute import (
-    SESSION_TURN_AGENT_ID,
-    session_run_id,
-    session_turn_requested_draft,
-)
+from zeta.execute import SESSION_TURN_AGENT_ID
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventReader, EventStoreProtocol, Filter
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
 from zeta.run.runs import RunStatus
+from zeta.run.thread_run import (
+    SessionRequestError,
+    session_run_id,
+    session_turn_requested_draft,
+)
 from zeta.run.threads import SessionScope
-from zeta.runtime.requests import SessionRequestError
 
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
 RPC_REQUESTED = "rpc.requested"
