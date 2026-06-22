@@ -47,7 +47,6 @@ from sigil.workflows.ask import (
     ask,
 )
 from zeta.kernel import dispatch as zeta_kernel_dispatch
-from zeta.kernel import runs as zeta_kernel_runs
 from zeta.kernel.dispatch import Attempt, QueueItem
 from zeta.records import events as zeta_events
 from zeta.records import events as zeta_kernel_events
@@ -60,6 +59,7 @@ from zeta.records.stores import (
     SqliteEventStore,
     event_store_path,
 )
+from zeta.run import runs as zeta_kernel_runs
 
 
 class TtyStringIO(StringIO):
@@ -264,7 +264,7 @@ def test_status_dispatch_does_not_load_workflow_modules() -> None:
             "assert code in (0, 1), code; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.workflows') or name.startswith('rich') "
-            "or name in ('zeta.models.chat_completions', 'zeta.loop', 'jsonschema')]; "
+            "or name in ('zeta.models.chat_completions', 'zeta.run.runtime', 'jsonschema')]; "
             "assert not heavy, heavy"
         )
         subprocess.run(
@@ -289,7 +289,7 @@ def test_spool_ingestion_does_not_load_display_or_model() -> None:
             "assert count == 1, count; "
             "heavy = [name for name in sys.modules "
             "if name.startswith('sigil.display') "
-            "or name.startswith('zeta.loop') "
+            "or name.startswith('zeta.run.runtime') "
             "or name.startswith('zeta.model') "
             "or name.startswith('rich')]; "
             "assert not heavy, heavy"

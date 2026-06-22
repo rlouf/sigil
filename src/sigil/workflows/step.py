@@ -45,18 +45,18 @@ from zeta.capabilities.types import ExecutionMode
 from zeta.context.components import latest_prompt_trace_fields
 from zeta.context.instructions import load_project_instructions
 from zeta.context.system import system_prompt
-from zeta.loop import (
-    AgentRunAborted,
-    registered_capabilities,
-    run_agent,
-)
 from zeta.models import (
     active_model_selection,
     model_selection_event,
 )
 from zeta.records.events import DraftEvent, Event
 from zeta.records.timeline import history_event_record
-from zeta.runtime.scope import SessionScope
+from zeta.run.runtime import (
+    AgentRunAborted,
+    registered_capabilities,
+    run_agent,
+)
+from zeta.run.threads import SessionScope
 
 HandoffOutput = Literal["detail", "summary", "none"]
 Workflow = Literal["ask", "propose", "do"]

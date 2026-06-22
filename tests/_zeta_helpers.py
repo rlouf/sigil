@@ -21,7 +21,6 @@ from zeta.context.builder import (
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
-from zeta.loop import AgentRunResult
 from zeta.models import chat_completions as zeta_model
 from zeta.records.events import (
     DraftEvent,
@@ -33,7 +32,8 @@ from zeta.records.events import (
 from zeta.records.objects import Object, ObjectId
 from zeta.records.provenance import project_trace_events
 from zeta.records.stores import Filter, InMemoryStore, Store
-from zeta.runtime.scope import SessionScope
+from zeta.run.runtime import AgentRunResult
+from zeta.run.threads import SessionScope
 
 zeta_context = SimpleNamespace(
     PreparedPrompt=PreparedPrompt,

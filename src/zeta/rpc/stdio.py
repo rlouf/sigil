@@ -7,7 +7,6 @@ from typing import Any, TextIO
 
 from zeta.dispatch import EventDispatcher
 from zeta.execute import session_turn_agent
-from zeta.loop import CancellationToken
 from zeta.records.events import Event
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter
 from zeta.rpc.routes import (
@@ -22,6 +21,7 @@ from zeta.rpc.routes import (
     tools_register,
     tools_respond,
 )
+from zeta.run.runtime import CancellationToken
 from zeta.runtime.local import default_session
 
 

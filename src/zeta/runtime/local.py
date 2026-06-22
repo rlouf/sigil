@@ -27,8 +27,8 @@ from zeta.records.stores import (
     event_store_path,
     zeta_sqlite_path,
 )
+from zeta.run.threads import SessionScope
 from zeta.runtime.config import zeta_state_dir
-from zeta.runtime.scope import SessionScope
 
 LOCAL_WORKER_NAME = "local-runtime"
 QUEUE_LEASE_MS = 60_000

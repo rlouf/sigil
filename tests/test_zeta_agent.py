@@ -33,7 +33,6 @@ from sigil.tools import ensure_builtin_tools_registered
 from zeta import cli as zeta_cli
 from zeta import dispatch as zeta_dispatch
 from zeta import execute as zeta_execute
-from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta import rpc as zeta_rpc
 from zeta.agents.capabilities import CompactionPolicy
@@ -48,7 +47,6 @@ from zeta.capabilities.types import (
 )
 from zeta.context import builder as zeta_context
 from zeta.kernel.dispatch import Attempt, QueueItem
-from zeta.loop import AgentRunResult
 from zeta.models import chat_completions as zeta_model
 from zeta.models import types as zeta_model_shapes
 from zeta.records import events as zeta_event_model
@@ -60,9 +58,11 @@ from zeta.records.stores import (
     SqliteEventStore,
     event_store_path,
 )
+from zeta.run import runtime as zeta_agent
+from zeta.run import threads as zeta_scope
+from zeta.run.runtime import AgentRunResult
 from zeta.runtime import local as zeta_runtime_local
 from zeta.runtime import requests as zeta_requests
-from zeta.runtime import scope as zeta_scope
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 

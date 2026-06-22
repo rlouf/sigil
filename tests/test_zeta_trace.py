@@ -21,13 +21,11 @@ from sigil.agent_io import last_event_time
 from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
-from zeta import loop as zeta_agent
 from zeta import models as zeta_models_api
 from zeta.capabilities import execution as zeta_capability_execution
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
 from zeta.execute import current_timeline
-from zeta.loop import AgentRunResult
 from zeta.models import chat_completions as zeta_model
 from zeta.models import profiles as zeta_models
 from zeta.records.events import DraftEvent, event_view
@@ -46,8 +44,10 @@ from zeta.records.stores import (
     zeta_sqlite_path,
 )
 from zeta.records.stores.object_store import IncompatibleSchemaError
+from zeta.run import runtime as zeta_agent
+from zeta.run.runtime import AgentRunResult
+from zeta.run.threads import SessionScope
 from zeta.runtime.local import default_session
-from zeta.runtime.scope import SessionScope
 
 zeta_trace = SimpleNamespace(
     AmbiguousIdError=AmbiguousIdError,

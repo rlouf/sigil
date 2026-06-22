@@ -26,7 +26,7 @@ from zeta.records.timeline import (
     publish_turn_record,
     turn_record,
 )
-from zeta.runtime.scope import SessionScope
+from zeta.run.threads import SessionScope
 
 
 class TurnRecorder:

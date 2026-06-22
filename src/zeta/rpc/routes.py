@@ -16,12 +16,12 @@ from zeta.execute import (
     session_run_id,
     session_turn_requested_draft,
 )
-from zeta.kernel.runs import RunStatus
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventReader, EventStoreProtocol, Filter
 from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError
+from zeta.run.runs import RunStatus
+from zeta.run.threads import SessionScope
 from zeta.runtime.requests import SessionRequestError
-from zeta.runtime.scope import SessionScope
 
 ToolCallStatus = Literal["requested", "responded", "failed", "cancelled", "timed_out"]
 RPC_REQUESTED = "rpc.requested"

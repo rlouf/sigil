@@ -13,7 +13,7 @@ from zeta.dispatch import ExecutableAgent
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 
 if TYPE_CHECKING:
-    from zeta.loop import AgentRunResult
+    from zeta.run.runtime import AgentRunResult
 
 AgentRunRunner = Callable[..., Awaitable["AgentRunResult"]]
 TimelineFactory = Callable[[AgentInvocation], list[dict[str, Any]]]
@@ -147,6 +147,6 @@ def agent_run_result_mapping(result: AgentRunResult) -> dict[str, Any]:
 
 
 def default_agent_run_runner() -> AgentRunRunner:
-    from zeta.loop import run_agent
+    from zeta.run.runtime import run_agent
 
     return run_agent

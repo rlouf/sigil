@@ -10,19 +10,19 @@ from typing import Any
 from zeta.capabilities.types import ExecutionMode
 from zeta.dispatch import EventDispatcher, ExecutableAgent, terminal_queue_item_result
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
-from zeta.loop import (
+from zeta.records.events import DraftEvent, Event, user_message_draft
+from zeta.records.provenance import event_timeline_type, project_trace_events
+from zeta.records.stores import EventReader, Filter, warn_trace_failure_once
+from zeta.run.runtime import (
     AgentRunAborted,
     CancellationToken,
     is_runtime_ui_event,
     registered_capabilities,
     run_agent,
 )
-from zeta.records.events import DraftEvent, Event, user_message_draft
-from zeta.records.provenance import event_timeline_type, project_trace_events
-from zeta.records.stores import EventReader, Filter, warn_trace_failure_once
+from zeta.run.threads import SessionScope
 from zeta.runtime.config import session_agent_config
 from zeta.runtime.requests import session_run_params
-from zeta.runtime.scope import SessionScope
 
 RuntimePublishedEvent = Event
 CancellationEventForRun = Callable[[str], CancellationToken | None]

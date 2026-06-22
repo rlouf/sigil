@@ -21,10 +21,6 @@ from sigil.display.state import (
     progress_mode_from_env,
 )
 from sigil.turn import TurnRecorder
-from zeta.loop import (
-    AgentRunResult,
-    is_runtime_ui_event,
-)
 from zeta.models import (
     CODEX_RESPONSES_API,
     ModelSelection,
@@ -47,7 +43,11 @@ from zeta.records.stores import (
     Store,
     warn_trace_failure_once,
 )
-from zeta.runtime.scope import SessionScope
+from zeta.run.runtime import (
+    AgentRunResult,
+    is_runtime_ui_event,
+)
+from zeta.run.threads import SessionScope
 
 RuntimePublishedEvent = Event | DraftEvent
 STAGING_TOOL_NAMES = frozenset({"bash", "edit", "write"})
