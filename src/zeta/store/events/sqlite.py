@@ -248,6 +248,29 @@ class SqliteEventStore:
         ).fetchone()
         return dict(row) if row is not None else None
 
+    def list_queue_items(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT queue_item_id, event_id, target_agent, status, available_at,
+                   claimed_by, claimed_until, attempt_count, last_error, updated_at
+            FROM queue_items
+            ORDER BY updated_at ASC, queue_item_id ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_attempts(self) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            """
+            SELECT attempt_id, queue_item_id, event_id, attempt_number,
+                   target_agent, worker_name, status, started_at, heartbeat_at,
+                   finished_at, error, session_id, run_id
+            FROM attempts
+            ORDER BY started_at ASC, attempt_id ASC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def _project_queue_item_event(self, event: Event) -> None:
         queue_item_id = _payload_str(event, "queue_item_id")
         event_id = _payload_str(event, "event_id")

@@ -3,22 +3,19 @@
 import asyncio
 import json
 import sys
-from dataclasses import asdict
+from collections.abc import Iterable, Mapping
 from pathlib import Path
+from typing import Any
 
 import click
 
-from zeta.dispatch import (
-    attempt_snapshots,
-    queue_item_snapshots,
-    queue_item_status_counts,
-)
 from zeta.kernel.events import Event
 from zeta.rpc import run_stdio
 from zeta.runtime import local as runtime_local
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
 
 QUEUE_STATUS_ORDER = (
+    "pending",
     "available",
     "claimed",
     "completed",
@@ -62,6 +59,14 @@ def event_record(event: Event) -> dict[str, object]:
     }
 
 
+def queue_status_counts(rows: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row["status"])
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
 @cli.command("queue")
 @click.option(
     "--project-root",
@@ -77,34 +82,27 @@ def event_record(event: Event) -> dict[str, object]:
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
 def queue(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
-    """List projected runtime queue items."""
+    """List durable runtime queue items."""
 
     event_store = runtime_event_store(project_root, state_dir)
     try:
-        snapshots = queue_item_snapshots(
-            event_store.list_events(Filter(event_type_prefix="runtime.queue_item."))
-        )
+        rows = event_store.list_queue_items()
     finally:
         event_store.close()
     if json_output:
-        click.echo(
-            json.dumps(
-                [asdict(snapshot) for snapshot in snapshots],
-                ensure_ascii=False,
-            )
-        )
+        click.echo(json.dumps(rows, ensure_ascii=False))
         return 0
-    if not snapshots:
+    if not rows:
         click.echo("queue empty")
         return 0
-    for snapshot in snapshots:
+    for row in rows:
         click.echo(
             "\t".join(
                 [
-                    snapshot.status,
-                    snapshot.queue_item_id,
-                    snapshot.target_agent,
-                    snapshot.event_id,
+                    str(row["status"]),
+                    str(row["queue_item_id"]),
+                    str(row["target_agent"]),
+                    str(row["event_id"]),
                 ]
             )
         )
@@ -126,34 +124,27 @@ def queue(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
 )
 @click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
 def attempts(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
-    """List projected runtime attempts."""
+    """List durable runtime attempts."""
 
     event_store = runtime_event_store(project_root, state_dir)
     try:
-        snapshots = attempt_snapshots(
-            event_store.list_events(Filter(event_type_prefix="runtime.attempt."))
-        )
+        rows = event_store.list_attempts()
     finally:
         event_store.close()
     if json_output:
-        click.echo(
-            json.dumps(
-                [asdict(snapshot) for snapshot in snapshots],
-                ensure_ascii=False,
-            )
-        )
+        click.echo(json.dumps(rows, ensure_ascii=False))
         return 0
-    if not snapshots:
+    if not rows:
         click.echo("attempts empty")
         return 0
-    for snapshot in snapshots:
+    for row in rows:
         click.echo(
             "\t".join(
                 [
-                    snapshot.status,
-                    snapshot.attempt_id,
-                    snapshot.queue_item_id,
-                    snapshot.target_agent,
+                    str(row["status"]),
+                    str(row["attempt_id"]),
+                    str(row["queue_item_id"]),
+                    str(row["target_agent"]),
                 ]
             )
         )
@@ -269,16 +260,14 @@ def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
     help="Override the runtime state directory.",
 )
 def status(project_root: Path, state_dir: Path | None) -> int:
-    """Show projected runtime queue counts."""
+    """Show durable runtime queue counts."""
 
     event_store = runtime_event_store(project_root, state_dir)
     try:
-        snapshots = queue_item_snapshots(
-            event_store.list_events(Filter(event_type_prefix="runtime.queue_item."))
-        )
+        rows = event_store.list_queue_items()
     finally:
         event_store.close()
-    counts = queue_item_status_counts(snapshots)
+    counts = queue_status_counts(rows)
     if not counts:
         click.echo("queue empty")
         return 0
