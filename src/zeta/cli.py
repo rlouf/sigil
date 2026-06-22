@@ -1,5 +1,6 @@
 """Command-line entrypoint for the Zeta runtime."""
 
+import asyncio
 import json
 import sys
 from dataclasses import asdict
@@ -7,7 +8,16 @@ from pathlib import Path
 
 import click
 
-from zeta.dispatch import queue_item_snapshots, queue_item_status_counts
+from agents.loader import load_specs_recursive
+from zeta.agents.runtime import compile_agent_definitions
+from zeta.dispatch import (
+    EventDispatcher,
+    QueueItemSnapshot,
+    RegisteredAgent,
+    queue_item_snapshots,
+    queue_item_status_counts,
+)
+from zeta.kernel.events import Event
 from zeta.rpc import run_stdio
 from zeta.store.events import Filter, SqliteEventStore, event_store_path
 
@@ -37,6 +47,65 @@ def runtime_event_store(project_root: Path, state_dir: Path | None) -> SqliteEve
     return SqliteEventStore(
         event_store_path(runtime_state_dir(project_root, state_dir))
     )
+
+
+def runtime_agents(project_root: Path) -> list[RegisteredAgent]:
+    agents_dir = project_root.expanduser().resolve() / "agents"
+    if not agents_dir.exists():
+        return []
+    return [
+        agent
+        for spec in load_specs_recursive(agents_dir)
+        for agent in compile_agent_definitions(spec)
+    ]
+
+
+def is_runtime_event(event: Event) -> bool:
+    return event.event_type.startswith(("runtime.queue_item.", "runtime.attempt."))
+
+
+def next_available_queue_item(
+    snapshots: list[QueueItemSnapshot],
+) -> QueueItemSnapshot | None:
+    for snapshot in snapshots:
+        if snapshot.status == "available":
+            return snapshot
+    return None
+
+
+def next_unrouted_event(
+    events: list[Event],
+    snapshots: list[QueueItemSnapshot],
+) -> Event | None:
+    routed_event_ids = {snapshot.event_id for snapshot in snapshots}
+    for event in events:
+        if is_runtime_event(event):
+            continue
+        if event.id not in routed_event_ids:
+            return event
+    return None
+
+
+async def run_once(
+    event_store: SqliteEventStore,
+    agents: list[RegisteredAgent],
+) -> str:
+    dispatcher = EventDispatcher(event_store, agents=agents)
+    events = event_store.list_events(Filter())
+    snapshots = queue_item_snapshots(events)
+    available = next_available_queue_item(snapshots)
+    if available is not None:
+        await dispatcher.run_queue_item(available.queue_item_id)
+        return f"ran {available.queue_item_id}"
+    event = next_unrouted_event(events, snapshots)
+    if event is None:
+        return "queue empty"
+    route = await dispatcher.route(event)
+    if not route.queue_items:
+        return f"routed {event.id}"
+    queue_item = route.queue_items[0]
+    await dispatcher.run_queue_item(queue_item)
+    return f"ran {queue_item.queue_item_id}"
 
 
 @cli.command("queue")
@@ -85,6 +154,34 @@ def queue(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
                 ]
             )
         )
+    return 0
+
+
+@cli.command("run")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state and agents/ specs.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--once", is_flag=True, help="Process at most one unit of work.")
+def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
+    """Run the local runtime worker."""
+
+    if not once:
+        raise click.UsageError("only --once is supported")
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        message = asyncio.run(run_once(event_store, runtime_agents(project_root)))
+    finally:
+        event_store.close()
+    click.echo(message)
     return 0
 
 
