@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 from zeta.kernel.dispatch import Attempt, AttemptStatus, QueueItem, QueueItemStatus
@@ -22,12 +22,26 @@ __all__ = [
     "RegisteredAgent",
     "ReservedRuntimeEventError",
     "RoutedQueueItem",
+    "QueueItemSnapshot",
     "RouteOutcome",
     "TerminalQueueItemError",
+    "queue_item_snapshots",
+    "queue_item_status_counts",
     "terminal_queue_item_result",
 ]
 
 RESERVED_RUNTIME_EVENT_PREFIXES = ("runtime.queue_item.", "runtime.attempt.")
+QUEUE_ITEM_STATUSES = frozenset(
+    {
+        "available",
+        "claimed",
+        "completed",
+        "failed",
+        "cancelled",
+        "retry_scheduled",
+        "unhandled",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +68,20 @@ class RoutedQueueItem:
     queue_item_id: str
     event_id: str
     target_agent: str
+
+
+@dataclass(frozen=True)
+class QueueItemSnapshot:
+    """Latest durable queue item state projected from lifecycle events."""
+
+    queue_item_id: str
+    event_id: str
+    target_agent: str
+    status: QueueItemStatus
+    last_event_type: str
+    cursor: int | None
+    result: dict[str, Any] | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -599,6 +627,54 @@ def queue_item_result(event: Event) -> dict[str, Any] | None:
     if isinstance(result, dict):
         return result
     return None
+
+
+def queue_item_snapshots(events: Iterable[Event]) -> list[QueueItemSnapshot]:
+    snapshots: dict[str, QueueItemSnapshot] = {}
+    for event in events:
+        snapshot = queue_item_snapshot_from_event(event)
+        if snapshot is None:
+            continue
+        snapshots[snapshot.queue_item_id] = snapshot
+    return list(snapshots.values())
+
+
+def queue_item_snapshot_from_event(event: Event) -> QueueItemSnapshot | None:
+    if not event.event_type.startswith("runtime.queue_item."):
+        return None
+    queue_item_id = required_payload_string(event, "queue_item_id")
+    event_id = required_payload_string(event, "event_id")
+    target_agent = required_payload_string(event, "target_agent")
+    if queue_item_id is None or event_id is None or target_agent is None:
+        return None
+    return QueueItemSnapshot(
+        queue_item_id=queue_item_id,
+        event_id=event_id,
+        target_agent=target_agent,
+        status=queue_item_event_status(event),
+        last_event_type=event.event_type,
+        cursor=event.cursor,
+        result=queue_item_result(event),
+        error=optional_payload_string(event, "error"),
+    )
+
+
+def queue_item_event_status(event: Event) -> QueueItemStatus:
+    status = optional_payload_string(event, "status")
+    if status not in QUEUE_ITEM_STATUSES:
+        status = event.event_type.rsplit(".", 1)[-1]
+    if status not in QUEUE_ITEM_STATUSES:
+        raise ValueError(f"unsupported queue item status {status!r}")
+    return cast("QueueItemStatus", status)
+
+
+def queue_item_status_counts(
+    snapshots: Iterable[QueueItemSnapshot],
+) -> dict[QueueItemStatus, int]:
+    counts: dict[QueueItemStatus, int] = {}
+    for snapshot in snapshots:
+        counts[snapshot.status] = counts.get(snapshot.status, 0) + 1
+    return counts
 
 
 def routed_queue_item_from_event(event: Event) -> RoutedQueueItem:
