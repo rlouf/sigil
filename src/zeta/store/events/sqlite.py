@@ -192,10 +192,25 @@ class SqliteEventStore:
             inserted = self.get(event.id)
             if inserted is None:
                 raise sqlite3.IntegrityError(f"append failed for event {event.id}")
+            self._project_session_mapping(inserted)
             self._project_runtime_event(inserted)
             self.connection.commit()
             return AppendOutcome(event=inserted, inserted=True)
         return AppendOutcome(event=self._duplicate_for(event), inserted=False)
+
+    def _project_session_mapping(self, event: Event) -> None:
+        if event.session_id is None or event.run_id is None:
+            return
+        self.connection.execute(
+            """
+            INSERT INTO session_mappings (session_id, run_id, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+              run_id = excluded.run_id,
+              updated_at = excluded.updated_at
+            """,
+            (event.session_id, event.run_id, event.timestamp_ms),
+        )
 
     def _project_runtime_event(self, event: Event) -> None:
         if event.event_type.startswith("runtime.queue_item."):
