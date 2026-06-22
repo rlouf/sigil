@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 from agents.prompts import render_prompt
 from agents.spec import AgentSpec
 from zeta.agents.capabilities import AgentConfig
-from zeta.dispatch import RegisteredAgent
+from zeta.dispatch import ExecutableAgent
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 
 if TYPE_CHECKING:
@@ -27,7 +27,7 @@ def compile_agent_definition(
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
     run_turn: AgentRunRunner | None = None,
-) -> RegisteredAgent:
+) -> ExecutableAgent:
     """Compile a single-accept spec into an in-process runtime agent."""
     if not spec.enabled:
         raise ValueError("compile_agent_definition requires an enabled agent")
@@ -49,12 +49,12 @@ def compile_agent_definitions(
     context: str | ContextFactory = "",
     timeline: Sequence[dict[str, Any]] | TimelineFactory = (),
     run_turn: AgentRunRunner | None = None,
-) -> list[RegisteredAgent]:
+) -> list[ExecutableAgent]:
     """Compile one authored spec into runtime definitions for each accepted event."""
     if not spec.enabled or not spec.accepts:
         return []
     return [
-        RegisteredAgent(
+        ExecutableAgent(
             AgentDefinition(
                 agent_id=spec.slug,
                 triggers=(EventPattern(event_type),),

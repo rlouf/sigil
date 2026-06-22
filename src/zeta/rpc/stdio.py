@@ -42,7 +42,7 @@ def run_stdio(input: TextIO, output: TextIO) -> None:
 
     dispatcher = EventDispatcher(
         session.event_sink,
-        agents=[
+        executors=[
             session_turn_agent(
                 session,
                 publish_event=notify_event,

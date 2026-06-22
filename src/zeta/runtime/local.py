@@ -16,7 +16,7 @@ from zeta.agents.runtime import compile_agent_definitions
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.dispatch import (
     EventDispatcher,
-    RegisteredAgent,
+    ExecutableAgent,
 )
 from zeta.kernel.events import DraftEvent, Event
 from zeta.runtime.config import zeta_state_dir
@@ -36,7 +36,7 @@ class RuntimeServices:
     state_dir: Path
     events: SqliteEventStore
     specs: tuple[AgentSpec, ...]
-    agents: tuple[RegisteredAgent, ...]
+    executors: tuple[ExecutableAgent, ...]
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
 
@@ -98,7 +98,7 @@ def build_runtime(
         state_dir=resolved_state_dir,
         events=SqliteEventStore(event_store_path(resolved_state_dir)),
         specs=specs,
-        agents=agents_for_specs(specs),
+        executors=executors_for_specs(specs),
     )
 
 
@@ -109,11 +109,7 @@ def project_specs(project_root: Path) -> tuple[AgentSpec, ...]:
     return tuple(load_specs_recursive(agents_dir))
 
 
-def project_agents(project_root: Path) -> tuple[RegisteredAgent, ...]:
-    return agents_for_specs(project_specs(project_root))
-
-
-def agents_for_specs(specs: tuple[AgentSpec, ...]) -> tuple[RegisteredAgent, ...]:
+def executors_for_specs(specs: tuple[AgentSpec, ...]) -> tuple[ExecutableAgent, ...]:
     return tuple(agent for spec in specs for agent in compile_agent_definitions(spec))
 
 
@@ -126,7 +122,7 @@ async def run_once(runtime: RuntimeServices) -> str:
     enqueue_pending_events(runtime)
     dispatcher = EventDispatcher(
         runtime.events,
-        agents=runtime.agents,
+        executors=runtime.executors,
         worker_name=runtime.worker_name,
         heartbeat_interval_seconds=ATTEMPT_HEARTBEAT_INTERVAL_SECONDS,
         lease_ms=QUEUE_LEASE_MS,
@@ -209,18 +205,16 @@ def queue_item_lock_keys(
     event = runtime.events.get(str(row["event_id"]))
     if event is None:
         return ()
-    matching_agents = [
-        agent
-        for agent in runtime.agents
-        if agent.definition.accepts(event) and agent.run is not None
+    matching_executors = [
+        agent for agent in runtime.executors if agent.definition.accepts(event)
     ]
-    if len(matching_agents) != 1:
+    if len(matching_executors) != 1:
         return ()
-    return matching_agents[0].definition.lock_keys
+    return matching_executors[0].definition.lock_keys
 
 
 def agent_lock_keys(runtime: RuntimeServices, agent_id: str) -> tuple[str, ...]:
-    for agent in runtime.agents:
+    for agent in runtime.executors:
         if agent.definition.agent_id == agent_id:
             return agent.definition.lock_keys
     return ()

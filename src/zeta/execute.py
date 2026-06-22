@@ -8,7 +8,7 @@ from dataclasses import replace
 from typing import Any
 
 from zeta.context.builder import event_timeline_type, project_trace_events
-from zeta.dispatch import EventDispatcher, RegisteredAgent, terminal_queue_item_result
+from zeta.dispatch import EventDispatcher, ExecutableAgent, terminal_queue_item_result
 from zeta.events import user_message_draft
 from zeta.kernel.agents import AgentDefinition, AgentInvocation, EventPattern
 from zeta.kernel.capabilities import ExecutionMode
@@ -51,7 +51,7 @@ def session_turn_agent(
     *,
     publish_event: Callable[[RuntimePublishedEvent], None],
     cancellation_event_for_run: CancellationEventForRun | None = None,
-) -> RegisteredAgent:
+) -> ExecutableAgent:
     async def run_agent(invocation: AgentInvocation) -> dict[str, Any]:
         params = dict(invocation.triggering_event.payload)
         run_id = invocation.triggering_event.run_id or optional_string(
@@ -73,7 +73,7 @@ def session_turn_agent(
             cancellation_event=cancellation_event,
         )
 
-    return RegisteredAgent(
+    return ExecutableAgent(
         AgentDefinition(
             SESSION_TURN_AGENT_ID,
             (EventPattern("session.turn.requested"),),

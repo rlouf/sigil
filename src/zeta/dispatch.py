@@ -18,11 +18,12 @@ AgentRunner = Callable[["AgentInvocation"], Awaitable[dict[str, Any]]]
 __all__ = [
     "AgentDefinition",
     "AgentInvocation",
+    "AgentRoute",
     "AttemptSnapshot",
     "EventDispatcher",
+    "ExecutableAgent",
     "DispatchOutcome",
     "EventPattern",
-    "RegisteredAgent",
     "ReservedRuntimeEventError",
     "RoutedQueueItem",
     "QueueItemSnapshot",
@@ -76,11 +77,39 @@ class AttemptHeartbeatStore(Protocol):
 
 
 @dataclass(frozen=True)
-class RegisteredAgent:
-    """Dispatch registration for an agent definition plus executable runner."""
+class AgentRoute:
+    """Deterministic event route for one agent."""
+
+    agent_id: str
+    accepts: tuple[EventPattern, ...]
+    lock_keys: tuple[str, ...] = ()
+
+    @classmethod
+    def from_definition(cls, definition: AgentDefinition) -> "AgentRoute":
+        return cls(
+            agent_id=definition.agent_id,
+            accepts=definition.triggers,
+            lock_keys=definition.lock_keys,
+        )
+
+    def matches(self, event: Event) -> bool:
+        return any(pattern.matches(event) for pattern in self.accepts)
+
+
+@dataclass(frozen=True)
+class ExecutableAgent:
+    """Local executable bound to an agent definition."""
 
     definition: AgentDefinition
-    run: AgentRunner | None = None
+    run: AgentRunner
+
+    @property
+    def agent_id(self) -> str:
+        return self.definition.agent_id
+
+    @property
+    def route(self) -> AgentRoute:
+        return AgentRoute.from_definition(self.definition)
 
 
 @dataclass(frozen=True)
@@ -175,14 +204,19 @@ class EventDispatcher:
         self,
         event_sink: EventWriter,
         *,
-        agents: Iterable[RegisteredAgent] = (),
+        routes: Iterable[AgentRoute] = (),
+        executors: Iterable[ExecutableAgent] = (),
         publish_event: Callable[[Event], None] | None = None,
         worker_name: str | None = None,
         heartbeat_interval_seconds: float | None = None,
         lease_ms: int = 60_000,
     ) -> None:
         self.event_sink = event_sink
-        self.agents = tuple(agents)
+        self.executors = tuple(executors)
+        route_by_agent = {route.agent_id: route for route in routes}
+        for executor in self.executors:
+            route_by_agent[executor.agent_id] = executor.route
+        self.routes = tuple(route_by_agent.values())
         self.publish_callback = publish_event
         self.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
@@ -213,19 +247,19 @@ class EventDispatcher:
     async def route(self, event: Event) -> RouteOutcome:
         lifecycle_events: list[Event] = []
         queue_items: list[RoutedQueueItem] = []
-        matching_agents = self.matching_agents(event)
-        if not matching_agents:
+        matching_routes = self.matching_routes(event)
+        if not matching_routes:
             return RouteOutcome(
                 event,
                 [self._append_unhandled_queue_item_event(event)],
                 [],
             )
-        for agent in matching_agents:
-            queue_item_id = queue_item_id_for_event(agent, event)
+        for route in matching_routes:
+            queue_item_id = queue_item_id_for_event(route, event)
             lifecycle_events.append(
                 self._append_queue_item_event(
                     event,
-                    agent,
+                    route,
                     queue_item_id,
                     event_suffix="available",
                     status="available",
@@ -235,7 +269,7 @@ class EventDispatcher:
                 RoutedQueueItem(
                     queue_item_id=queue_item_id,
                     event_id=event.id,
-                    target_agent=agent.definition.agent_id,
+                    target_agent=route.agent_id,
                 )
             )
         return RouteOutcome(event, lifecycle_events, queue_items)
@@ -277,10 +311,10 @@ class EventDispatcher:
                 triggering_event,
                 routed_queue_item,
             )
-        agent = self._agent_for_id(routed_queue_item.target_agent)
-        if agent is None or agent.run is None:
+        executor = self._executor_for_id(routed_queue_item.target_agent)
+        if executor is None:
             return self._missing_executor_events(triggering_event, routed_queue_item)
-        return await self._run_agent(agent, triggering_event, routed_queue_item)
+        return await self._run_agent(executor, triggering_event, routed_queue_item)
 
     def schedule_retry(self, queue_item: RoutedQueueItem | str) -> Event:
         routed_queue_item = self._resolve_queue_item(queue_item)
@@ -294,8 +328,8 @@ class EventDispatcher:
             attempt_number=self._next_attempt_number(routed_queue_item.queue_item_id),
         )
 
-    def matching_agents(self, event: Event) -> list[RegisteredAgent]:
-        return [agent for agent in self.agents if agent.definition.accepts(event)]
+    def matching_routes(self, event: Event) -> list[AgentRoute]:
+        return [route for route in self.routes if route.matches(event)]
 
     async def _run_queue_item_into(
         self,
@@ -307,7 +341,7 @@ class EventDispatcher:
 
     async def _run_agent(
         self,
-        agent: RegisteredAgent,
+        agent: ExecutableAgent,
         triggering_event: Event,
         queue_item: RoutedQueueItem,
     ) -> list[Event]:
@@ -315,13 +349,10 @@ class EventDispatcher:
         events: list[Event] = []
         attempt_number = self._next_attempt_number(queue_item_id)
         attempt_id = attempt_id_for_queue_item(queue_item_id, attempt_number)
-        runner = agent.run
-        if runner is None:
-            return self._missing_executor_events(triggering_event, queue_item)
         events.append(
             self._append_queue_item_event(
                 triggering_event,
-                agent,
+                agent.route,
                 queue_item_id,
                 event_suffix="claimed",
                 status="claimed",
@@ -344,7 +375,7 @@ class EventDispatcher:
         heartbeat_task = self._start_attempt_heartbeat(attempt_id, queue_item_id)
         try:
             try:
-                result = await runner(
+                result = await agent.run(
                     AgentInvocation(
                         agent.definition,
                         triggering_event,
@@ -432,10 +463,10 @@ class EventDispatcher:
                 now_ms=current_time_ms(),
             )
 
-    def _agent_for_id(self, agent_id: str) -> RegisteredAgent | None:
-        for agent in self.agents:
-            if agent.definition.agent_id == agent_id:
-                return agent
+    def _executor_for_id(self, agent_id: str) -> ExecutableAgent | None:
+        for executor in self.executors:
+            if executor.agent_id == agent_id:
+                return executor
         return None
 
     def _resolve_queue_item(self, queue_item: RoutedQueueItem | str) -> RoutedQueueItem:
@@ -461,8 +492,8 @@ class EventDispatcher:
         triggering_event: Event,
         queue_item: RoutedQueueItem,
     ) -> list[Event]:
-        matching_agents = self.matching_agents(triggering_event)
-        if not matching_agents:
+        matching_routes = self.matching_routes(triggering_event)
+        if not matching_routes:
             return [
                 self._append_queue_item_event_for_target(
                     triggering_event,
@@ -472,16 +503,17 @@ class EventDispatcher:
                     status="unhandled",
                 )
             ]
-        if len(matching_agents) == 1:
-            agent = matching_agents[0]
+        if len(matching_routes) == 1:
+            route = matching_routes[0]
             bound_item = RoutedQueueItem(
                 queue_item_id=queue_item.queue_item_id,
                 event_id=queue_item.event_id,
-                target_agent=agent.definition.agent_id,
+                target_agent=route.agent_id,
             )
-            if agent.run is None:
+            executor = self._executor_for_id(route.agent_id)
+            if executor is None:
                 return self._missing_executor_events(triggering_event, bound_item)
-            return await self._run_agent(agent, triggering_event, bound_item)
+            return await self._run_agent(executor, triggering_event, bound_item)
 
         lifecycle_events = [
             self._append_queue_item_event_for_target(
@@ -492,12 +524,12 @@ class EventDispatcher:
                 status="completed",
             )
         ]
-        for agent in matching_agents:
-            queue_item_id = queue_item_id_for_event(agent, triggering_event)
+        for route in matching_routes:
+            queue_item_id = queue_item_id_for_event(route, triggering_event)
             lifecycle_events.append(
                 self._append_queue_item_event(
                     triggering_event,
-                    agent,
+                    route,
                     queue_item_id,
                     event_suffix="available",
                     status="available",
@@ -566,7 +598,7 @@ class EventDispatcher:
     def _append_queue_item_event(
         self,
         triggering_event: Event,
-        agent: RegisteredAgent,
+        route: AgentRoute,
         queue_item_id: str,
         *,
         event_suffix: str,
@@ -577,7 +609,7 @@ class EventDispatcher:
         return self._append_queue_item_event_for_target(
             triggering_event,
             queue_item_id,
-            agent.definition.agent_id,
+            route.agent_id,
             event_suffix=event_suffix,
             status=status,
             attempt_number=attempt_number,
@@ -616,7 +648,7 @@ class EventDispatcher:
     def _append_attempt_event(
         self,
         triggering_event: Event,
-        agent: RegisteredAgent,
+        agent: ExecutableAgent,
         queue_item_id: str,
         attempt_id: str,
         attempt_number: int,
@@ -658,7 +690,7 @@ class EventDispatcher:
         self,
         exc: Exception,
         triggering_event: Event,
-        agent: RegisteredAgent,
+        agent: ExecutableAgent,
         queue_item_id: str,
         attempt_id: str,
         attempt_number: int,
@@ -680,7 +712,7 @@ class EventDispatcher:
             ),
             self._append_queue_item_event(
                 triggering_event,
-                agent,
+                agent.route,
                 queue_item_id,
                 event_suffix="failed",
                 status="failed",
@@ -692,7 +724,7 @@ class EventDispatcher:
         self,
         result: dict[str, Any],
         triggering_event: Event,
-        agent: RegisteredAgent,
+        agent: ExecutableAgent,
         queue_item_id: str,
         attempt_id: str,
         attempt_number: int,
@@ -715,7 +747,7 @@ class EventDispatcher:
             ),
             self._append_queue_item_event(
                 triggering_event,
-                agent,
+                agent.route,
                 queue_item_id,
                 event_suffix=queue_status,
                 status=queue_status,
@@ -766,7 +798,7 @@ class EventDispatcher:
 
     def _agent_event_publisher(
         self,
-        agent: RegisteredAgent,
+        agent: ExecutableAgent,
         triggering_event: Event,
         queue_item_id: str,
         attempt_id: str,
@@ -953,8 +985,8 @@ def queue_item_from_record(record: Mapping[str, Any]) -> RoutedQueueItem:
     )
 
 
-def queue_item_id_for_event(agent: RegisteredAgent, event: Event) -> str:
-    agent_id = agent.definition.agent_id.replace(":", "_").replace(".", "_")
+def queue_item_id_for_event(route: AgentRoute, event: Event) -> str:
+    agent_id = route.agent_id.replace(":", "_").replace(".", "_")
     return f"qi_{event.id}_{agent_id}"
 
 
