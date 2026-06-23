@@ -25,8 +25,8 @@ from zeta.models import chat_completions as zeta_model
 from zeta.records.events import (
     DraftEvent,
     Event,
-    boundary_event_draft,
     draft_event_view,
+    draft_from_boundary_event,
     event_view,
 )
 from zeta.records.objects import Object, ObjectId
@@ -205,7 +205,7 @@ def record_durable_timeline_event(
     draft = (
         event
         if isinstance(event, DraftEvent)
-        else boundary_event_draft(
+        else draft_from_boundary_event(
             {"cwd": os.getcwd(), **event},
             session_id=runtime_context.session_id,
         )

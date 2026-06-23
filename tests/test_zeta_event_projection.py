@@ -5,11 +5,11 @@ from typing import Any
 from zeta.records.events import (
     DraftEvent,
     Event,
+    draft_from_runtime_event,
     durable_model_event_payload,
     durable_tool_event_payload,
     event_view,
     model_call_draft,
-    runtime_event_draft,
     tool_call_draft,
 )
 from zeta.records.objects import Derivation, Object
@@ -224,7 +224,7 @@ def test_zeta_runtime_events_project_to_durable_drafts() -> None:
     drafts = []
     for event in events:
         drafts.append(
-            runtime_event_draft(event, session_id=SESSION_ID, turn_id=TURN_ID)
+            draft_from_runtime_event(event, session_id=SESSION_ID, turn_id=TURN_ID)
         )
 
     assert [asdict(draft) for draft in drafts] == [
@@ -232,7 +232,7 @@ def test_zeta_runtime_events_project_to_durable_drafts() -> None:
     ]
 
 
-def test_zeta_runtime_event_draft_handles_special_and_generic_events() -> None:
+def test_zeta_draft_from_runtime_event_handles_special_and_generic_events() -> None:
     generic = {
         "type": "custom.event",
         "id": "custom-1",
@@ -240,18 +240,20 @@ def test_zeta_runtime_event_draft_handles_special_and_generic_events() -> None:
     }
 
     drafts = [
-        runtime_event_draft(
+        draft_from_runtime_event(
             model_event_payload(),
             session_id=SESSION_ID,
             turn_id=TURN_ID,
         ),
-        runtime_event_draft(tool_call_event(), session_id=SESSION_ID, turn_id=TURN_ID),
-        runtime_event_draft(
+        draft_from_runtime_event(
+            tool_call_event(), session_id=SESSION_ID, turn_id=TURN_ID
+        ),
+        draft_from_runtime_event(
             turn_aborted_event(),
             session_id=SESSION_ID,
             turn_id=TURN_ID,
         ),
-        runtime_event_draft(generic, session_id=SESSION_ID, turn_id=TURN_ID),
+        draft_from_runtime_event(generic, session_id=SESSION_ID, turn_id=TURN_ID),
     ]
 
     assert [draft.event_type for draft in drafts] == [

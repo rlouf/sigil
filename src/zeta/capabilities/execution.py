@@ -22,8 +22,8 @@ from zeta.capabilities.types import ExecutionMode
 from zeta.models.chat_completions import tool_call_id
 from zeta.records.events import (
     DraftEvent,
+    draft_from_runtime_event,
     normalized_tool_result,
-    runtime_event_draft,
     tool_result_status,
 )
 from zeta.records.provenance import project_trace_drafts
@@ -531,7 +531,9 @@ def emit_tool_event(
     *,
     ctx: CapabilityExecutionContext,
 ) -> None:
-    emit_event(events, runtime_event_draft(event, session_id=None, turn_id=None), ctx)
+    emit_event(
+        events, draft_from_runtime_event(event, session_id=None, turn_id=None), ctx
+    )
 
 
 def emit_event(

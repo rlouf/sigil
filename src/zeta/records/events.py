@@ -202,7 +202,7 @@ def draft_event_id(draft: DraftEvent) -> str | None:
     return event_id or None
 
 
-def runtime_event_draft(
+def draft_from_runtime_event(
     event: Mapping[str, Any],
     *,
     session_id: str | None,
@@ -256,7 +256,7 @@ def runtime_event_draft(
     )
 
 
-def boundary_event_draft(
+def draft_from_boundary_event(
     event: Mapping[str, Any],
     *,
     session_id: str,
@@ -267,7 +267,7 @@ def boundary_event_draft(
     if event_type in {"model", "tool_call", "tool_result", "turn_aborted"}:
         turn_id = optional_event_string(payload.get("turn_id"))
         run_id = optional_event_string(payload.get("run_id"))
-        return runtime_event_draft(
+        return draft_from_runtime_event(
             payload,
             session_id=event_session_id,
             turn_id=turn_id,
@@ -552,13 +552,13 @@ __all__ = [
     "draft_event_id",
     "draft_event_view",
     "event_view",
-    "boundary_event_draft",
+    "draft_from_boundary_event",
     "durable_model_event_payload",
     "durable_tool_event_payload",
     "model_call_draft",
     "normalized_tool_result",
     "publish_event",
-    "runtime_event_draft",
+    "draft_from_runtime_event",
     "status_update_draft",
     "stream_chunk_draft",
     "tool_call_draft",

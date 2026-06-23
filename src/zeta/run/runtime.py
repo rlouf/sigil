@@ -36,8 +36,8 @@ from zeta.records.events import (
     DraftEvent,
     Event,
     draft_event_view,
+    draft_from_runtime_event,
     event_view,
-    runtime_event_draft,
     status_update_draft,
     stream_chunk_draft,
     turn_aborted_draft,
@@ -753,7 +753,7 @@ def emit_tool_event(
     ctx: RunDependencies,
 ) -> None:
     record_runtime_event(
-        events, runtime_event_draft(event, session_id=None, turn_id=None), ctx=ctx
+        events, draft_from_runtime_event(event, session_id=None, turn_id=None), ctx=ctx
     )
 
 
@@ -817,7 +817,7 @@ def record_model_event(
     if event:
         record_runtime_event(
             events,
-            runtime_event_draft(event, session_id=None, turn_id=None),
+            draft_from_runtime_event(event, session_id=None, turn_id=None),
             ctx=ctx,
         )
     return event_id, tool_calls

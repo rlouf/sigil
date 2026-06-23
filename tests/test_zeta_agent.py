@@ -1165,12 +1165,12 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
         assert kwargs["index"] == 0
         return zeta_agent.CapabilityCallResult(
             events=[
-                zeta_event_model.runtime_event_draft(
+                zeta_event_model.draft_from_runtime_event(
                     {"type": "tool_call", "id": "call-1", "tool_call_id": "call-1"},
                     session_id=None,
                     turn_id=None,
                 ),
-                zeta_event_model.runtime_event_draft(
+                zeta_event_model.draft_from_runtime_event(
                     {
                         "type": "tool_result",
                         "id": "result-1",
@@ -1228,7 +1228,7 @@ def test_zeta_run_capability_step_reconciles_existing_terminal_result(
 ) -> None:
     state = zeta_agent.RunState(
         events=[
-            zeta_event_model.runtime_event_draft(
+            zeta_event_model.draft_from_runtime_event(
                 {
                     "type": "tool_result",
                     "id": "result-1",

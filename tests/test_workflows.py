@@ -83,13 +83,15 @@ def current_sigil_timeline() -> list[dict[str, Any]]:
 
 def draft_events(events: list[dict[str, Any]]) -> list[DraftEvent]:
     return [
-        zeta_event_model.runtime_event_draft(event, session_id=None, turn_id=None)
+        zeta_event_model.draft_from_runtime_event(event, session_id=None, turn_id=None)
         for event in events
     ]
 
 
 def draft_event(event: dict[str, Any]) -> DraftEvent:
-    return zeta_event_model.runtime_event_draft(event, session_id=None, turn_id=None)
+    return zeta_event_model.draft_from_runtime_event(
+        event, session_id=None, turn_id=None
+    )
 
 
 def test_sigil_step_writes_handoff_file(

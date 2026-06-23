@@ -363,7 +363,7 @@ Current direction:
 - Keep the `*_draft` suffix for functions that construct a `DraftEvent` and
   centralize an emitted event schema.
 - Current schema constructors:
-  `runtime_event_draft`, `boundary_event_draft`, `model_call_draft`,
+  `draft_from_runtime_event`, `draft_from_boundary_event`, `model_call_draft`,
   `tool_call_draft`, `turn_aborted_draft`, `stream_chunk_draft`,
   `status_update_draft`, `user_message_draft`, and `durable_event_draft`.
 - Move `turn_aborted_draft` with the run lifecycle event vocabulary. It still
@@ -372,9 +372,8 @@ Current direction:
   no schema, idempotency, or lifecycle policy.
 - Use `*_draft` when the function returns a `DraftEvent`.
 - Use `draft_from_*` when converting an existing source representation into a
-  `DraftEvent`. Examples:
-  `runtime_event_draft` -> `draft_from_runtime_event` and
-  `boundary_event_draft` -> `draft_from_boundary_event`.
+  `DraftEvent`. `draft_from_runtime_event` and
+  `draft_from_boundary_event` follow this rule.
 - Keep semantic constructors as `*_draft` when they build a named durable draft
   from explicit arguments, for example `model_call_draft`,
   `tool_call_draft`, `status_update_draft`, and `user_message_draft`.
