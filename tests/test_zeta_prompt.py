@@ -14,7 +14,7 @@ from _zeta_helpers import (
     linked_kinds,
     task_state_fixture,
     tool_call_fixture,
-    tool_result_event,
+    tool_result_event_payload,
     tool_result_transcript,
     write_skill,
 )
@@ -814,7 +814,7 @@ def test_zeta_task_state_transform_fails_open() -> None:
 def test_zeta_prompt_components_keep_source_events() -> None:
     transcript = [
         {"type": "model", "tool_calls": tool_call_fixture()},
-        tool_result_event(
+        tool_result_event_payload(
             "call-read",
             "raw result",
             metadata={"path": "big.txt"},
@@ -1000,7 +1000,7 @@ def test_zeta_structural_trim_preserves_current_tool_results_by_default() -> Non
                 "type": "model",
                 "tool_calls": tool_call_fixture("call-fresh", path="fresh.txt"),
             },
-            tool_result_event(
+            tool_result_event_payload(
                 "call-fresh",
                 raw_text,
                 metadata={"path": "fresh.txt"},
@@ -1704,7 +1704,7 @@ def test_zeta_drop_oldest_drops_tool_results_with_their_call() -> None:
             "type": "model",
             "tool_calls": tool_call_fixture("call-old"),
         },
-        tool_result_event("call-old", "old result " + "x" * 400, metadata={}),
+        tool_result_event_payload("call-old", "old result " + "x" * 400, metadata={}),
         {"role": "user", "content": "newer message"},
     ]
     components = zeta_context.prompt_components(

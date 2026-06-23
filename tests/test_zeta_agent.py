@@ -251,8 +251,10 @@ def test_zeta_agent_turn_emits_model_draft(monkeypatch) -> None:
     assert drafts[0].caused_by == "prompt-1"
 
 
-def test_zeta_tool_result_event_records_error_for_failed_content_result() -> None:
-    event = zeta_capability_execution.tool_result_event(
+def test_zeta_tool_result_event_payload_records_error_for_failed_content_result() -> (
+    None
+):
+    event = zeta_capability_execution.tool_result_event_payload(
         "call-1",
         "grep",
         {
@@ -274,8 +276,8 @@ def test_zeta_tool_result_event_records_error_for_failed_content_result() -> Non
     assert event["result"]["content"][0]["text"].startswith("rg: missing")
 
 
-def test_zeta_tool_result_event_uses_generic_failed_content_message() -> None:
-    event = zeta_capability_execution.tool_result_event(
+def test_zeta_tool_result_event_payload_uses_generic_failed_content_message() -> None:
+    event = zeta_capability_execution.tool_result_event_payload(
         "call-1",
         "bash",
         {
@@ -296,8 +298,8 @@ def test_zeta_tool_result_event_uses_generic_failed_content_message() -> None:
     }
 
 
-def test_zeta_tool_result_event_preserves_explicit_error() -> None:
-    event = zeta_capability_execution.tool_result_event(
+def test_zeta_tool_result_event_payload_preserves_explicit_error() -> None:
+    event = zeta_capability_execution.tool_result_event_payload(
         "call-1",
         "read",
         {"ok": False, "error": {"code": "read-failed", "message": "missing"}},
@@ -344,7 +346,7 @@ def test_zeta_model_tool_call_rejects_missing_function_payload() -> None:
         is None
     )
     assert (
-        zeta_capability_execution.model_tool_call_event(
+        zeta_capability_execution.model_tool_call_event_payload(
             {"id": "call-1"},
             index=0,
             caused_by="assistant-1",
@@ -374,8 +376,8 @@ def test_zeta_model_tool_call_preserves_invalid_json_error() -> None:
     assert invocation.call_event == record.event(caused_by="assistant-1")
 
 
-def test_zeta_model_event_has_boundary_dict_shape() -> None:
-    assert zeta_agent.model_event(
+def test_zeta_model_event_payload_has_boundary_dict_shape() -> None:
+    assert zeta_agent.model_event_payload(
         {
             "content": "done",
             "reasoning_content": "thinking",
@@ -520,8 +522,8 @@ def test_zeta_durable_tool_call_event_payload_keeps_domain_fields() -> None:
     }
 
 
-def test_zeta_tool_result_event_has_boundary_dict_shape() -> None:
-    event = zeta_capability_execution.tool_result_event(
+def test_zeta_tool_result_event_payload_has_boundary_dict_shape() -> None:
+    event = zeta_capability_execution.tool_result_event_payload(
         "call-1",
         "read",
         {"ok": True, "content": [{"type": "text", "text": "done"}]},
@@ -673,7 +675,7 @@ def test_zeta_assistant_message_round_trips_content_to_model_event() -> None:
     assert assistant.reasoning_content == ""
     assert assistant.tool_calls == ()
     assert assistant.to_provider() == {"content": "done"}
-    assert zeta_agent.model_event(assistant.to_provider()) == {
+    assert zeta_agent.model_event_payload(assistant.to_provider()) == {
         "type": "model",
         "content": "done",
     }
@@ -716,7 +718,7 @@ def test_zeta_assistant_message_preserves_reasoning_content() -> None:
     )
 
     assert assistant.reasoning_content == "thinking"
-    assert zeta_agent.model_event(assistant.to_provider()) == {
+    assert zeta_agent.model_event_payload(assistant.to_provider()) == {
         "type": "model",
         "reasoning": "thinking",
         "content": "done",
@@ -4527,7 +4529,7 @@ def test_zeta_agent_turn_passes_thinking_to_the_model(monkeypatch) -> None:
 
 
 def test_zeta_agent_event_omits_empty_reasoning() -> None:
-    event = zeta_agent.model_event({"content": "done", "reasoning_content": ""})
+    event = zeta_agent.model_event_payload({"content": "done", "reasoning_content": ""})
 
     assert "reasoning" not in event
 

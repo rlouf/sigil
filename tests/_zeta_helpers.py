@@ -125,7 +125,7 @@ def tool_call_fixture(
     ]
 
 
-def tool_result_event(
+def tool_result_event_payload(
     call_id: str,
     text: str,
     *,
@@ -154,7 +154,7 @@ def tool_result_transcript(
             "type": "model",
             "tool_calls": tool_call_fixture(call_id, name=tool_name),
         },
-        tool_result_event(call_id, text, metadata=metadata),
+        tool_result_event_payload(call_id, text, metadata=metadata),
     ]
 
 

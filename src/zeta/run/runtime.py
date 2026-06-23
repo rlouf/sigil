@@ -769,7 +769,7 @@ def record_runtime_event(
     return draft
 
 
-def model_event(assistant: dict[str, Any]) -> dict[str, Any]:
+def model_event_payload(assistant: dict[str, Any]) -> dict[str, Any]:
     content = assistant.get("content")
     reasoning = assistant.get("reasoning_content")
     event: dict[str, Any] = {"type": "model"}
@@ -807,7 +807,7 @@ def record_model_event(
     caused_by: str | None = None,
     ctx: RunDependencies,
 ) -> tuple[str | None, list[dict[str, Any]]]:
-    event = model_event(assistant)
+    event = model_event_payload(assistant)
     if caused_by is not None:
         event["caused_by"] = caused_by
     if prompt_trace is not None:

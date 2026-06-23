@@ -172,7 +172,7 @@ class CapabilityCallResult:
     stop: bool = False
 
 
-def model_tool_call_event(
+def model_tool_call_event_payload(
     tool_call: dict[str, Any],
     *,
     index: int,
@@ -404,7 +404,7 @@ async def run_valid_tool_call(
         and staged_effect is not None
         and result.get("ok") is True
     )
-    result_event = tool_result_event(
+    result_event = tool_result_event_payload(
         invocation.call_id,
         invocation.name,
         result,
@@ -472,7 +472,7 @@ def invalid_tool_result(
     if caused_by is not None:
         event["caused_by"] = caused_by
     events: list[DraftEvent] = []
-    result_event = tool_result_event(
+    result_event = tool_result_event_payload(
         call_id,
         name,
         tool_error(code, message),
@@ -493,7 +493,7 @@ def invalid_tool_result(
     return CapabilityCallResult(events=events)
 
 
-def tool_result_event(
+def tool_result_event_payload(
     call_id: str,
     name: str,
     result: dict[str, Any],

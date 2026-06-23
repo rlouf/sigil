@@ -41,7 +41,7 @@ def event_from_draft(
     )
 
 
-def model_event() -> dict[str, Any]:
+def model_event_payload() -> dict[str, Any]:
     return {
         "type": "model",
         "id": "model-1",
@@ -70,7 +70,7 @@ def tool_call_event() -> dict[str, Any]:
     }
 
 
-def tool_result_event(
+def tool_result_event_payload(
     event_id: str,
     *,
     status: str,
@@ -99,14 +99,14 @@ def turn_aborted_event() -> dict[str, Any]:
 
 
 def runtime_drafts() -> list[DraftEvent]:
-    model = model_event()
+    model = model_event_payload()
     call = tool_call_event()
-    result_ok = tool_result_event(
+    result_ok = tool_result_event_payload(
         "result-ok",
         status="completed",
         result={"ok": True, "content": [{"type": "text", "text": "contents"}]},
     )
-    result_failed = tool_result_event(
+    result_failed = tool_result_event_payload(
         "result-failed",
         status="failed",
         result={
@@ -114,7 +114,7 @@ def runtime_drafts() -> list[DraftEvent]:
             "error": {"code": "read_failed", "message": "missing file"},
         },
     )
-    result_refused = tool_result_event(
+    result_refused = tool_result_event_payload(
         "result-refused",
         status="refused",
         result={
@@ -192,14 +192,14 @@ def runtime_events() -> list[Event]:
 
 def test_zeta_runtime_events_project_to_durable_drafts() -> None:
     events = [
-        model_event(),
+        model_event_payload(),
         tool_call_event(),
-        tool_result_event(
+        tool_result_event_payload(
             "result-ok",
             status="completed",
             result={"ok": True, "content": [{"type": "text", "text": "contents"}]},
         ),
-        tool_result_event(
+        tool_result_event_payload(
             "result-failed",
             status="failed",
             result={
@@ -207,7 +207,7 @@ def test_zeta_runtime_events_project_to_durable_drafts() -> None:
                 "error": {"code": "read_failed", "message": "missing file"},
             },
         ),
-        tool_result_event(
+        tool_result_event_payload(
             "result-refused",
             status="refused",
             result={
@@ -240,7 +240,11 @@ def test_zeta_runtime_event_draft_handles_special_and_generic_events() -> None:
     }
 
     drafts = [
-        runtime_event_draft(model_event(), session_id=SESSION_ID, turn_id=TURN_ID),
+        runtime_event_draft(
+            model_event_payload(),
+            session_id=SESSION_ID,
+            turn_id=TURN_ID,
+        ),
         runtime_event_draft(tool_call_event(), session_id=SESSION_ID, turn_id=TURN_ID),
         runtime_event_draft(
             turn_aborted_event(),

@@ -39,7 +39,9 @@ def append_shell_result() -> dict[str, Any]:
     from sigil import zeta_session_for_sigil
 
     runtime_context = zeta_session_for_sigil()
-    event = shell_result_event(current_timeline(runtime_context=runtime_context))
+    event = shell_result_event_payload(
+        current_timeline(runtime_context=runtime_context)
+    )
     if event.get("type") == "tool_result":
         return event_view(record_shell_tool_result(event))
     return shell_resume_payload(event, session_id=runtime_context.session_id)
@@ -81,7 +83,9 @@ def record_shell_tool_result(event: dict[str, Any]) -> Event:
     return outcome.event
 
 
-def shell_result_event(timeline: Sequence[HandoffTimelineEvent]) -> dict[str, Any]:
+def shell_result_event_payload(
+    timeline: Sequence[HandoffTimelineEvent],
+) -> dict[str, Any]:
     """Build the timeline event that resumes a user-run shell handoff."""
     handoff = latest_unresolved_shell_handoff(timeline)
     if not handoff:
