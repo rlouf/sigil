@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from zeta.records.events import DraftEvent, Event, draft_event_id
+from zeta.records.events import DraftEvent, Event, draft_event_id, event_timeline_type
 from zeta.records.objects import Derivation, Object, ObjectId
 from zeta.records.stores import Store
 
@@ -68,16 +68,6 @@ def project_trace_drafts(
         ),
         store,
     )
-
-
-def event_timeline_type(event: Event) -> str:
-    view_type = event.payload.get("_timeline_type")
-    if isinstance(view_type, str) and view_type:
-        return view_type
-    prefix = "zeta."
-    if event.event_type.startswith(prefix):
-        return event.event_type[len(prefix) :]
-    return event.event_type
 
 
 def _project_one_trace_model_event(

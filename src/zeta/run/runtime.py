@@ -37,6 +37,7 @@ from zeta.records.events import (
     draft_event_id,
     draft_event_view,
     draft_from_runtime_event,
+    draft_timeline_type,
     ensure_runtime_event_id,
     event_view,
     status_update_draft,
@@ -833,13 +834,3 @@ def next_model_parent(events: list[DraftEvent]) -> str | None:
         if isinstance(event_id, str) and event_id:
             return event_id
     return None
-
-
-def draft_timeline_type(draft: DraftEvent) -> str:
-    view_type = draft.payload.get("_timeline_type")
-    if isinstance(view_type, str) and view_type:
-        return view_type
-    prefix = "zeta."
-    if draft.event_type.startswith(prefix):
-        return draft.event_type[len(prefix) :]
-    return draft.event_type

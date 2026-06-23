@@ -218,9 +218,8 @@ Target direction:
   top-level trace projector.
 - Avoid generic `add_*_projection_fields` names because they describe mechanics,
   not the read model being produced.
-- `draft_timeline_type` duplicates the timeline-type rule in records
-  (`event_timeline_type` / `durable_view_type`). Consolidate the rule near
-  records/provenance instead of carrying parallel local helpers.
+- Timeline-type decoding for events and drafts is centralized in
+  `records/events.py`.
 - Idempotency-key parsing for draft event ids is centralized in
   `records/events.py`.
 - `model_event_payload` and `assistant_tool_calls` are only worth keeping if
@@ -390,9 +389,8 @@ Current direction:
   `model_tool_call_event` -> `model_tool_call_event_payload`,
   `tool_result_event` -> `tool_result_event_payload`, and
   `shell_result_event` -> `shell_result_event_payload`.
-- `durable_view_type`, `event_timeline_type`, and `draft_timeline_type` express
-  the same timeline-type rule in different modules. Consolidate the rule in one
-  records/provenance location.
+- `durable_view_type`, `event_timeline_type`, and `draft_timeline_type` share
+  one timeline-type decoder in `records/events.py`.
 - `durable_model_event_payload`, `durable_tool_event_payload`, and
   `durable_payload` are schema-normalization helpers. Keep them if they remain
   the single place that strips non-durable fields.

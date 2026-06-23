@@ -183,14 +183,39 @@ def exact_event_time(event: Event) -> float:
     return event.timestamp_ms / 1_000
 
 
+def event_timeline_type(event: Event) -> str:
+    return payload_timeline_type(
+        event.payload,
+        event.event_type,
+        fallback=event.event_type,
+    )
+
+
+def draft_timeline_type(draft: DraftEvent) -> str:
+    return payload_timeline_type(
+        draft.payload,
+        draft.event_type,
+        fallback=draft.event_type,
+    )
+
+
 def durable_view_type(event: Event) -> str:
-    view_type = event.payload.get("_timeline_type")
+    return payload_timeline_type(event.payload, event.event_type, fallback="")
+
+
+def payload_timeline_type(
+    payload: Mapping[str, Any],
+    event_type: str,
+    *,
+    fallback: str,
+) -> str:
+    view_type = payload.get("_timeline_type")
     if isinstance(view_type, str) and view_type:
         return view_type
     prefix = "zeta."
-    if event.event_type.startswith(prefix):
-        return event.event_type[len(prefix) :]
-    return ""
+    if event_type.startswith(prefix):
+        return event_type[len(prefix) :]
+    return fallback
 
 
 def draft_event_id(draft: DraftEvent) -> str | None:
@@ -564,7 +589,9 @@ __all__ = [
     "TURN_IDEMPOTENT_TYPES",
     "draft_event_id",
     "draft_event_view",
+    "draft_timeline_type",
     "ensure_runtime_event_id",
+    "event_timeline_type",
     "event_view",
     "draft_from_boundary_event",
     "durable_model_event_payload",

@@ -8,8 +8,13 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from zeta.capabilities.types import ExecutionMode
-from zeta.records.events import DraftEvent, Event, user_message_draft
-from zeta.records.provenance import event_timeline_type, project_trace_events
+from zeta.records.events import (
+    DraftEvent,
+    Event,
+    event_timeline_type,
+    user_message_draft,
+)
+from zeta.records.provenance import project_trace_events
 from zeta.records.stores import EventReader, Filter, warn_trace_failure_once
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import (
