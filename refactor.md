@@ -169,7 +169,6 @@ Current direction:
 
 - Keep idempotency helpers (`event_idempotency_key`,
   `durable_event_idempotency_key`) when they encode acceptance/dedupe policy.
-  Reconcile duplicate policy with Sigil's `durable_idempotency_key`.
 - Keep the `*_draft` suffix for functions that construct a `DraftEvent` and
   centralize an emitted event schema.
 - Current schema constructors:

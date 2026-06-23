@@ -12,29 +12,18 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from zeta.records.events import Event
+from zeta.records.events import (
+    EVENT_IDEMPOTENT_TYPES,
+    TURN_IDEMPOTENT_TYPES,
+    Event,
+    durable_event_idempotency_key,
+)
 from zeta.records.stores import (
     EVENT_STORE_NAME,
     Filter,
     SqliteEventStore,
 )
 
-EVENT_IDEMPOTENT_TYPES = frozenset(
-    {
-        "zeta.model_call.completed",
-        "zeta.tool_call.started",
-        "zeta.tool_call.completed",
-        "zeta.tool_call.failed",
-        "zeta.user_message",
-    }
-)
-TURN_IDEMPOTENT_TYPES = frozenset(
-    {
-        "zeta.prompt.submitted",
-        "zeta.turn.completed",
-        "zeta.turn.failed",
-    }
-)
 TIMELINE_DURABLE_TYPES = {
     "user_message": "zeta.user_message",
     "model_usage": "zeta.model_call.completed",
@@ -144,7 +133,11 @@ def durable_log_event(event: dict[str, Any], *, session_id: str) -> Event:
         event_type=durable_type,
         source="zeta" if is_zeta_durable_event(durable_type) else source,
         payload=domain_payload,
-        idempotency_key=durable_idempotency_key(durable_type, event_id, turn_id),
+        idempotency_key=durable_event_idempotency_key(
+            durable_type,
+            event_id=event_id,
+            turn_id=turn_id,
+        ),
         caused_by=caused_by,
         session_id=event_session_id,
         turn_id=turn_id,
@@ -154,18 +147,6 @@ def durable_log_event(event: dict[str, Any], *, session_id: str) -> Event:
 
 def is_zeta_durable_event(event_type: str) -> bool:
     return event_type in EVENT_IDEMPOTENT_TYPES or event_type in TURN_IDEMPOTENT_TYPES
-
-
-def durable_idempotency_key(
-    event_type: str,
-    event_id: str,
-    turn_id: str | None,
-) -> str | None:
-    if event_type in EVENT_IDEMPOTENT_TYPES:
-        return f"{event_type}:{event_id}"
-    if event_type in TURN_IDEMPOTENT_TYPES and turn_id is not None:
-        return f"{event_type}:{turn_id}"
-    return None
 
 
 def timestamp_ms(value: Any) -> int:
