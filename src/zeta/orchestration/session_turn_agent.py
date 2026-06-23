@@ -13,8 +13,8 @@ from zeta.orchestration.agents import (
 )
 from zeta.orchestration.dispatch import (
     EventDispatcher,
-    terminal_queue_item_result,
 )
+from zeta.orchestration.queue import terminal_queue_item_result
 from zeta.records.events import Event
 from zeta.run.cancellation import CancellationToken
 from zeta.run.thread_run import (

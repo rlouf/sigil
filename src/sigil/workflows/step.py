@@ -10,7 +10,6 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
-from agents.skills import available_skills_prompt, expand_skill_directive
 from sigil.agent_io import (
     TurnEventRecorder,
     TurnRenderer,
@@ -37,6 +36,7 @@ from sigil.protocols import (
 from sigil.state import append_prompt_submitted_event
 from sigil.tools import ensure_builtin_tools_registered
 from sigil.turn import TurnRecorder
+from zeta.agents.skills import available_skills_prompt, expand_skill_directive
 from zeta.capabilities.execution import proposed_effect
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.capabilities.registry import registry as _default_tool_registry

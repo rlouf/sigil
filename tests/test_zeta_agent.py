@@ -46,6 +46,7 @@ from zeta.context import builder as zeta_context
 from zeta.models import chat_completions as zeta_model
 from zeta.models import types as zeta_model_shapes
 from zeta.orchestration import dispatch as zeta_dispatch
+from zeta.orchestration import queue as zeta_queue
 from zeta.orchestration import scheduling as zeta_scheduling
 from zeta.orchestration import session_turn_agent as zeta_session_turn_agent
 from zeta.orchestration import worker as zeta_worker
@@ -1975,7 +1976,7 @@ def test_zeta_dispatch_terminal_queue_item_result_comes_from_lifecycle_event() -
         cursor=9,
     )
 
-    assert zeta_dispatch.terminal_queue_item_result(
+    assert zeta_queue.terminal_queue_item_result(
         [event],
         event_id="evt_request",
         target_agent="zeta.session.turn",
@@ -2277,7 +2278,7 @@ def test_zeta_event_dispatcher_creates_work_for_matching_agent(
         f"attempt:{queue_item_id}:1:completed",
         f"queue_item:{outcome.event.id}:issue-triage:completed",
     ]
-    assert zeta_dispatch.terminal_queue_item_result(
+    assert zeta_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="issue-triage",
@@ -2408,7 +2409,7 @@ def test_zeta_event_dispatcher_routes_available_work_before_running(
         "runtime.queue_item.available"
     ]
     assert route.queue_items == [
-        zeta_dispatch.RoutedQueueItem(
+        zeta_queue.RoutedQueueItem(
             queue_item_id=queue_item_id,
             event_id=accepted.event.id,
             target_agent="issue-triage",
@@ -2424,7 +2425,7 @@ def test_zeta_event_dispatcher_routes_available_work_before_running(
         "runtime.attempt.completed",
         "runtime.queue_item.completed",
     ]
-    assert zeta_dispatch.terminal_queue_item_result(
+    assert zeta_queue.terminal_queue_item_result(
         execution_events,
         event_id=accepted.event.id,
         target_agent="issue-triage",
@@ -2879,7 +2880,7 @@ def test_zeta_event_dispatcher_records_failed_work(tmp_path: Path) -> None:
         f"attempt:{queue_item_id}:1:failed",
         f"queue_item:{outcome.event.id}:issue-triage:failed",
     ]
-    assert zeta_dispatch.terminal_queue_item_result(
+    assert zeta_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="issue-triage",
@@ -2969,7 +2970,7 @@ def test_zeta_event_dispatcher_can_retry_failed_work(tmp_path: Path) -> None:
     assert retry_events[1].payload["attempt_id"] == f"att_{queue_item_id}_2"
 
 
-def test_zeta_queue_item_snapshots_project_latest_lifecycle_state(
+def test_zeta_project_queue_items_projects_latest_lifecycle_state(
     tmp_path: Path,
 ) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
@@ -3009,94 +3010,28 @@ def test_zeta_queue_item_snapshots_project_latest_lifecycle_state(
         ),
     )
 
-    snapshots = zeta_dispatch.queue_item_snapshots(
+    items = zeta_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
-    assert snapshots == [
-        zeta_dispatch.QueueItemSnapshot(
+    assert items == [
+        QueueItem(
             queue_item_id=f"qi_{handled.event.id}_issue-triage",
             event_id=handled.event.id,
             target_agent="issue-triage",
             status="completed",
-            last_event_type="runtime.queue_item.completed",
-            cursor=handled.lifecycle_events[-1].cursor,
-            result={"outcome": "handled"},
-            error=None,
         ),
-        zeta_dispatch.QueueItemSnapshot(
+        QueueItem(
             queue_item_id=f"qi_{unhandled.event.id}_unhandled",
             event_id=unhandled.event.id,
             target_agent="",
             status="unhandled",
-            last_event_type="runtime.queue_item.unhandled",
-            cursor=unhandled.lifecycle_events[-1].cursor,
-            result=None,
-            error=None,
         ),
     ]
-    assert zeta_dispatch.queue_item_status_counts(snapshots) == {
+    assert zeta_queue.queue_item_status_counts(items) == {
         "completed": 1,
         "unhandled": 1,
     }
-
-
-def test_zeta_attempt_snapshots_project_latest_lifecycle_state(
-    tmp_path: Path,
-) -> None:
-    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
-
-    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
-        del run
-        return {"outcome": "handled"}
-
-    dispatcher = zeta_dispatch.EventDispatcher(
-        event_store,
-        executors=[
-            zeta_dispatch.ExecutableAgent(
-                zeta_dispatch.AgentDefinition(
-                    "issue-triage",
-                    (zeta_dispatch.EventPattern("github.issue.opened"),),
-                ),
-                run=run_agent,
-            )
-        ],
-    )
-    outcome = dispatch_event(
-        dispatcher,
-        zeta_events.DraftEvent(
-            "github.issue.opened",
-            "github",
-            {"title": "Bug"},
-            session_id="repo",
-            run_id="run-1",
-        ),
-    )
-    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
-
-    snapshots = zeta_dispatch.attempt_snapshots(
-        event_store.list_events(zeta_events.Filter())
-    )
-
-    assert snapshots == [
-        zeta_dispatch.AttemptSnapshot(
-            attempt_id=f"att_{queue_item_id}_1",
-            queue_item_id=queue_item_id,
-            event_id=outcome.event.id,
-            attempt_number=1,
-            target_agent="issue-triage",
-            status="completed",
-            last_event_type="runtime.attempt.completed",
-            cursor=outcome.lifecycle_events[3].cursor,
-            started_at=outcome.lifecycle_events[2].payload["started_at"],
-            finished_at=outcome.lifecycle_events[3].payload["finished_at"],
-            error=None,
-            session_id="repo",
-            run_id="run-1",
-            result={"outcome": "handled"},
-        )
-    ]
-    assert zeta_dispatch.attempt_status_counts(snapshots) == {"completed": 1}
 
 
 def test_zeta_sqlite_event_store_projects_runtime_lifecycle_tables(
@@ -3625,13 +3560,13 @@ def test_zeta_cli_run_once_routes_unhandled_event(tmp_path: Path) -> None:
         zeta_cli.cli,
         ["run", "--project-root", str(tmp_path), "--once"],
     )
-    snapshots = zeta_dispatch.queue_item_snapshots(
+    items = zeta_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
     assert result.exit_code == 0
     assert result.output == f"routed {event.id}\n"
-    assert [snapshot.status for snapshot in snapshots] == ["unhandled"]
+    assert [item.status for item in items] == ["unhandled"]
 
 
 def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
@@ -3689,7 +3624,7 @@ Triage the issue.
 
     try:
         message = asyncio.run(zeta_worker.run_once(runtime))
-        snapshots = zeta_dispatch.queue_item_snapshots(
+        items = zeta_queue.project_queue_items(
             event_store.list_events(zeta_events.Filter())
         )
         attempt_rows = event_store.list_attempts()
@@ -3698,16 +3633,12 @@ Triage the issue.
 
     assert message == f"ran qi_{event.id}"
     assert attempt_rows[0]["worker_name"] == "local-runtime"
-    assert snapshots == [
-        zeta_dispatch.QueueItemSnapshot(
+    assert items == [
+        QueueItem(
             queue_item_id=f"qi_{event.id}",
             event_id=event.id,
             target_agent="issue-triage",
             status="completed",
-            last_event_type="runtime.queue_item.completed",
-            cursor=snapshots[0].cursor,
-            result={"event_id": event.id},
-            error=None,
         )
     ]
 
@@ -3997,16 +3928,13 @@ def test_zeta_local_runtime_run_once_fans_out_pending_queue_item(
     )
 
     message = asyncio.run(zeta_worker.run_once(runtime))
-    snapshots = zeta_dispatch.queue_item_snapshots(
+    items = zeta_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
     assert message == f"routed {accepted.id}"
     assert calls == []
-    assert [
-        (snapshot.queue_item_id, snapshot.target_agent, snapshot.status)
-        for snapshot in snapshots
-    ] == [
+    assert [(item.queue_item_id, item.target_agent, item.status) for item in items] == [
         (f"qi_{accepted.id}", "", "completed"),
         (f"qi_{accepted.id}_agent_one", "agent.one", "available"),
         (f"qi_{accepted.id}_agent_two", "agent.two", "available"),
@@ -4205,17 +4133,17 @@ Summarize the repo.
 
     try:
         message = asyncio.run(zeta_worker.run_once(runtime))
-        snapshots = zeta_dispatch.queue_item_snapshots(
+        items = zeta_queue.project_queue_items(
             runtime.events.list_events(zeta_events.Filter())
         )
     finally:
         runtime.close()
 
-    assert message == f"ran {snapshots[0].queue_item_id}"
+    assert message == f"ran {items[0].queue_item_id}"
     assert [call.triggering_event.payload for call in calls] == [
         {"reason": "scheduled"}
     ]
-    assert [snapshot.status for snapshot in snapshots] == ["completed"]
+    assert [item.status for item in items] == ["completed"]
 
 
 def test_zeta_local_runtime_run_forever_reuses_run_once_path(
@@ -4278,12 +4206,12 @@ Triage the issue.
             runtime.close()
 
     asyncio.run(exercise())
-    snapshots = zeta_dispatch.queue_item_snapshots(
+    items = zeta_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
     assert [call.triggering_event.id for call in calls] == [event.id]
-    assert [snapshot.status for snapshot in snapshots] == ["completed"]
+    assert [item.status for item in items] == ["completed"]
 
 
 def test_zeta_local_runtime_run_forever_respects_max_concurrent(
@@ -4344,12 +4272,12 @@ def test_zeta_local_runtime_run_forever_respects_max_concurrent(
         await worker
 
     asyncio.run(exercise())
-    snapshots = zeta_dispatch.queue_item_snapshots(
+    items = zeta_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
     assert sorted(started) == sorted(event.id for event in events)
-    assert [snapshot.status for snapshot in snapshots] == ["completed", "completed"]
+    assert [item.status for item in items] == ["completed", "completed"]
 
 
 def test_zeta_cli_run_forever_invokes_runtime_loop(
@@ -4418,14 +4346,14 @@ Triage {{ event.payload.title }}
         zeta_cli.cli,
         ["run", "--project-root", str(tmp_path), "--once"],
     )
-    snapshots = zeta_dispatch.queue_item_snapshots(
+    items = zeta_queue.project_queue_items(
         event_store.list_events(zeta_events.Filter())
     )
 
     assert result.exit_code == 0
     assert result.output == f"ran qi_{event.id}\n"
     assert len(calls) == 1
-    assert [snapshot.status for snapshot in snapshots] == ["completed"]
+    assert [item.status for item in items] == ["completed"]
 
 
 def test_zeta_agent_auto_enabled_capabilities_include_registered_tools() -> None:

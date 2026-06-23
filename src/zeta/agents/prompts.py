@@ -4,7 +4,7 @@ from typing import Any
 
 from jinja2 import Environment, meta
 
-from agents.spec import AgentSpec
+from zeta.agents.spec import AgentSpec
 
 
 class TemplateError(ValueError):

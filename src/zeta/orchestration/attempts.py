@@ -33,3 +33,11 @@ class Attempt:
     error: str | None = None
     session_id: str | None = None
     run_id: str | None = None
+
+
+def attempt_idempotency_key(
+    queue_item_id: str,
+    attempt_number: int,
+    status: str,
+) -> str:
+    return f"attempt:{queue_item_id}:{attempt_number}:{status}"

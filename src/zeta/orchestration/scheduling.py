@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
-from agents.spec import DEFAULT_SCHEDULE_EVENT, AgentSpec, ScheduleEntry
+from zeta.agents.spec import DEFAULT_SCHEDULE_EVENT, AgentSpec, ScheduleEntry
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventWriter
 

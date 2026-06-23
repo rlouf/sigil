@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from zeta.orchestration.agents import (
     AgentDefinition,
@@ -15,8 +15,23 @@ from zeta.orchestration.agents import (
     EventPattern,
     ExecutableAgent,
 )
-from zeta.orchestration.attempts import Attempt, AttemptStatus
-from zeta.orchestration.queue import QueueItem, QueueItemStatus
+from zeta.orchestration.attempts import (
+    Attempt,
+    AttemptStatus,
+    attempt_idempotency_key,
+)
+from zeta.orchestration.queue import (
+    TERMINAL_QUEUE_ITEM_EVENT_TYPES,
+    QueueItem,
+    QueueItemStatus,
+    RoutedQueueItem,
+    queue_item_from_record,
+    queue_item_id_for_event,
+    queue_item_idempotency_key,
+    required_payload_string,
+    routed_queue_item_from_event,
+    unhandled_queue_item_idempotency_key,
+)
 from zeta.records.events import DraftEvent, Event
 from zeta.records.stores import EventReader, EventStoreProtocol, EventWriter, Filter
 
@@ -24,37 +39,16 @@ __all__ = [
     "AgentDefinition",
     "AgentInvocation",
     "AgentRoute",
-    "AttemptSnapshot",
     "EventDispatcher",
     "ExecutableAgent",
     "DispatchOutcome",
     "EventPattern",
     "ReservedRuntimeEventError",
-    "RoutedQueueItem",
-    "QueueItemSnapshot",
     "RouteOutcome",
     "TerminalQueueItemError",
-    "attempt_snapshots",
-    "attempt_status_counts",
-    "queue_item_snapshots",
-    "queue_item_status_counts",
-    "terminal_queue_item_result",
 ]
 
 RESERVED_RUNTIME_EVENT_PREFIXES = ("runtime.queue_item.", "runtime.attempt.")
-QUEUE_ITEM_STATUSES = frozenset(
-    {
-        "pending",
-        "available",
-        "claimed",
-        "completed",
-        "failed",
-        "cancelled",
-        "retry_scheduled",
-        "unhandled",
-    }
-)
-ATTEMPT_STATUSES = frozenset({"running", "completed", "failed", "cancelled"})
 
 
 @runtime_checkable
@@ -88,49 +82,6 @@ class DispatchOutcome:
     event: Event
     inserted: bool
     lifecycle_events: list[Event]
-
-
-@dataclass(frozen=True)
-class RoutedQueueItem:
-    """Durable work made available by routing an event to an agent."""
-
-    queue_item_id: str
-    event_id: str
-    target_agent: str
-
-
-@dataclass(frozen=True)
-class QueueItemSnapshot:
-    """Latest durable queue item state projected from lifecycle events."""
-
-    queue_item_id: str
-    event_id: str
-    target_agent: str
-    status: QueueItemStatus
-    last_event_type: str
-    cursor: int | None
-    result: dict[str, Any] | None = None
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class AttemptSnapshot:
-    """Latest durable attempt state projected from lifecycle events."""
-
-    attempt_id: str
-    queue_item_id: str
-    event_id: str
-    attempt_number: int
-    target_agent: str
-    status: AttemptStatus
-    last_event_type: str
-    cursor: int | None
-    started_at: str
-    finished_at: str | None = None
-    error: str | None = None
-    session_id: str | None = None
-    run_id: str | None = None
-    result: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -317,7 +268,7 @@ class EventDispatcher:
         queue_item_id = queue_item.queue_item_id
         events: list[Event] = []
         attempt_number = self._next_attempt_number(queue_item_id)
-        attempt_id = attempt_id_for_queue_item(queue_item_id, attempt_number)
+        attempt_id = f"att_{queue_item_id}_{attempt_number}"
         events.append(
             self._append_queue_item_event(
                 triggering_event,
@@ -534,18 +485,16 @@ class EventDispatcher:
         raise RuntimeError("queue item execution requires a readable event store")
 
     def _next_attempt_number(self, queue_item_id: str) -> int:
-        attempt_numbers = [
-            attempt.attempt_number
-            for attempt in attempt_snapshots(
-                self._event_reader().list_events(
-                    Filter(event_type_prefix="runtime.attempt.")
-                )
-            )
-            if attempt.queue_item_id == queue_item_id
-        ]
-        if not attempt_numbers:
-            return 1
-        return max(attempt_numbers) + 1
+        attempt_numbers: list[int] = []
+        for event in self._event_reader().list_events(
+            Filter(event_type_prefix="runtime.attempt.")
+        ):
+            if event.payload.get("queue_item_id") != queue_item_id:
+                continue
+            attempt_number = event.payload.get("attempt_number")
+            if isinstance(attempt_number, int):
+                attempt_numbers.append(attempt_number)
+        return max(attempt_numbers, default=0) + 1
 
     def _missing_executor_events(
         self,
@@ -605,7 +554,7 @@ class EventDispatcher:
         return self._append_lifecycle_event(
             f"runtime.queue_item.{event_suffix}",
             triggering_event,
-            queue_item_payload(queue_item, **payload_extra),
+            {**asdict(queue_item), **payload_extra},
             idempotency_key=queue_item_idempotency_key(
                 triggering_event,
                 target_agent,
@@ -647,7 +596,7 @@ class EventDispatcher:
         return self._append_lifecycle_event(
             f"runtime.attempt.{event_suffix}",
             triggering_event,
-            attempt_payload(attempt, **payload_extra),
+            {**asdict(attempt), **payload_extra},
             idempotency_key=attempt_idempotency_key(
                 queue_item_id,
                 attempt_number,
@@ -699,8 +648,19 @@ class EventDispatcher:
         attempt_number: int,
         started_at: str,
     ) -> list[Event]:
-        attempt_status = terminal_attempt_status(result)
-        queue_status = terminal_queue_item_status(result)
+        cancelled = result.get("outcome") in {"aborted", "cancelled"}
+        attempt_status: AttemptStatus = "cancelled" if cancelled else "completed"
+        queue_status: QueueItemStatus = "cancelled" if cancelled else "completed"
+        attempt_payload_extra: dict[str, Any] = {"result": result}
+        summary = result.get("summary")
+        if not isinstance(summary, str):
+            summary = result.get("final_answer")
+        if isinstance(summary, str):
+            attempt_payload_extra["summary"] = summary
+        for key in ("events", "tool_calls", "usage"):
+            value = result.get(key)
+            if value is not None:
+                attempt_payload_extra[key] = value
         return [
             self._append_attempt_event(
                 triggering_event,
@@ -712,7 +672,7 @@ class EventDispatcher:
                 status=attempt_status,
                 started_at=started_at,
                 finished_at=event_timestamp(),
-                **attempt_result_payload(result),
+                **attempt_payload_extra,
             ),
             self._append_queue_item_event(
                 triggering_event,
@@ -757,7 +717,7 @@ class EventDispatcher:
         return self._append_lifecycle_event(
             "runtime.queue_item.unhandled",
             triggering_event,
-            queue_item_payload(queue_item),
+            asdict(queue_item),
             idempotency_key=unhandled_queue_item_idempotency_key(triggering_event),
         )
 
@@ -798,287 +758,6 @@ class EventDispatcher:
 def reject_reserved_runtime_event(draft: DraftEvent) -> None:
     if draft.event_type.startswith(RESERVED_RUNTIME_EVENT_PREFIXES):
         raise ReservedRuntimeEventError(draft.event_type)
-
-
-def required_payload_string(event: Event, key: str) -> str | None:
-    value = event.payload.get(key)
-    if isinstance(value, str):
-        return value
-    return None
-
-
-def optional_payload_string(event: Event, key: str) -> str | None:
-    value = event.payload.get(key)
-    if isinstance(value, str):
-        return value
-    return None
-
-
-def queue_item_result(event: Event) -> dict[str, Any] | None:
-    result = event.payload.get("result")
-    if isinstance(result, dict):
-        return result
-    return None
-
-
-def queue_item_snapshots(events: Iterable[Event]) -> list[QueueItemSnapshot]:
-    snapshots: dict[str, QueueItemSnapshot] = {}
-    for event in events:
-        snapshot = queue_item_snapshot_from_event(event)
-        if snapshot is None:
-            continue
-        snapshots[snapshot.queue_item_id] = snapshot
-    return list(snapshots.values())
-
-
-def queue_item_snapshot_from_event(event: Event) -> QueueItemSnapshot | None:
-    if not event.event_type.startswith("runtime.queue_item."):
-        return None
-    queue_item_id = required_payload_string(event, "queue_item_id")
-    event_id = required_payload_string(event, "event_id")
-    target_agent = required_payload_string(event, "target_agent")
-    if queue_item_id is None or event_id is None or target_agent is None:
-        return None
-    return QueueItemSnapshot(
-        queue_item_id=queue_item_id,
-        event_id=event_id,
-        target_agent=target_agent,
-        status=queue_item_event_status(event),
-        last_event_type=event.event_type,
-        cursor=event.cursor,
-        result=queue_item_result(event),
-        error=optional_payload_string(event, "error"),
-    )
-
-
-def queue_item_event_status(event: Event) -> QueueItemStatus:
-    status = optional_payload_string(event, "status")
-    if status not in QUEUE_ITEM_STATUSES:
-        status = event.event_type.rsplit(".", 1)[-1]
-    if status not in QUEUE_ITEM_STATUSES:
-        raise ValueError(f"unsupported queue item status {status!r}")
-    return cast("QueueItemStatus", status)
-
-
-def queue_item_status_counts(
-    snapshots: Iterable[QueueItemSnapshot],
-) -> dict[QueueItemStatus, int]:
-    counts: dict[QueueItemStatus, int] = {}
-    for snapshot in snapshots:
-        counts[snapshot.status] = counts.get(snapshot.status, 0) + 1
-    return counts
-
-
-def attempt_snapshots(events: Iterable[Event]) -> list[AttemptSnapshot]:
-    snapshots: dict[str, AttemptSnapshot] = {}
-    for event in events:
-        snapshot = attempt_snapshot_from_event(event)
-        if snapshot is None:
-            continue
-        snapshots[snapshot.attempt_id] = snapshot
-    return list(snapshots.values())
-
-
-def attempt_snapshot_from_event(event: Event) -> AttemptSnapshot | None:
-    if not event.event_type.startswith("runtime.attempt."):
-        return None
-    attempt_id = required_payload_string(event, "attempt_id")
-    queue_item_id = required_payload_string(event, "queue_item_id")
-    event_id = required_payload_string(event, "event_id")
-    target_agent = required_payload_string(event, "target_agent")
-    started_at = required_payload_string(event, "started_at")
-    attempt_number = event.payload.get("attempt_number")
-    if (
-        attempt_id is None
-        or queue_item_id is None
-        or event_id is None
-        or target_agent is None
-        or started_at is None
-        or not isinstance(attempt_number, int)
-    ):
-        return None
-    return AttemptSnapshot(
-        attempt_id=attempt_id,
-        queue_item_id=queue_item_id,
-        event_id=event_id,
-        attempt_number=attempt_number,
-        target_agent=target_agent,
-        status=attempt_event_status(event),
-        last_event_type=event.event_type,
-        cursor=event.cursor,
-        started_at=started_at,
-        finished_at=optional_payload_string(event, "finished_at"),
-        error=optional_payload_string(event, "error"),
-        session_id=event.session_id,
-        run_id=event.run_id,
-        result=queue_item_result(event),
-    )
-
-
-def attempt_event_status(event: Event) -> AttemptStatus:
-    status = optional_payload_string(event, "status")
-    if status not in ATTEMPT_STATUSES:
-        status = event.event_type.rsplit(".", 1)[-1]
-    if status not in ATTEMPT_STATUSES:
-        raise ValueError(f"unsupported attempt status {status!r}")
-    return cast("AttemptStatus", status)
-
-
-def attempt_status_counts(
-    snapshots: Iterable[AttemptSnapshot],
-) -> dict[AttemptStatus, int]:
-    counts: dict[AttemptStatus, int] = {}
-    for snapshot in snapshots:
-        counts[snapshot.status] = counts.get(snapshot.status, 0) + 1
-    return counts
-
-
-def routed_queue_item_from_event(event: Event) -> RoutedQueueItem:
-    queue_item_id = required_payload_string(event, "queue_item_id")
-    event_id = required_payload_string(event, "event_id")
-    target_agent = required_payload_string(event, "target_agent")
-    if queue_item_id is None or event_id is None or target_agent is None:
-        raise ValueError("available queue item event is missing required payload")
-    return RoutedQueueItem(
-        queue_item_id=queue_item_id,
-        event_id=event_id,
-        target_agent=target_agent,
-    )
-
-
-def queue_item_from_record(record: Mapping[str, Any]) -> RoutedQueueItem:
-    return RoutedQueueItem(
-        queue_item_id=str(record["queue_item_id"]),
-        event_id=str(record["event_id"]),
-        target_agent=str(record["target_agent"]),
-    )
-
-
-def queue_item_id_for_event(route: AgentRoute, event: Event) -> str:
-    agent_id = route.agent_id.replace(":", "_").replace(".", "_")
-    return f"qi_{event.id}_{agent_id}"
-
-
-def attempt_id_for_queue_item(queue_item_id: str, attempt_number: int) -> str:
-    return f"att_{queue_item_id}_{attempt_number}"
-
-
-def queue_item_idempotency_key(
-    event: Event,
-    target_agent: str,
-    status: str,
-    *,
-    attempt_number: int | None = None,
-) -> str:
-    key = f"queue_item:{event.id}:{target_agent}:{status}"
-    if attempt_number is None:
-        return key
-    return f"{key}:{attempt_number}"
-
-
-def unhandled_queue_item_idempotency_key(event: Event) -> str:
-    return f"queue_item:{event.id}:unhandled"
-
-
-def attempt_idempotency_key(
-    queue_item_id: str,
-    attempt_number: int,
-    status: str,
-) -> str:
-    return f"attempt:{queue_item_id}:{attempt_number}:{status}"
-
-
-def queue_item_payload(
-    queue_item: QueueItem,
-    **extra: Any,
-) -> dict[str, Any]:
-    return {**asdict(queue_item), **extra}
-
-
-def attempt_payload(
-    attempt: Attempt,
-    **extra: Any,
-) -> dict[str, Any]:
-    return {**asdict(attempt), **extra}
-
-
-def attempt_result_payload(result: dict[str, Any]) -> dict[str, Any]:
-    payload: dict[str, Any] = {"result": result}
-    summary = result.get("summary")
-    if not isinstance(summary, str):
-        summary = result.get("final_answer")
-    if isinstance(summary, str):
-        payload["summary"] = summary
-    for key in ("events", "tool_calls", "usage"):
-        value = result.get(key)
-        if value is not None:
-            payload[key] = value
-    return payload
-
-
-def terminal_attempt_status(result: dict[str, Any]) -> AttemptStatus:
-    outcome = result.get("outcome")
-    if outcome in {"aborted", "cancelled"}:
-        return "cancelled"
-    return "completed"
-
-
-def terminal_queue_item_status(result: dict[str, Any]) -> QueueItemStatus:
-    outcome = result.get("outcome")
-    if outcome in {"aborted", "cancelled"}:
-        return "cancelled"
-    return "completed"
-
-
-TERMINAL_QUEUE_ITEM_EVENT_TYPES = {
-    "runtime.queue_item.completed",
-    "runtime.queue_item.failed",
-    "runtime.queue_item.cancelled",
-    "runtime.queue_item.unhandled",
-}
-
-
-def terminal_queue_item_result(
-    lifecycle_events: Iterable[Event],
-    *,
-    event_id: str,
-    target_agent: str,
-) -> dict[str, Any] | None:
-    for event in reversed(tuple(lifecycle_events)):
-        if event.event_type not in TERMINAL_QUEUE_ITEM_EVENT_TYPES:
-            continue
-        if required_payload_string(event, "event_id") != event_id:
-            continue
-        if required_payload_string(event, "target_agent") != target_agent:
-            continue
-        return terminal_queue_item_event_result(event)
-    return None
-
-
-def terminal_queue_item_event_result(event: Event) -> dict[str, Any] | None:
-    if event.event_type not in TERMINAL_QUEUE_ITEM_EVENT_TYPES:
-        return None
-    result = queue_item_result(event)
-    if result is not None:
-        return result_with_final_cursor(result, event)
-    return result_with_final_cursor(terminal_fallback_result(event), event)
-
-
-def terminal_fallback_result(event: Event) -> dict[str, Any]:
-    fallback: dict[str, Any] = {
-        "outcome": optional_payload_string(event, "status")
-        or event.event_type.rsplit(".", 1)[-1]
-    }
-    error = optional_payload_string(event, "error")
-    if error is not None:
-        fallback["error"] = error
-    return fallback
-
-
-def result_with_final_cursor(result: dict[str, Any], event: Event) -> dict[str, Any]:
-    if event.cursor is None:
-        return dict(result)
-    return {**result, "final_event_cursor": str(event.cursor)}
 
 
 def event_timestamp() -> str:

@@ -7,12 +7,12 @@ from typing import Any
 
 import pytest
 
-from agents.events import EventRegistry
-from agents.loader import load_spec
-from agents.manifest import Manifest, ManifestError
-from agents.prompts import TemplateError, render_prompt, validate_prompt
-from agents.returns import derive_returns_schema
-from agents.spec import ScheduleEntry, matches
+from zeta.agents.events import EventRegistry
+from zeta.agents.loader import load_spec
+from zeta.agents.manifest import Manifest, ManifestError
+from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
+from zeta.agents.returns import derive_returns_schema
+from zeta.agents.spec import ScheduleEntry, matches
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
@@ -22,6 +22,7 @@ from zeta.capabilities.types import (
     CapabilityId,
 )
 from zeta.orchestration import dispatch as zeta_dispatch
+from zeta.orchestration import queue as zeta_queue
 from zeta.orchestration.agents import (
     compile_agent_definition,
     compile_agent_definitions,
@@ -335,7 +336,7 @@ User asked: {{ event.payload.text }}
     assert calls[0]["config"].system_prompt == "Answers workspace questions in Slack."
     assert tuple(calls[0]["config"].allowed_capabilities or ()) == ("Read",)
     assert calls[0]["kwargs"]["caused_by"] == outcome.event.id
-    assert zeta_dispatch.terminal_queue_item_result(
+    assert zeta_queue.terminal_queue_item_result(
         outcome.lifecycle_events,
         event_id=outcome.event.id,
         target_agent="slack-qa",

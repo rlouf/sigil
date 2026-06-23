@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from agents.spec import AgentSpec
+from zeta.agents.spec import AgentSpec
 from zeta.orchestration.agents import ExecutableAgent
 from zeta.orchestration.dispatch import EventDispatcher
 from zeta.orchestration.scheduling import emit_due_schedules

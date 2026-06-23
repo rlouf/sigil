@@ -7,8 +7,8 @@ from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from agents.prompts import render_prompt
-from agents.spec import AgentSpec
+from zeta.agents.prompts import render_prompt
+from zeta.agents.spec import AgentSpec
 from zeta.records.events import DraftEvent, Event
 from zeta.run.config import AgentConfig
 
