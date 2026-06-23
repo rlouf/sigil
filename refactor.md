@@ -330,11 +330,16 @@ File: `src/zeta/process.py`
 Current name:
 
 - `project_specs`
+- `default_session`
+- `session_for_id`
 
 Target direction:
 
 - Rename it away from the reserved `project_*` prefix, for example:
   `load_project_specs`, `load_agent_specs`, or `agent_specs_for_project`.
+- `process.py` is also awkward as the home for runtime-context construction.
+  The functions that assemble event sinks, trace stores, tool registries, and
+  directories should move with `RuntimeContext` once `SessionScope` is renamed.
 
 ### Scheduling
 
@@ -656,6 +661,9 @@ Current direction:
 - Rename `SessionScope` to `RuntimeContext`.
 - Rename `src/zeta/run/threads.py` away from thread vocabulary, for example to
   `src/zeta/run/context.py`.
+- Move `default_session` and `session_for_id` out of `src/zeta/process.py` or
+  rename that module so the construction path reads as runtime-context setup,
+  not process-global session management.
 - Keep Sigil `session_id` as the shell-continuity noun at the Sigil boundary.
 - In Zeta internals, avoid `thread_id` unless a real durable conversation
   thread exists. The id on `RuntimeContext` should describe the runtime
