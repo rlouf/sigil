@@ -274,18 +274,26 @@ def draft_from_boundary_event(
     event_type = str(payload.get("type") or "event")
     event_session_id = str(payload.get("session") or session_id)
     if event_type in {"model", "tool_call", "tool_result", "turn_aborted"}:
-        turn_id = optional_event_string(payload.get("turn_id"))
-        run_id = optional_event_string(payload.get("run_id"))
+        raw_turn_id = payload.get("turn_id")
+        raw_run_id = payload.get("run_id")
+        turn_id = raw_turn_id if isinstance(raw_turn_id, str) and raw_turn_id else None
+        run_id = raw_run_id if isinstance(raw_run_id, str) and raw_run_id else None
         return draft_from_runtime_event(
             payload,
             session_id=event_session_id,
             turn_id=turn_id,
             run_id=run_id,
         )
-    event_id = optional_event_string(payload.get("id"))
-    turn_id = optional_event_string(payload.get("turn_id"))
-    run_id = optional_event_string(payload.get("run_id"))
-    caused_by = optional_event_string(payload.get("caused_by"))
+    raw_event_id = payload.get("id")
+    raw_turn_id = payload.get("turn_id")
+    raw_run_id = payload.get("run_id")
+    raw_caused_by = payload.get("caused_by")
+    event_id = raw_event_id if isinstance(raw_event_id, str) and raw_event_id else None
+    turn_id = raw_turn_id if isinstance(raw_turn_id, str) and raw_turn_id else None
+    run_id = raw_run_id if isinstance(raw_run_id, str) and raw_run_id else None
+    caused_by = (
+        raw_caused_by if isinstance(raw_caused_by, str) and raw_caused_by else None
+    )
     domain_payload = {
         key: value
         for key, value in payload.items()
@@ -330,10 +338,6 @@ def durable_event_idempotency_key(
     if event_type in TURN_IDEMPOTENT_TYPES:
         return f"{event_type}:{turn_id}" if turn_id is not None else None
     return None
-
-
-def optional_event_string(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None
 
 
 def model_call_draft(

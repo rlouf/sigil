@@ -390,8 +390,6 @@ Current direction:
   `model_tool_call_event` -> `model_tool_call_event_payload`,
   `tool_result_event` -> `tool_result_event_payload`, and
   `shell_result_event` -> `shell_result_event_payload`.
-- `optional_event_string` is a field-validation helper. Inline it unless there
-  is enough repeated validation pressure to justify a shared decoder.
 - `durable_view_type`, `event_timeline_type`, and `draft_timeline_type` express
   the same timeline-type rule in different modules. Consolidate the rule in one
   records/provenance location.
@@ -534,18 +532,14 @@ File: `src/zeta/agents/spec.py`
 
 Current names:
 
-- `schedule_payload`
-- `schedule_event`
-- `schedule_timezone`
+- `schedule_event_type`
+- `schedule_timezone_name`
 
 Current direction:
 
-- `schedule_payload` is currently a cast around one YAML field. Inline it unless
-  schedule payload validation becomes real.
-- `schedule_event` and `schedule_timezone` are more defensible because they
-  encode defaults and validation. If they stay, names like
-  `schedule_event_type` and `schedule_timezone_name` would make the returned
-  schema field clearer.
+- `schedule_payload` has been inlined.
+- `schedule_event_type` and `schedule_timezone_name` are defensible because
+  they encode defaults and validation.
 - `required_schedule_string` is a validation helper. Keep it only if the shared
   error message remains useful across several schedule fields.
 
