@@ -34,6 +34,7 @@ from zeta.models.types import ModelInput, ModelOutput
 from zeta.records.events import (
     DraftEvent,
     Event,
+    draft_event_id,
     draft_event_view,
     draft_from_runtime_event,
     ensure_runtime_event_id,
@@ -725,15 +726,6 @@ def add_tool_result_projection_fields(
         view["tool_call_object_id"] = call_id
     if result_id is not None:
         view["tool_result_object_id"] = result_id
-
-
-def draft_event_id(draft: DraftEvent) -> str | None:
-    key = draft.idempotency_key
-    prefix = f"{draft.event_type}:"
-    if key is None or not key.startswith(prefix):
-        return None
-    event_id = key[len(prefix) :].strip()
-    return event_id or None
 
 
 def emit_event(

@@ -221,8 +221,8 @@ Target direction:
 - `draft_timeline_type` duplicates the timeline-type rule in records
   (`event_timeline_type` / `durable_view_type`). Consolidate the rule near
   records/provenance instead of carrying parallel local helpers.
-- `draft_event_id` also exists in `records/events.py`. Prefer one canonical
-  helper if idempotency-key parsing remains a shared event contract.
+- Idempotency-key parsing for draft event ids is centralized in
+  `records/events.py`.
 - `model_event_payload` and `assistant_tool_calls` are only worth keeping if
   they encode run event schema. Inline or move them if they are just local dict
   construction.
