@@ -69,7 +69,7 @@ def current_timeline(*, runtime_context: SessionScope) -> list[Event]:
         return []
 
 
-def project_trace_for_turn(runtime_context: SessionScope, turn_id: str | None) -> None:
+def record_trace_for_turn(runtime_context: SessionScope, turn_id: str | None) -> None:
     if turn_id is None or not isinstance(runtime_context.event_sink, EventReader):
         return
     try:
@@ -84,7 +84,7 @@ def project_trace_for_turn(runtime_context: SessionScope, turn_id: str | None) -
             runtime_context.trace_store,
         )
     except Exception as exc:
-        warn_trace_failure_once("project_trace_for_turn", exc)
+        warn_trace_failure_once("record_trace_for_turn", exc)
 
 
 def last_event_time(*, store: Store, run_id: str | None = None) -> float | None:
@@ -122,7 +122,7 @@ def record_user_message(
     return outcome.event
 
 
-def record_runtime_draft(
+def record_runtime_event(
     draft: DraftEvent,
     *,
     runtime_context: SessionScope,
@@ -159,12 +159,8 @@ def record_runtime_draft(
         )
     else:
         outcome = runtime_context.event_sink.accept(tagged_draft)
-    project_trace_for_turn(runtime_context, outcome.event.turn_id)
+    record_trace_for_turn(runtime_context, outcome.event.turn_id)
     return outcome.event
-
-
-def project_runtime_draft(draft: DraftEvent) -> DraftEvent:
-    return draft
 
 
 def time_ms() -> int:
@@ -305,7 +301,7 @@ class TurnEventRecorder:
             self.record(draft)
 
     def persist(self, draft: DraftEvent) -> Event:
-        return record_runtime_draft(
+        return record_runtime_event(
             draft,
             runtime_context=self.runtime_context,
             tag_fields=self.tag_fields,
@@ -331,7 +327,7 @@ class TurnEventRecorder:
             )
             or draft.turn_id,
         )
-        return project_runtime_draft(tagged)
+        return tagged
 
     def handle_tool_call(self, name: str, args: dict[str, Any]) -> None:
         self.render_tool_call(name, args)
