@@ -92,7 +92,7 @@ def tool_call_rows(
             session=session,
             call_object_id=call_object_id,
             call=call,
-            result_record=results.get(tool_call_id(call)),
+            result_record=results.get(tool_call_id_from_object(call)),
         )
         row["created_at"] = tool_row_created_at(
             store,
@@ -114,7 +114,7 @@ def tool_result_records_by_call_id(
 ) -> dict[str, tuple[ObjectId, Object]]:
     results: dict[str, tuple[ObjectId, Object]] = {}
     for result_object_id, result in store.objects(("tool_result",), 10_000):
-        call_id = tool_call_id(result)
+        call_id = tool_call_id_from_object(result)
         if call_id and call_id not in results:
             results[call_id] = (result_object_id, result)
     return results
@@ -162,7 +162,7 @@ def tool_call_row_from_call_object(
 ) -> dict[str, Any]:
     return {
         "session": session,
-        "tool_call_id": tool_call_id(call),
+        "tool_call_id": tool_call_id_from_object(call),
         "name": name,
         "input": call_data.get("input")
         if isinstance(call_data.get("input"), dict)
@@ -206,7 +206,7 @@ def recovered_tool_error(row: dict[str, Any]) -> dict[str, str] | None:
     }
 
 
-def tool_call_id(obj: Object) -> str:
+def tool_call_id_from_object(obj: Object) -> str:
     data = obj.data if isinstance(obj.data, dict) else {}
     return str(data.get("tool_call_id") or "")
 

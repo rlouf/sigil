@@ -498,9 +498,7 @@ Current direction:
   it if status stays as a separate read model.
 - In `sigil/trace/tools.py`, CLI trace row helpers are named around the row
   target they build.
-- `object_data`, `result_fields`, and `tool_call_id` are field-access helpers.
-  Inline them unless their validation is reused enough to justify local
-  decoders.
+- Trace object id decoding is local and named around the object source.
 - `attach_tool_result` and `recovered_tool_error` encode error recovery/display
   policy. Keep them if that fallback behavior stays centralized.
 
