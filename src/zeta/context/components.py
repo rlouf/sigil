@@ -489,7 +489,7 @@ def timeline_message_component_data(
         data["historical"] = True
     if tool_name:
         data["source_tool_name"] = tool_name
-    source_event_value = structured_source_event(entry.event, tool_name=tool_name)
+    source_event_value = _source_event_metadata(entry.event, tool_name=tool_name)
     if source_event_value:
         data["source_event"] = source_event_value
     return data
@@ -532,22 +532,22 @@ def record_tool_call_names(
             tool_call_names[call_id] = name
 
 
-def structured_source_event(
+def _source_event_metadata(
     event: dict[str, Any],
     *,
     tool_name: str = "",
 ) -> dict[str, Any]:
     event_type = str(event.get("type") or "")
     if event_type == "tool_result":
-        return structured_tool_result_event(event, tool_name=tool_name)
+        return _tool_result_source_event_metadata(event, tool_name=tool_name)
     if event_type == "tool_call":
-        return structured_tool_call_event(event)
+        return _tool_call_source_event_metadata(event)
     if event_type == "model" and isinstance(event.get("tool_calls"), list):
-        return structured_model_event(event)
+        return _model_source_event_metadata(event)
     return {}
 
 
-def structured_tool_result_event(
+def _tool_result_source_event_metadata(
     event: dict[str, Any],
     *,
     tool_name: str = "",
@@ -566,7 +566,7 @@ def structured_tool_result_event(
     return data
 
 
-def structured_tool_call_event(event: dict[str, Any]) -> dict[str, Any]:
+def _tool_call_source_event_metadata(event: dict[str, Any]) -> dict[str, Any]:
     data = {
         "type": "tool_call",
         "id": str(event.get("id") or ""),
@@ -578,7 +578,7 @@ def structured_tool_call_event(event: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def structured_model_event(event: dict[str, Any]) -> dict[str, Any]:
+def _model_source_event_metadata(event: dict[str, Any]) -> dict[str, Any]:
     data = {
         "type": "model",
         "tool_calls": event.get("tool_calls") or [],
