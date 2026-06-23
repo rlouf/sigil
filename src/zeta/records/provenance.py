@@ -29,10 +29,12 @@ def project_trace_events(
     for event in events:
         timeline_type = event_timeline_type(event)
         if timeline_type == "model":
-            latest_assistant_id = project_model_event(event, store, projection)
+            latest_assistant_id = _project_one_trace_model_event(
+                event, store, projection
+            )
             continue
         if timeline_type == "tool_call":
-            project_tool_call_event(
+            _project_one_trace_tool_call(
                 event,
                 store,
                 projection,
@@ -40,7 +42,7 @@ def project_trace_events(
             )
             continue
         if timeline_type == "tool_result":
-            project_tool_result_event(event, store, projection)
+            _project_one_trace_tool_result(event, store, projection)
     return projection
 
 
@@ -78,7 +80,7 @@ def event_timeline_type(event: Event) -> str:
     return event.event_type
 
 
-def project_model_event(
+def _project_one_trace_model_event(
     event: Event,
     store: Store,
     projection: TraceProjection,
@@ -107,7 +109,7 @@ def project_model_event(
     return assistant_id
 
 
-def project_tool_call_event(
+def _project_one_trace_tool_call(
     event: Event,
     store: Store,
     projection: TraceProjection,
@@ -144,7 +146,7 @@ def project_tool_call_event(
     return call_id
 
 
-def project_tool_result_event(
+def _project_one_trace_tool_result(
     event: Event,
     store: Store,
     projection: TraceProjection,
