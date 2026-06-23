@@ -302,7 +302,14 @@ def latest_unresolved_shell_handoff(
     """Return metadata for the latest bash handoff in a timeline."""
     resolved_call_ids: set[str] = set()
     for event in reversed(timeline):
-        payload = handoff_event_payload(event)
+        if isinstance(event, Event):
+            payload = dict(event.payload)
+            timestamp = exact_event_time(event)
+            turn_id = event.turn_id or ""
+        else:
+            payload = event
+            timestamp = event.get("time")
+            turn_id = str(event.get("turn_id") or "")
         result = payload.get("result")
         if not isinstance(result, dict):
             continue
@@ -322,24 +329,10 @@ def latest_unresolved_shell_handoff(
             "command": str(handoff.get("command") or ""),
             "reason": str(handoff.get("reason") or ""),
             "artifact": str(handoff.get("artifact") or ""),
-            "time": handoff_event_time(event),
-            "turn_id": handoff_event_turn_id(event),
+            "time": timestamp,
+            "turn_id": turn_id,
         }
     return {}
-
-
-def handoff_event_payload(event: HandoffTimelineEvent) -> dict[str, Any]:
-    return dict(event.payload) if isinstance(event, Event) else event
-
-
-def handoff_event_time(event: HandoffTimelineEvent) -> Any:
-    return exact_event_time(event) if isinstance(event, Event) else event.get("time")
-
-
-def handoff_event_turn_id(event: HandoffTimelineEvent) -> str:
-    if isinstance(event, Event):
-        return event.turn_id or ""
-    return str(event.get("turn_id") or "")
 
 
 def shell_handoff_metadata(result: dict[str, Any]) -> dict[str, Any]:
