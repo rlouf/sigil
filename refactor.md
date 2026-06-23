@@ -1,636 +1,713 @@
-# Zeta Refactor Plan
+# Projection Function Naming Refactor
 
-## What We Want
+## Goal
 
-Opening `src/zeta/` should make the system obvious:
+Use one repo-wide naming convention for functions that derive a read-side object
+from events, drafts, records, payloads, or prompt components.
 
-```text
-records       what happened and what it means
-run           how one run happens
-context       what the model sees for a run
-models        how providers become normalized model input/output
-capabilities  how tools are declared, resolved, authorized, staged, invoked
-orchestration how accepted events become work
-rpc           how external clients talk to Zeta
-cli.py        how humans inspect and drive Zeta from a shell
-process.py    how Zeta is assembled for this machine/process
+The convention:
+
+- `project_<plural_target>` folds many source items into projected target
+  objects.
+- `project_one_<singular_target>` projects one source item and may return
+  `None`.
+- The name after `project` is the target being produced, not the source being
+  read.
+- Do not use `project_` for loading a project directory or for provider payload
+  conversion. Reserve it for read-model/projection behavior.
+- Keep type and domain noun refactors separate from this convention. This pass
+  decides function names, not whether the target type should be renamed.
+
+## Rules
+
+Apply these rules before renaming anything:
+
+- Do not create a read model just because event payload access is annoying.
+  Create one only when multiple callers need the same normalized view, or when
+  the normalization itself is meaningful domain logic.
+- Prefer carrying the source event until a separate object proves its value. If
+  the event already contains the fields and callers only need one or two of
+  them, direct access is clearer than a projection layer.
+- Keep helpers for policy, not for field lookup. Stable event keys, idempotency
+  contracts, lifecycle status policies, external provider normalization, and
+  emitted event schemas can earn helpers. `payload.get("field")` usually cannot.
+- Delete single-use projection helpers instead of renaming them. A bad name may
+  be evidence that the abstraction should not exist.
+- Distinguish write-side schema helpers from read-side projections. Helpers
+  that construct lifecycle event payloads can be useful; helpers that read the
+  same schema back need stronger justification.
+- If a helper remains, name the policy or schema it encodes. If the best name is
+  still just the field being read, inline it.
+- Tests should pin behavior, not convenience objects. Prefer tests for retry
+  numbering, terminal behavior, emitted events, idempotency, and provider
+  normalization over tests that only prove a projection object mirrors payload
+  fields.
+- Let duplication earn abstraction. One caller doing a direct payload read is
+  fine; repeated validation logic can justify a helper once the duplication is
+  real.
+
+Example:
+
+```python
+def project_queue_items(events: Iterable[Event]) -> list[QueueItem]:
+    items: dict[str, QueueItem] = {}
+    for event in events:
+        item = project_one_queue_item(event)
+        if item is not None:
+            items[item.queue_item_id] = item
+    return list(items.values())
+
+
+def project_one_queue_item(event: Event) -> QueueItem | None:
+    ...
 ```
 
-The code should read as a set of clear lifecycles:
+## Apply This Convention
 
-- Records remember durable facts and reconstruct meaning from them.
-- Context builds the model input for a run.
-- Runtime executes one run inside a thread.
-- Models normalize provider APIs.
-- Capabilities normalize tool declarations and execution.
-- Orchestration turns accepted events into work.
-- RPC and CLI expose operations without owning behavior.
-- Process wires concrete local services without owning behavior.
+### Orchestration Queue
 
-The most important boundaries:
+File: `src/zeta/orchestration/queue.py`
 
-- Records do not execute.
-- Context does not execute.
-- Runtime does not persist directly or know whether it was called by CLI, RPC,
-  worker, or test.
-- Models do not decide when to call a model.
-- Capabilities do not decide when a tool call should be handled.
-- Orchestration does not know the model/tool loop.
-- RPC and CLI do not own runtime, dispatch, model, or store behavior.
-- Process wires components together; it does not define their behavior.
+- Rename `queue_item_snapshots` to `project_queue_items`.
+- Rename `queue_item_snapshot_from_event` to `project_one_queue_item`.
+- Rename `queue_item_event_status` to `queue_item_status_from_event` or make it
+  private if it is only used by `project_one_queue_item`.
 
-## Refactoring Style
+The target type decision is tracked under "Separate Noun Refactors."
 
-This is not a compatibility-preserving file shuffle. Each phase should use the
-move to simplify the code in that slice.
+- Re-evaluate `required_payload_string`, `optional_payload_string`, and
+  `queue_item_result`. They currently read like generic field-access helpers.
+  Inline them unless they become shared schema decoders with a neutral home.
+- Keep `queue_item_idempotency_key` and
+  `unhandled_queue_item_idempotency_key` only if they define event dedupe
+  policy; consider renaming them to `*_event_key` if that is the real contract.
+- Re-evaluate `queue_item_payload` and `terminal_queue_item_status` with the
+  same rule as attempts: inline mechanical payload assembly, keep/rename
+  lifecycle policy.
 
-We are allowed to clean aggressively. The goal is not to preserve the current
-shape under new filenames; the goal is to make the code read clearly after each
-move. If the old structure created a dozen tiny functions, forwarding layers,
-or names that no longer explain anything, inline them or delete them in the
-same phase. It is better to start with a few direct, readable functions and
-split them later than to carry a million small helpers whose only purpose was
-to survive the refactor.
+### Orchestration Attempts
 
-Treat the existing boundaries as evidence, not as a contract. When a move shows
-that a layer was only preserving legacy shape, remove the layer. If a helper is
-single-use and its name does not carry real domain meaning, inline it. The plan
-should leave behind the simplest readable version of each slice, not a
-temporarily renamed copy of the old system.
+File: `src/zeta/orchestration/attempts.py`
 
-- Clean aggressively inside the active slice. If a name, helper, class, module,
-  or layer exists only because the old structure made it necessary, remove it.
-- Delete compatibility shims unless there is a real external import contract.
-- Inline single-use helpers when their name does not clarify the story.
-- Prefer fewer readable functions over many tiny forwarding helpers; splitting
-  can happen later when a concept has earned its own name.
-- Collapse dead abstractions exposed by the move.
-- Remove old modules when emptied.
-- Avoid new `manager`, `handler`, `utils`, or `common` buckets.
-- Keep public seams only where they map to the agreed concepts: records, run,
-  context, models, capabilities, orchestration, rpc, cli, and process.
-- Let tests follow behavior, not the old internal structure.
+Current names:
 
-Aggressive cleanup should stay inside the active slice. For example, a records
-phase may aggressively clean records/events/stores/timeline code, but should not
-opportunistically rewrite the run loop.
+- `AttemptSnapshot`
+- `attempt_snapshots`
+- `attempt_snapshot_from_event`
+- `attempt_event_status`
+- `attempt_status_counts`
 
-## Target Shape
+Target direction:
 
-```text
-src/zeta/
-  __init__.py
-  cli.py
-  process.py
+- Delete the attempt projection object and helpers instead of renaming them.
+- The event log already carries the attempt lifecycle data. Do not introduce a
+  separate read object unless a caller needs normalized attempt state.
+- Inline the only production read where it is needed: `_next_attempt_number`
+  can scan `runtime.attempt.*` events, filter by `queue_item_id`, read
+  `attempt_number` from the payload, and return `max(..., default=0) + 1`.
+- Keep `attempt_idempotency_key` because it encodes event dedupe policy, not a
+  field lookup.
+- Re-evaluate `attempt_id_for_queue_item`, `attempt_payload`,
+  `attempt_result_payload`, and `terminal_attempt_status`. If they only wrap
+  one local lookup or a mechanical `asdict`/payload shape, inline them. If they
+  encode lifecycle event schema or terminal status policy, rename them so that
+  policy is visible.
+- Delete tests that only pin `AttemptSnapshot` projection behavior unless they
+  are replaced by behavior-level retry/attempt-number tests.
 
-  records/
-    __init__.py
-    events.py
-    objects.py
-    timeline.py
-    provenance.py
-    stores/
-      __init__.py
-      event_store.py
-      object_store.py
-      sqlite.py
-      memory.py
+### Records Provenance
 
-  run/
-    __init__.py
-    runs.py
-    threads.py
-    runtime.py
-    thread_run.py
-    cancellation.py
-    outcomes.py
+File: `src/zeta/records/provenance.py`
 
-  context/
-    __init__.py
-    builder.py
-    prompts.py
-    components.py
-    instructions.py
-    system.py
-    budget.py
-    transforms.py
-    compaction/
-      __init__.py
-      drop_oldest.py
-      structural_trim.py
-      task_state.py
+Current names:
 
-  models/
-    __init__.py
-    types.py
-    profiles.py
-    chat_completions.py
-    responses.py
-    codex_auth.py
+- `project_trace_events`
+- `project_trace_drafts`
+- `project_model_event`
+- `project_tool_call_event`
+- `project_tool_result_event`
 
-  capabilities/
-    __init__.py
-    types.py
-    registry.py
-    execution.py
+Target direction:
 
-  orchestration/
-    __init__.py
-    agents.py
-    dispatch.py
-    worker.py
-    scheduling.py
-    queue.py
-    attempts.py
+- Rename the many-item functions so the target is explicit once the target noun
+  is chosen. Do not name the function after the source events.
+- Rename single-event functions to follow the convention:
+  `project_one_trace_model_event`, `project_one_trace_tool_call`, and
+  `project_one_trace_tool_result`, or keep them private if only the top-level
+  projector calls them.
+- Avoid mixing source nouns and target nouns in the public function names.
 
-  rpc/
-    __init__.py
-    jsonrpc.py
-    stdio.py
-    routes.py
-```
+The target type decision is tracked under "Separate Noun Refactors."
 
-The nouns live with the package that uses them:
+- `project_model_event`, `project_tool_call_event`, and
+  `project_tool_result_event` are single-event helpers used by the top-level
+  projector. Keep them private unless callers need to project one event
+  directly.
+- `model_trace_data`, `tool_call_object_data`, `tool_result_object_data`, and
+  `tool_event_derivation_params` encode object-store schemas. They are not just
+  field lookups; keep them if the schema centralization remains useful.
 
-```text
-Event, DraftEvent       records/events.py
-Object, Derivation      records/objects.py
-EventStore              records/stores/event_store.py
-ObjectStore             records/stores/object_store.py
-Run, RunStatus          run/runs.py
-Thread                  run/threads.py
-ModelInput/Output       models/types.py
-Capability              capabilities/types.py
-AgentDefinition         orchestration/agents.py
-QueueItem               orchestration/queue.py
-Attempt                 orchestration/attempts.py
-```
+### Records Timeline
 
-## Current Module Map
+File: `src/zeta/records/timeline.py`
 
-### Records
+Current names:
 
-Current modules:
+- `history_event_record`
+- `effect_event_record`
+- `event_from_effect_record`
+- `event_from_record`
+- `turn_record`
+- `effect_record`
+- `TURN_EVENT_COMPLETED`
+- `TURN_EVENT_FAILED`
+- `TURN_RECORD_SCHEMA`
+- `turn_event_type`
 
-- `src/zeta/events.py`
-- `src/zeta/history.py`
-- `src/zeta/kernel/events.py`
-- `src/zeta/kernel/objects.py`
-- `src/zeta/store/events/filter.py`
-- `src/zeta/store/events/memory.py`
-- `src/zeta/store/events/sqlite.py`
-- `src/zeta/store/events/__init__.py`
-- `src/zeta/store/substrate/base.py`
-- `src/zeta/store/substrate/memory.py`
-- `src/zeta/store/substrate/sqlite.py`
-- `src/zeta/store/substrate/__init__.py`
-- `src/zeta/store/__init__.py`
+Target direction:
 
-Target destinations:
+- Eliminate `src/zeta/records/timeline.py` from Zeta. It currently mixes two
+  concerns that should move elsewhere.
+- Move Zeta run lifecycle event vocabulary out of this module and into
+  `zeta/run/`. The current `zeta.turn.completed` / `zeta.turn.failed` names
+  still carry the old noun after the turn-to-run rename.
+- Rename the lifecycle events around the current domain noun, for example
+  `zeta.run.completed` / `zeta.run.failed`, unless the runtime package settles
+  on a narrower prefix.
+- Move run lifecycle draft/event constructors near the run domain. Sigil
+  history can project those events, but it should not own their canonical event
+  names.
+- Rename event-to-record projectors:
+  `history_event_record` should become `project_one_timeline_record` or a more
+  specific target like `project_one_turn_record`.
+- Rename `effect_event_record` to `project_one_effect_record`.
 
-- `kernel/events.py` and durable-event helpers from `events.py` become
-  `records/events.py`.
-- `history.py` becomes `records/timeline.py`.
-- `kernel/objects.py` becomes `records/objects.py`.
-- Trace-object projection currently in `context/builder.py` becomes
-  `records/provenance.py`.
-- Store protocols currently in `store/events/__init__.py` and
-  `store/substrate/base.py` become `records/stores/event_store.py` and
-  `records/stores/object_store.py`.
-- SQLite and in-memory store implementations move into
-  `records/stores/sqlite.py` and `records/stores/memory.py`.
+The `HistoryView` noun decision is tracked under "Separate Noun Refactors."
 
-### Run
+- Move the Sigil-facing history read model out of Zeta after the run lifecycle
+  event vocabulary is owned by `zeta/run/`. The target should be Sigil history,
+  not a renamed Zeta records module.
+- `turns_by_id` and `effects_by_id` are many-event projections. Rename them
+  toward the read model they produce, for example `project_turn_records_by_id`
+  and `project_effect_records_by_id`.
+- `history_event_record` and `effect_event_record` are single-item projections.
+  Rename them only if the projected record is still useful; otherwise inline
+  the direct event/record conversion at the caller.
+- `event_time`, `turn_sort_key`, `effect_sort_key`, and `optional_match` are
+  small local helpers. Inline them if they remain single-use and do not name a
+  policy.
 
-Current modules:
+### Run Prompt Projection
 
-- `src/zeta/loop.py`
-- `src/zeta/execute.py`
-- `src/zeta/kernel/runs.py`
-- `src/zeta/runtime/requests.py`
-- `src/zeta/runtime/scope.py`
-- `src/zeta/runtime/config.py`
-- `src/zeta/agents/capabilities.py`
+File: `src/zeta/run/runtime.py`
 
-Target destinations:
+Current names:
 
-- `kernel/runs.py` becomes `run/runs.py`.
-- Thread scope concepts from `runtime/scope.py` become `run/threads.py`.
-- Session/thread request parsing from `runtime/requests.py` becomes either
-  `run/thread_run.py` if it is run-specific, or `rpc/routes.py` if it is only
-  RPC input parsing.
-- The model/tool loop from `loop.py` becomes `run/runtime.py`.
-- Cancellation/deadline behavior from `loop.py` becomes `run/cancellation.py`.
-- Run result and outcome shapes from `loop.py` become `run/outcomes.py`.
-- Thread-run adaptation from `execute.py` becomes `run/thread_run.py` when it is
-  a direct "run inside a thread" adapter.
-- Agent run configuration from `agents/capabilities.py` should be split:
-  run policy belongs in `run/runs.py` or `run/outcomes.py`; model status
-  plumbing belongs near `models/types.py` or `run/runtime.py`.
+- `add_projection_fields_for_prompt`
+- `add_model_projection_fields`
+- `add_tool_result_projection_fields`
+- `update_prompt_trace_from_projection`
 
-### Context
+Target direction:
 
-Current modules:
+- These functions mutate prompt trace/projection payloads and should either move
+  closer to `context` / `records/provenance.py` or be renamed around the target
+  they produce.
+- If they remain projection helpers, prefer names like
+  `project_one_prompt_trace_model_event` or keep them private under the
+  top-level trace projector.
+- Avoid generic `add_*_projection_fields` names because they describe mechanics,
+  not the read model being produced.
+- `draft_timeline_type` duplicates the timeline-type rule in records
+  (`event_timeline_type` / `durable_view_type`). Consolidate the rule near
+  records/provenance instead of carrying parallel local helpers.
+- `draft_event_id` also exists in `records/events.py`. Prefer one canonical
+  helper if idempotency-key parsing remains a shared event contract.
+- `ensure_event_id`, `model_event`, and `assistant_tool_calls` are only worth
+  keeping if they encode run event schema. Inline or move them if they are just
+  local dict construction.
 
-- `src/zeta/context/__init__.py`
-- `src/zeta/context/budget.py`
-- `src/zeta/context/builder.py`
-- `src/zeta/context/components.py`
-- `src/zeta/context/instructions.py`
-- `src/zeta/context/system.py`
-- `src/zeta/context/transforms.py`
-- `src/zeta/context/compaction/drop_oldest.py`
-- `src/zeta/context/compaction/structural_trim.py`
-- `src/zeta/context/compaction/task_state.py`
-- `src/zeta/context/compaction/__init__.py`
+### Context Components
 
-Target destinations:
+File: `src/zeta/context/components.py`
 
-- Keep the package top-level as `context/`.
-- Keep prompt components in `context/components.py`.
-- Keep instruction/system loading in `context/instructions.py` and
-  `context/system.py`.
-- Keep compaction under `context/compaction/`.
-- Split `context/builder.py`:
-  - context planning and rendering stay in `context/builder.py` or
-    `context/prompts.py`;
-  - provenance projection moves to `records/provenance.py`.
+Current names that look like projection/conversion points:
 
-### Models
+- `prompt_components`
+- `timeline_message_components`
+- `non_message_components`
+- `chat_messages`
+- `component_messages`
+- `timeline_chat_message`
+- `role_or_event_chat_message`
+- `structured_*_event`
 
-Current modules:
+Target direction:
 
-- `src/zeta/models/__init__.py`
-- `src/zeta/models/chat_completions.py`
-- `src/zeta/models/codex_auth.py`
-- `src/zeta/models/profiles.py`
-- `src/zeta/models/responses.py`
-- `src/zeta/kernel/models.py`
+- Apply the convention where a function projects timeline records/events into
+  prompt components:
+  `timeline_message_components` could become
+  `project_timeline_message_components`.
+- Single-event/component helpers should follow `project_one_*` only when they
+  are actual projectors. For example, `role_or_event_chat_message` should become
+  a target-oriented name such as `project_one_chat_message` if it projects one
+  timeline entry into a chat message.
 
-Target destinations:
+### SQLite Store Projections
 
-- Keep the package top-level as `models/`.
-- `kernel/models.py` becomes `models/types.py`.
-- Provider adapters remain in `models/chat_completions.py` and
-  `models/responses.py`.
-- `models/codex_auth.py` stays with the Codex responses provider.
-- `models/profiles.py` keeps model profile semantics, but process-local active
-  profile state may move to `process.py` if it is only local assembly state.
+File: `src/zeta/records/stores/sqlite.py`
 
-### Capabilities
+Current names:
 
-Current modules:
+- `_project_session_mapping`
+- `_project_runtime_event`
+- `_project_queue_item_event`
+- `_project_attempt_event`
+- `_project_attempt_result`
 
-- `src/zeta/capabilities/base.py`
-- `src/zeta/capabilities/registry.py`
-- `src/zeta/capabilities/__init__.py`
-- `src/zeta/kernel/capabilities.py`
+Target direction:
 
-Target destinations:
+- These are write-side index updates, not pure read-model projectors.
+- Rename them to make the target index explicit:
+  `_index_one_session_mapping`, `_index_one_queue_item`,
+  `_index_one_attempt`, `_index_one_attempt_result`.
 
-- Keep the package top-level as `capabilities/`.
-- `kernel/capabilities.py` and capability declaration shapes become
-  `capabilities/types.py`.
-- `capabilities/registry.py` stays the registry/resolution boundary.
-- Capability execution and staging behavior currently embedded in `loop.py` and
-  `capabilities/base.py` should become `capabilities/execution.py`.
+### Sigil Runtime Draft Projection
 
-### Orchestration
+File: `src/sigil/agent_io.py`
 
-Current modules:
+Current names:
 
-- `src/zeta/dispatch.py`
-- `src/zeta/agents/runtime.py`
-- `src/zeta/agents/capabilities.py`
-- `src/zeta/agents/__init__.py`
-- `src/zeta/kernel/agents.py`
-- `src/zeta/kernel/dispatch.py`
-- `src/zeta/runtime/local.py`
-- event-triggered pieces of `src/zeta/execute.py`
+- `project_trace_for_turn`
+- `project_runtime_draft`
 
-Target destinations:
+Target direction:
 
-- `kernel/agents.py` and compiled executable-agent concepts become
-  `orchestration/agents.py`.
-- `kernel/dispatch.py` queue/attempt shapes split into
-  `orchestration/queue.py` and `orchestration/attempts.py`.
-- Event routing and lifecycle behavior from `dispatch.py` becomes
-  `orchestration/dispatch.py`.
-- Worker claiming, leases, heartbeats, and queued execution from
-  `runtime/local.py` become `orchestration/worker.py`.
-- Schedule emission from `runtime/local.py` becomes
-  `orchestration/scheduling.py`.
-- If the `session.turn.requested` executable agent remains event-triggered, the
-  relevant `execute.py` code becomes `orchestration/session_turn_agent.py`
-  rather than `run/thread_run.py`.
+- Rename `project_trace_for_turn` so the side effect is visible if it writes to
+  a store, for example `record_trace_for_turn` or `update_trace_for_turn`.
+- `project_runtime_draft` should be checked carefully. If it converts one draft
+  into a durable/user-facing draft, rename it to `project_one_runtime_draft` or
+  choose a more specific target noun.
 
-### RPC
+### Capability Projection
 
-Current modules:
+File: `src/zeta/capabilities/registry.py`
 
-- `src/zeta/rpc/jsonrpc.py`
+Current direction:
+
+- If this remains a projection concept, add projector functions that follow the
+  convention:
+  `project_capability_tools` / `project_one_capability_tool`.
+- The `CapabilityProjection` type decision is tracked under "Separate Noun
+  Refactors."
+- `CapabilityRegistry.project` is not just field access: it resolves capability
+  ids, handles name overrides, detects ambiguous names, and builds provider
+  descriptors. Rename it around the model-visible target or provider-schema
+  target.
+
+### Context Compaction Projection Helpers
+
+File: `src/zeta/context/compaction/structural_trim.py`
+
+Current names:
+
+- `is_tool_result_projection`
+- `trimmed_message_projection`
+
+Target direction:
+
+- If they produce projected messages, use the convention:
+  `project_one_trimmed_message`.
+- `is_tool_result_projection` is an inspector, not a projector. Rename around
+  what it detects if the current word "projection" is misleading.
+- `structural_trim_payload` encodes trace/audit metadata for trimmed content,
+  so it may be worth keeping. The name should say it is trim metadata if that
+  is the policy being centralized.
+
+### Project Directory Loading Conflict
+
+File: `src/zeta/process.py`
+
+Current name:
+
+- `project_specs`
+
+Target direction:
+
+- Rename it away from the reserved `project_*` prefix, for example:
+  `load_project_specs`, `load_agent_specs`, or `agent_specs_for_project`.
+
+### Scheduling
+
+File: `src/zeta/orchestration/scheduling.py`
+
+Current direction:
+
+- Re-evaluate `utc_now` and `schedule_current_time`. `utc_now` is a one-line
+  clock wrapper; inline it unless tests need injection through a named seam.
+  `schedule_current_time` may be worth keeping only if the timezone conversion
+  policy is reused or needs focused tests.
+- `schedule_event_payload` encodes the emitted schedule event schema. Keep it
+  if schedule payload construction appears in more than one place; otherwise
+  inline it inside `emit_due_schedules`.
+
+### Records Event Helpers
+
+File: `src/zeta/records/events.py`
+
+Current direction:
+
+- Keep idempotency helpers (`event_idempotency_key`,
+  `durable_event_idempotency_key`) when they encode acceptance/dedupe policy.
+  Reconcile duplicate policy with Sigil's `durable_idempotency_key`.
+- Keep the `*_draft` suffix for functions that construct a `DraftEvent` and
+  centralize an emitted event schema.
+- Current schema constructors:
+  `runtime_event_draft`, `boundary_event_draft`, `model_call_draft`,
+  `tool_call_draft`, `turn_aborted_draft`, `stream_chunk_draft`,
+  `status_update_draft`, `user_message_draft`, and `durable_event_draft`.
+- Move `turn_aborted_draft` with the run lifecycle event vocabulary. It still
+  emits `zeta.turn.failed` after the turn-to-run rename.
+- Inline thin forwarding constructors if they only choose an event type and add
+  no schema, idempotency, or lifecycle policy.
+- Use `*_draft` when the function returns a `DraftEvent`.
+- Use `draft_from_*` when converting an existing source representation into a
+  `DraftEvent`. Examples:
+  `runtime_event_draft` -> `draft_from_runtime_event` and
+  `boundary_event_draft` -> `draft_from_boundary_event`.
+- Keep semantic constructors as `*_draft` when they build a named durable draft
+  from explicit arguments, for example `model_call_draft`,
+  `tool_call_draft`, `status_update_draft`, and `user_message_draft`.
+- Use `event_from_*` only for reconstruction from an existing serialized or
+  persisted representation into an actual `Event`. Examples:
+  `event_from_record`, `event_from_effect_record`, and `event_from_row`.
+- Do not use `to_*_event` for semantic event construction. Runtime/domain code
+  should emit through `DraftEvent`.
+- Use `*_event_payload` for dict builders that shape the payload for a future
+  event draft. Do not use plain `*_event` for these functions because durable
+  facts should pass through `DraftEvent` intentionally.
+- Rename current plain-dict event builders around this rule. Examples:
+  `model_event` -> `model_event_payload`,
+  `model_tool_call_event` -> `model_tool_call_event_payload`,
+  `tool_result_event` -> `tool_result_event_payload`, and
+  `shell_result_event` -> `shell_result_event_payload`.
+- `optional_event_string` is a field-validation helper. Inline it unless there
+  is enough repeated validation pressure to justify a shared decoder.
+- `durable_view_type`, `event_timeline_type`, and `draft_timeline_type` express
+  the same timeline-type rule in different modules. Consolidate the rule in one
+  records/provenance location.
+- `durable_model_event_payload`, `durable_tool_event_payload`, and
+  `durable_payload` are schema-normalization helpers. Keep them if they remain
+  the single place that strips non-durable fields.
+- `tool_result_status`, `normalized_tool_result`, and `tool_failure_message`
+  encode tool-result policy. Keep them, but keep their names policy-oriented.
+
+### Draft Dispatch Boundary
+
+Files:
+
+- `src/zeta/orchestration/dispatch.py`
 - `src/zeta/rpc/routes.py`
-- `src/zeta/rpc/stdio.py`
-- `src/zeta/rpc/__init__.py`
+- `src/zeta/run/thread_run.py`
+- `src/sigil/agent_io.py`
+
+Current direction:
+
+- `*_draft` constructors should not send to dispatch. They should return
+  `DraftEvent` values only.
+- Dispatch happens when a caller passes a draft to
+  `EventDispatcher.publish_event` or `EventDispatcher.publish_and_run`.
+- `EventDispatcher.publish_event` accepts and publishes the event, but does not
+  route it by itself. `publish_and_run` accepts, routes, and runs matching queue
+  items.
+- Rename persistence functions that take an existing draft instead of creating
+  one:
+  `_record_runtime_draft` and `record_runtime_draft` should become names like
+  `record_runtime_event` or `accept_runtime_event_draft`.
+- Delete `project_runtime_draft`; it is currently an identity function.
+- Keep RPC draft constructors separate from dispatch:
+  `rpc_requested_draft`, `rpc_responded_draft`, and `rpc_failed_draft`
+  construct wire/protocol lifecycle drafts; route handlers decide whether to
+  accept, publish, or route them.
+
+### Capability Execution
+
+File: `src/zeta/capabilities/execution.py`
+
+Current direction:
 
-Target destinations:
+- Keep `proposed_effect`, `effect_resolution`, and `tool_result_status`-driven
+  behavior when they encode capability lifecycle policy.
+- `effect_payload` is just `result.get("effect")` plus a type check. Inline it
+  unless repeated validation stays high enough to justify a local decoder.
+- `ensure_event_id` duplicates the run-loop helper. Consolidate event-id
+  mutation if both remain.
+- `emit_event` / `emit_tool_event` duplicate run-loop event plumbing. If both
+  remain, names should say whether the event is a capability event or a generic
+  run event.
+- `result_staged_effect` is a wrapper over `proposed_effect`; delete it unless
+  callers need a different semantic name.
 
-- Keep `rpc/jsonrpc.py` and `rpc/stdio.py`.
-- Keep route adapters in `rpc/routes.py` initially.
-- Later split `routes.py` only when it improves navigation, for example:
-  `rpc/session_routes.py`, `rpc/event_routes.py`, and `rpc/tool_routes.py`.
+### CLI Read Models
 
-### CLI
+File: `src/zeta/cli.py`
 
-Current module:
+Current direction:
+
+- `event_record` is a CLI serialization helper. Do not call it a projection
+  unless the CLI has a broader event read model.
+- `queue_status_counts` is small aggregation logic for display. Inline it if it
+  remains local to one command, or rename around the rendered status summary if
+  it becomes shared.
+- `runtime_state_dir` and `runtime_event_store` are process/CLI wiring helpers,
+  not projection helpers. If process assembly owns runtime state paths, move or
+  rename them there.
 
-- `src/zeta/cli.py`
+### RPC Event Adapters
 
-Target destination:
+File: `src/zeta/rpc/routes.py`
 
-- Keep as top-level `zeta/cli.py`.
-- It should parse flags, call `process.py`, and render output.
-- It should not own worker, dispatch, store, model, or run behavior.
+Current direction:
 
-### Process
+- `rpc_request_id` is borderline: keep it only if fallback-to-event-id is an RPC
+  identity policy; otherwise inline the one payload lookup.
+- `run_status_from_lifecycle` encodes RPC-visible status policy from lifecycle
+  events. Keep it as policy, but consider whether direct event checks are more
+  readable than extra helper layers.
 
-Current modules:
+### Sigil Event Adapters
 
-- `src/zeta/runtime/local.py`
-- `src/zeta/runtime/config.py`
-- `src/zeta/runtime/scope.py`
-- local-state parts of `src/zeta/models/profiles.py`
-- construction pieces of `src/zeta/execute.py`
+Files:
 
-Target destination:
+- `src/sigil/state.py`
+- `src/sigil/handoff.py`
+- `src/sigil/turn.py`
+- `src/sigil/agent_io.py`
 
-- `zeta/process.py` is the high-level local entrypoint.
-- It resolves state dirs/config files, opens stores, loads agent specs, selects
-  models, opens threads, constructs workers, and provides concrete services to
-  CLI/RPC/tests.
-- It should not own the behavior of stores, workers, dispatch, models,
-  capabilities, runtime, or RPC.
+Current direction:
 
-## Phased Plan
+- `optional_string`, `event_id_value`, `handoff_event_payload`,
+  `handoff_event_time`, and `handoff_event_turn_id` look like field-access
+  helpers. Inline them unless repeated validation pressure justifies them.
+- `project_runtime_draft` should be rechecked against the naming convention. If
+  it only tags or converts one draft, either rename it to the target it produces
+  or inline it at the caller.
 
-### Phase 0: Lock Current Behavior
+### Sigil Status And Trace Rows
 
-Goal: make the refactor observable and reversible.
+Files:
 
-Tasks:
+- `src/sigil/status.py`
+- `src/sigil/trace/tools.py`
 
-- Run the current test suite and record failures, if any.
-- Identify the tests that cover:
-  - `session.run` RPC behavior;
-  - `events.publish` / `events.list`;
-  - dispatch queue item and attempt lifecycle;
-  - model request payloads and response parsing;
-  - capability staging/direct execution;
-  - trace/provenance projection;
-  - Sigil workflows that call Zeta.
-- Add focused tests only where a later move would otherwise be unpinned.
+Current direction:
 
-Do not move code in this phase.
+- `history_status_fields` is a read aggregation, not simple field access. Keep
+  it if status stays as a separate read model.
+- In `sigil/trace/tools.py`, `tool_call_row`,
+  `tool_results_by_call_id`, and `base_tool_call_row` are CLI read-model
+  construction. Rename them with clearer `row`/`view` vocabulary unless they
+  become general trace projections.
+- `object_data`, `result_fields`, and `tool_call_id` are field-access helpers.
+  Inline them unless their validation is reused enough to justify local
+  decoders.
+- `attach_tool_result` and `recovered_tool_error` encode error recovery/display
+  policy. Keep them if that fallback behavior stays centralized.
 
-### Phase 1: Create Records
+### Session Run Trace Projection
 
-Goal: move durable memory concepts without touching execution.
+File: `src/zeta/run/thread_run.py`
 
-Tasks:
+Current names:
 
-- Create `records/` and `records/stores/`.
-- Move event domain shapes and event helper functions into `records/events.py`.
-- Move object and derivation shapes into `records/objects.py`.
-- Move event store and object store protocols into
-  `records/stores/event_store.py` and `records/stores/object_store.py`.
-- Move SQLite and memory implementations into `records/stores/sqlite.py` and
-  `records/stores/memory.py`.
-- Move `history.py` to `records/timeline.py`.
-- Update imports in place.
-- Remove old modules by the end of the phase; avoid long-lived compatibility
-  shims.
+- `_project_trace_for_run`
+- `_projected_session_trace_result`
+- `empty_session_trace_result`
 
-Validation:
+Current direction:
 
-- Event store tests.
-- History/timeline tests.
-- RPC `events.list` tests.
-- Dispatch lifecycle tests that read event history.
+- `_project_trace_for_run` performs a side-effecting trace-store update. If the
+  function stays, name the side effect instead of making it sound like a pure
+  projector, for example `_record_trace_for_run` or `_update_trace_for_run`.
+- `_projected_session_trace_result` does return a read-side result derived from
+  events plus trace projection maps. It can keep projection language, but the
+  target should be the RPC result shape, not the source trace mechanics.
 
-### Phase 2: Split Provenance From Context
+### Agent Schedule Spec Parsing
 
-Goal: keep context about model input, and records about replayable evidence.
+File: `src/zeta/agents/spec.py`
 
-Tasks:
+Current names:
 
-- Move trace projection functions from `context/builder.py` into
-  `records/provenance.py`.
-- Keep prompt planning/rendering in `context/`.
-- Introduce `context/prompts.py` only if it makes `context/builder.py` read
-  better.
-- Update runtime to record provenance through the new records boundary.
+- `schedule_payload`
+- `schedule_event`
+- `schedule_timezone`
 
-Validation:
-
-- Prompt trace tests.
-- Trace replay/render/query tests.
-- Any tests asserting prompt component object ids.
-
-### Phase 3: Promote Models And Capabilities
-
-Goal: make the two extension seams explicit before splitting the run loop.
-
-Tasks:
+Current direction:
 
-- Move `kernel/models.py` to `models/types.py`.
-- Keep provider adapters under `models/`.
-- Separate model profile semantics from local active-profile file state if that
-  split is clear; otherwise leave `models/profiles.py` intact and flag the
-  local state for the process phase.
-- Move capability domain shapes to `capabilities/types.py`.
-- Keep capability registry in `capabilities/registry.py`.
-- Extract capability call handling/staging/execution from `loop.py` into
-  `capabilities/execution.py`.
+- `schedule_payload` is currently a cast around one YAML field. Inline it unless
+  schedule payload validation becomes real.
+- `schedule_event` and `schedule_timezone` are more defensible because they
+  encode defaults and validation. If they stay, names like
+  `schedule_event_type` and `schedule_timezone_name` would make the returned
+  schema field clearer.
+- `required_schedule_string` is a validation helper. Keep it only if the shared
+  error message remains useful across several schedule fields.
 
-Validation:
+### Sigil Turn Effect Field Builders
 
-- Model payload tests.
-- Responses/Codex auth tests.
-- Tool registration and schema validation tests.
-- Staging/direct execution tests.
+File: `src/sigil/turn.py`
 
-### Phase 4: Build The Run Package
+Current names:
 
-Goal: make `run/` mean exactly "one run happens here."
+- `tool_result_effect_fields`
+- `file_effect_fields`
+- `command_effect_fields`
+- `event_id_value`
+- `first_object_link_id`
 
-Tasks:
+Current direction:
 
-- Create `run/`.
-- Move run identity/status shapes to `run/runs.py`.
-- Move thread scope/request shapes to `run/threads.py` and `run/thread_run.py`.
-- Split `loop.py`:
-  - main orchestration into `run/runtime.py`;
-  - cancellation/deadline checks into `run/cancellation.py`;
-  - result/outcome shapes into `run/outcomes.py`;
-  - capability execution calls should use `capabilities/execution.py`;
-  - model calls should use `models/`.
-- Keep runtime invocation independent from CLI/RPC/worker.
-- Ensure runtime writes events/provenance only through explicit ports.
+- `tool_result_effect_fields`, `file_effect_fields`, and
+  `command_effect_fields` encode the policy that maps tool results to history
+  effects. Prefer target-oriented names like `effect_fields_for_tool_result`.
+- `event_id_value` is a plain field accessor. Inline it if still used.
+- `first_object_link_id` is a small traversal helper over trace-link schema.
+  Keep it only if it is reused or if the trace-link schema needs one local
+  interpretation point.
 
-Validation:
+### Display Progress Read Models
 
-- Run-loop tests from `tests/test_zeta_agent.py`.
-- Cancellation/deadline tests.
-- Capability/tool-call tests.
-- Model telemetry tests.
-- Thread/run result tests.
+File: `src/sigil/display/state.py`
 
-### Phase 5: Split Orchestration
+Current names:
 
-Goal: make event-driven work separate from the run loop and process wiring.
+- `progress_event_for_tool_result`
+- `progress_event_for_tool_call`
+- `mutation_progress_event`
+- `command_progress_event`
+- `progress_subject_fields`
 
-Tasks:
+Current direction:
 
-- Create `orchestration/`.
-- Move agent definitions/invocations and authored-agent compilation to
-  `orchestration/agents.py`.
-- Split queue item shape/helpers into `orchestration/queue.py`.
-- Split attempt shape/helpers into `orchestration/attempts.py`.
-- Move event routing/lifecycle code from `dispatch.py` into
-  `orchestration/dispatch.py`.
-- Move worker claiming/lease/heartbeat behavior from `runtime/local.py` into
-  `orchestration/worker.py`.
-- Move schedule emission from `runtime/local.py` into
-  `orchestration/scheduling.py`.
-- Decide where `session.turn.requested` lives:
-  - `run/thread_run.py` if it is direct run adaptation;
-  - `orchestration/session_turn_agent.py` if it remains an event-triggered
-    built-in agent.
+- `progress_subject_fields` is lookup policy for display subjects. Keep it if
+  the mapping stays centralized; otherwise inline small per-tool cases.
 
-Validation:
+## Separate Noun Refactors
 
-- Dispatch tests.
-- Queue/attempt lifecycle tests.
-- Worker run-once tests.
-- Schedule emission tests.
-- RPC session-run tests, because they observe terminal queue item results.
+These are related naming issues, but they are not part of the `project_*`
+function convention. Track and implement them separately.
 
-### Phase 6: Introduce Process
+### Queue Item Projection Target
 
-Goal: make local construction explicit and boring.
+File: `src/zeta/orchestration/queue.py`
 
-Tasks:
+Question:
 
-- Create top-level `process.py`.
-- Move state dir resolution, event/object store opening, agent spec loading,
-  worker construction, model selection, and RPC service construction there.
-- Keep `process.py` high-level. If path/env logic grows, consider a local helper
-  later, but do not add a package prematurely.
-- Update CLI and RPC stdio entrypoints to request concrete services from
-  `process.py`.
+- Do we need `QueueItemSnapshot` at all?
 
-Validation:
+Current direction:
 
-- CLI smoke tests.
-- RPC stdio tests.
-- Worker construction tests.
-- Model profile selection tests.
+- The extra fields look unnecessary for queue item projection.
+- Prefer deleting `QueueItemSnapshot` and projecting directly to `QueueItem`.
+- Keep terminal result/error/cursor behavior in explicit terminal-result
+  helpers, not in the queue item projection.
 
-### Phase 7: Clean RPC And CLI Boundaries
+The resulting projection target would be:
 
-Goal: keep interfaces as adapters, not behavior owners.
-
-Tasks:
-
-- Keep `zeta/cli.py` top-level and thin.
-- Keep `rpc/jsonrpc.py`, `rpc/stdio.py`, and `rpc/routes.py`.
-- Make route adapters call `process.py`, `run/`, `records/`, and
-  `orchestration/` boundaries instead of reaching into old modules.
-- Split `rpc/routes.py` only after behavior is stable and route groups are
-  obvious.
-
-Validation:
-
-- RPC protocol tests.
-- CLI command tests.
-- End-to-end `session.run` tests.
-
-### Phase 8: Remove Old Structure
-
-Goal: make the repo match the story.
-
-Tasks:
-
-- Delete emptied `kernel/`, old `store/`, old broad `runtime/`, old `loop.py`,
-  old `execute.py`, and old `dispatch.py` once imports are gone.
-- Keep no long-lived compatibility modules unless a real external import
-  contract is explicitly required.
-- Update docs and README references.
-- Re-run the full test suite and pre-commit.
-
-Validation:
-
-- `uv run pytest`
-- `uv run pre-commit run --all`
-- Optional complexity checks after the largest moves:
-  - `uvx --with radon radon cc src tests -s`
-  - repository complexity gate if still configured.
-
-## Test Reorganization
-
-The current tests should eventually mirror the target packages:
-
-```text
-tests/zeta/records/
-tests/zeta/run/
-tests/zeta/context/
-tests/zeta/models/
-tests/zeta/capabilities/
-tests/zeta/orchestration/
-tests/zeta/rpc/
-tests/zeta/process/
-tests/integration/
+```python
+QueueItem(
+    queue_item_id=...,
+    event_id=...,
+    target_agent=...,
+    status=...,
+)
 ```
 
-Suggested migration:
+### Trace Or Provenance
 
-- Split `tests/test_zeta_agent.py` across `run`, `capabilities`,
-  `orchestration`, and integration tests.
-- Split `tests/test_zeta_prompt.py` into `context` and `records/provenance`.
-- Split `tests/test_zeta_trace.py` into `records/timeline` and
-  `records/provenance`.
-- Keep provider payload tests under `models`.
-- Keep RPC wire-shape tests under `rpc`.
-- Keep Sigil workflow tests separate from Zeta runtime tests.
+File: `src/zeta/records/provenance.py`
 
-## Risks
+Question:
 
-- Import churn can hide behavior changes. Move in small phases and run focused
-  tests after each phase.
-- `execute.py` is ambiguous. Decide whether its core identity is direct thread
-  execution or event-triggered built-in agent execution before moving it.
-- `context/builder.py` currently mixes prompt construction and provenance.
-  Split behavior carefully so prompt object ids remain stable where tests
-  expect them.
-- `runtime/local.py` mixes process setup, worker mechanics, scheduling, and
-  event-log RPC handling. This should be split before deeper runtime changes.
-- Model profile state mixes provider semantics with local active-selection
-  files. Do not move it blindly; first decide what is model semantics and what
-  is process-local state.
-- Avoid adding abstract service layers. Introduce only the interfaces already
-  implied by stores, models, capabilities, and process construction.
+- Should the target noun be `TraceProjection` or `ProvenanceProjection`?
 
-## Acceptance Criteria
+Current direction:
 
-The refactor is successful when:
+- If "trace" is the user-facing artifact and "provenance" is the internal
+  explanation model, use `ProvenanceProjection` internally and convert to
+  prompt trace artifacts at the boundary.
+- If this object is specifically the prompt trace projection, keep the trace
+  noun and make the function names explicit about that target.
 
-- A new reader can open `src/zeta/` and predict where to change a behavior.
-- Runtime executes one run and does not know its caller.
-- Orchestration turns accepted events into work and does not know the model
-  loop.
-- Context builds model input and does not execute.
-- Models and capabilities are visible extension seams.
-- Records own durable facts, timeline, provenance, and persistence.
-- CLI and RPC are thin adapters.
-- `process.py` is the only high-level local assembly entrypoint.
-- The full test suite and pre-commit pass.
+### History Or Timeline
+
+File: `src/zeta/records/timeline.py`
+
+Question:
+
+- Should `HistoryView` become a Sigil-owned run history read model?
+
+Current direction:
+
+- Move `HistoryView`, history querying, touched-file filters, cost summaries,
+  import/export helpers, and Sigil turn/effect record projection to Sigil.
+- Do not move canonical run lifecycle event names with the Sigil history read
+  model. Those belong under `zeta/run/`.
+- Rename the old `turn_*` history names to `run_*` only after deciding whether
+  Sigil's user-facing noun is also "run."
+
+### Runtime Context
+
+File: `src/zeta/run/threads.py`
+
+Question:
+
+- Should `SessionScope` become `RuntimeContext`?
+
+Current direction:
+
+- Do not rename it to `ThreadScope`. The object has little to do with a
+  conversation thread; it is a runtime resource bundle plus the continuity
+  partition used for events and traces.
+- Rename `SessionScope` to `RuntimeContext`.
+- Rename `src/zeta/run/threads.py` away from thread vocabulary, for example to
+  `src/zeta/run/context.py`.
+- Keep Sigil `session_id` as the shell-continuity noun at the Sigil boundary.
+- In Zeta internals, avoid `thread_id` unless a real durable conversation
+  thread exists. The id on `RuntimeContext` should describe the runtime
+  continuity partition, not an OpenAI-style thread.
+- Introduce a separate `Thread` noun only if Zeta later gets a real durable
+  conversation object with its own lifecycle/metadata.
+
+### Capability Projection Type
+
+File: `src/zeta/capabilities/registry.py`
+
+Question:
+
+- Is `CapabilityProjection` really a projection, or is it a provider-facing
+  tool schema?
+
+Current direction:
+
+- If it is the provider-facing schema, rename it to a target noun such as
+  `CapabilityToolSchema`.
+- If it remains a projection concept, keep the projection noun and add
+  `project_*` functions around it.
+
+## Suggested Order
+
+1. Apply the convention to `orchestration/queue.py`.
+2. Apply the same shape to `orchestration/attempts.py`.
+3. Move shared event payload string readers out of `queue.py`.
+4. Rename `project_specs` so `project_*` is reserved for projection.
+5. Move run lifecycle event vocabulary out of `records/timeline.py` and into
+   `zeta/run/`.
+6. Move the Sigil-facing history read model out of Zeta.
+7. Clean up `records/provenance.py`.
+8. Rename `SessionScope` / `run/threads.py` to `RuntimeContext` /
+   `run/context.py`.
+9. Handle the noun refactors separately where they unblock function names.
+10. Revisit prompt/component projection names once provenance and timeline names
+   are stable.
