@@ -437,8 +437,6 @@ Current direction:
 
 - Keep `proposed_effect`, `effect_resolution`, and `tool_result_status`-driven
   behavior when they encode capability lifecycle policy.
-- `effect_payload` is just `result.get("effect")` plus a type check. Inline it
-  unless repeated validation stays high enough to justify a local decoder.
 - `ensure_event_id` duplicates the run-loop helper. Consolidate event-id
   mutation if both remain.
 - `emit_event` / `emit_tool_event` duplicate run-loop event plumbing. If both
