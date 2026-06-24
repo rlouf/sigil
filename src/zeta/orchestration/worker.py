@@ -13,7 +13,13 @@ from zeta.orchestration.dispatch import EventDispatcher
 from zeta.orchestration.scheduling import emit_due_schedules
 from zeta.orchestration.session_turn_agent import session_turn_agent
 from zeta.records.events import Event
-from zeta.records.stores import Filter, SqliteEventStore, SqliteStore, zeta_sqlite_path
+from zeta.records.stores import (
+    Filter,
+    QueueClaim,
+    SqliteEventStore,
+    SqliteStore,
+    zeta_sqlite_path,
+)
 from zeta.run.context import RuntimeContext
 
 LOCAL_WORKER_NAME = "local-runtime"
@@ -79,8 +85,8 @@ async def run_available_queue_item(
         )
         if claimed is None:
             return "queue empty"
-        lock_keys = queue_item_lock_keys(events, executors, claimed)
-        lock_owner = queue_item_lock_owner(worker_name, claimed)
+        lock_keys = queue_item_lock_keys(events, executors, claimed.queue_item_id)
+        lock_owner = queue_item_lock_owner(claimed)
         now_ms = runtime_time_ms()
         if not events.acquire_locks(
             lock_keys,
@@ -89,15 +95,17 @@ async def run_available_queue_item(
             now_ms=now_ms,
         ):
             events.release_queue_claim(
-                claimed,
+                claimed.queue_item_id,
                 worker_name,
+                claim_token=claimed.token,
                 now_ms=now_ms,
             )
-            skipped.add(claimed)
+            skipped.add(claimed.queue_item_id)
             continue
+        dispatcher.claim_token = claimed.token
         try:
-            lifecycle_events = await dispatcher.run_queue_item(claimed)
-            return run_once_message(claimed, lifecycle_events)
+            lifecycle_events = await dispatcher.run_queue_item(claimed.queue_item_id)
+            return run_once_message(claimed.queue_item_id, lifecycle_events)
         finally:
             events.release_locks(lock_keys, lock_owner)
 
@@ -217,7 +225,7 @@ def claim_available_queue_item(
     worker_name: str,
     skipped_queue_items: set[str] | None = None,
     lease_ms: int = QUEUE_LEASE_MS,
-) -> str | None:
+) -> QueueClaim | None:
     now_ms = runtime_time_ms()
     events.reconcile_expired_queue_claims(now_ms=now_ms)
     events.reconcile_expired_locks(now_ms=now_ms)
@@ -261,8 +269,8 @@ def agent_lock_keys(
     return ()
 
 
-def queue_item_lock_owner(worker_name: str, queue_item_id: str) -> str:
-    return f"{worker_name}:{queue_item_id}"
+def queue_item_lock_owner(claim: QueueClaim) -> str:
+    return claim.token
 
 
 def runtime_time_ms() -> int:

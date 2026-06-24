@@ -7,9 +7,11 @@ table so readers can replay stable slices without decoding payloads.
 
 import json
 import os
+import secrets
 import sqlite3
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +36,7 @@ from zeta.records.stores.event_store import Filter
 __all__ = [
     "DEFAULT_SQLITE_NAME",
     "EVENT_STORE_NAME",
+    "QueueClaim",
     "ZETA_SQLITE_NAME",
     "ZETA_STORE_NAME",
     "SqliteEventStore",
@@ -51,6 +54,14 @@ __all__ = [
 
 EVENT_STORE_NAME = "events.sqlite3"
 ZETA_STORE_NAME = "zeta.sqlite3"
+
+
+@dataclass(frozen=True)
+class QueueClaim:
+    """Opaque ownership token for one active queue claim."""
+
+    queue_item_id: str
+    token: str
 
 
 class SqliteEventStore:
@@ -106,6 +117,7 @@ class SqliteEventStore:
               status TEXT NOT NULL,
               available_at INTEGER,
               claimed_by TEXT,
+              claimed_token TEXT,
               claimed_until INTEGER,
               attempt_count INTEGER NOT NULL DEFAULT 0,
               last_error TEXT,
@@ -119,6 +131,7 @@ class SqliteEventStore:
               attempt_number INTEGER NOT NULL,
               target_agent TEXT NOT NULL,
               worker_name TEXT,
+              claim_token TEXT,
               status TEXT NOT NULL,
               started_at TEXT NOT NULL,
               heartbeat_at INTEGER,
@@ -167,6 +180,16 @@ class SqliteEventStore:
             str(row["name"])
             for row in self.connection.execute("PRAGMA table_info(attempts)").fetchall()
         }
+        queue_columns = {
+            str(row["name"])
+            for row in self.connection.execute(
+                "PRAGMA table_info(queue_items)"
+            ).fetchall()
+        }
+        if "claimed_token" not in queue_columns:
+            self.connection.execute("ALTER TABLE queue_items ADD COLUMN claimed_token TEXT")
+        if "claim_token" not in attempt_columns:
+            self.connection.execute("ALTER TABLE attempts ADD COLUMN claim_token TEXT")
         for name, kind in (
             ("summary", "TEXT"),
             ("input_tokens", "INTEGER"),
@@ -466,21 +489,44 @@ class SqliteEventStore:
         queue_item_id: str,
         worker_name: str,
         *,
+        claim_token: str,
         lease_ms: int,
         now_ms: int,
     ) -> bool:
-        cursor = self.connection.execute(
-            """
-            UPDATE attempts
-            SET heartbeat_at = ?
-            WHERE attempt_id = ?
-              AND queue_item_id = ?
-              AND worker_name = ?
-              AND status = 'running'
-            """,
-            (now_ms, attempt_id, queue_item_id, worker_name),
-        )
-        if cursor.rowcount == 1:
+        _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        try:
+            cursor = self.connection.execute(
+                """
+                UPDATE attempts
+                SET heartbeat_at = ?
+                WHERE attempt_id = ?
+                  AND queue_item_id = ?
+                  AND worker_name = ?
+                  AND claim_token = ?
+                  AND status = 'running'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM queue_items
+                    WHERE queue_item_id = ?
+                      AND claimed_by = ?
+                      AND claimed_token = ?
+                      AND status = 'claimed'
+                  )
+                """,
+                (
+                    now_ms,
+                    attempt_id,
+                    queue_item_id,
+                    worker_name,
+                    claim_token,
+                    queue_item_id,
+                    worker_name,
+                    claim_token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                self.connection.rollback()
+                return False
             self.connection.execute(
                 """
                 UPDATE queue_items
@@ -488,12 +534,22 @@ class SqliteEventStore:
                     updated_at = ?
                 WHERE queue_item_id = ?
                   AND claimed_by = ?
+                  AND claimed_token = ?
                   AND status = 'claimed'
                 """,
-                (now_ms + lease_ms, now_ms, queue_item_id, worker_name),
+                (
+                    now_ms + lease_ms,
+                    now_ms,
+                    queue_item_id,
+                    worker_name,
+                    claim_token,
+                ),
             )
-        self.connection.commit()
-        return cursor.rowcount == 1
+            self.connection.commit()
+            return True
+        except Exception:
+            self.connection.rollback()
+            raise
 
     def _index_one_queue_item(self, event: Event) -> None:
         queue_item = project_one_queue_item(event)
@@ -534,6 +590,20 @@ class SqliteEventStore:
             return
         raw_worker_name = event.payload.get("worker_name")
         worker_name = raw_worker_name if isinstance(raw_worker_name, str) else None
+        claim_token = None
+        if attempt.status == "running" and worker_name is not None:
+            claim_token_row = self.connection.execute(
+                """
+                SELECT claimed_token
+                FROM queue_items
+                WHERE queue_item_id = ?
+                  AND claimed_by = ?
+                  AND status = 'claimed'
+                """,
+                (attempt.queue_item_id, worker_name),
+            ).fetchone()
+            if claim_token_row is not None:
+                claim_token = _optional_str(claim_token_row["claimed_token"])
         raw_summary = event.payload.get("summary")
         summary = raw_summary if isinstance(raw_summary, str) else None
         raw_tool_calls = event.payload.get("tool_calls")
@@ -546,11 +616,12 @@ class SqliteEventStore:
             """
             INSERT INTO attempts
               (attempt_id, queue_item_id, event_id, attempt_number, target_agent,
-               worker_name, status, started_at, heartbeat_at, finished_at, error,
-               session_id, run_id, summary, input_tokens, output_tokens,
+               worker_name, claim_token, status, started_at, heartbeat_at,
+               finished_at, error, session_id, run_id, summary, input_tokens, output_tokens,
                tool_calls_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(attempt_id) DO UPDATE SET
+              claim_token = COALESCE(attempts.claim_token, excluded.claim_token),
               status = excluded.status,
               heartbeat_at = excluded.heartbeat_at,
               finished_at = excluded.finished_at,
@@ -569,6 +640,7 @@ class SqliteEventStore:
                 attempt.attempt_number,
                 attempt.target_agent,
                 worker_name,
+                claim_token,
                 attempt.status,
                 attempt.started_at,
                 event.timestamp_ms,
@@ -667,7 +739,7 @@ class SqliteEventStore:
         lease_ms: int,
         now_ms: int,
         exclude_queue_item_ids: Iterable[str] = (),
-    ) -> str | None:
+    ) -> QueueClaim | None:
         excluded = tuple(dict.fromkeys(exclude_queue_item_ids))
         excluded_clause = ""
         excluded_params: tuple[str, ...] = ()
@@ -694,11 +766,13 @@ class SqliteEventStore:
                 self.connection.commit()
                 return None
             queue_item_id = str(row["queue_item_id"])
+            claim_token = secrets.token_urlsafe(24)
             cursor = self.connection.execute(
                 """
                 UPDATE queue_items
                 SET status = 'claimed',
                     claimed_by = ?,
+                    claimed_token = ?,
                     claimed_until = ?,
                     updated_at = ?
                 WHERE queue_item_id = ?
@@ -707,6 +781,7 @@ class SqliteEventStore:
                 """,
                 (
                     worker_name,
+                    claim_token,
                     now_ms + lease_ms,
                     now_ms,
                     queue_item_id,
@@ -716,7 +791,7 @@ class SqliteEventStore:
             self.connection.commit()
             if cursor.rowcount != 1:
                 return None
-            return queue_item_id
+            return QueueClaim(queue_item_id, claim_token)
         except Exception:
             self.connection.rollback()
             raise
@@ -726,6 +801,7 @@ class SqliteEventStore:
         queue_item_id: str,
         worker_name: str,
         *,
+        claim_token: str,
         now_ms: int,
     ) -> bool:
         cursor = self.connection.execute(
@@ -736,13 +812,15 @@ class SqliteEventStore:
                   ELSE 'available'
                 END,
                 claimed_by = NULL,
+                claimed_token = NULL,
                 claimed_until = NULL,
                 updated_at = ?
             WHERE queue_item_id = ?
               AND claimed_by = ?
+              AND claimed_token = ?
               AND status = 'claimed'
             """,
-            (now_ms, queue_item_id, worker_name),
+            (now_ms, queue_item_id, worker_name, claim_token),
         )
         self.connection.commit()
         return cursor.rowcount == 1
@@ -756,6 +834,7 @@ class SqliteEventStore:
                   ELSE 'available'
                 END,
                 claimed_by = NULL,
+                claimed_token = NULL,
                 claimed_until = NULL,
                 updated_at = ?
             WHERE status = 'claimed'

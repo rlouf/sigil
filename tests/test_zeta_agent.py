@@ -3475,7 +3475,8 @@ def test_zeta_sqlite_event_store_claims_and_reconciles_queue_leases(
         now_ms=now_ms + 1_001,
     )
 
-    assert first_claim == queue_item_id
+    assert first_claim is not None
+    assert first_claim.queue_item_id == queue_item_id
     assert second_claim is None
     assert dict(claimed_row) == {
         "status": "claimed",
@@ -3483,7 +3484,8 @@ def test_zeta_sqlite_event_store_claims_and_reconciles_queue_leases(
         "claimed_until": now_ms + 1_000,
     }
     assert reconciled == 1
-    assert reclaimed == queue_item_id
+    assert reclaimed is not None
+    assert reclaimed.queue_item_id == queue_item_id
 
 
 def test_zeta_sqlite_event_store_claims_pending_queue_items(
@@ -3518,10 +3520,119 @@ def test_zeta_sqlite_event_store_claims_pending_queue_items(
     ).fetchall()
 
     assert queue_item_id == f"qi_{accepted.id}"
-    assert claimed == queue_item_id
+    assert claimed is not None
+    assert claimed.queue_item_id == queue_item_id
     assert reconciled == 1
-    assert reclaimed == queue_item_id
+    assert reclaimed is not None
+    assert reclaimed.queue_item_id == queue_item_id
     assert [row["queue_item_id"] for row in rows] == [queue_item_id]
+
+
+def test_zeta_sqlite_event_store_rejects_stale_queue_claim_tokens(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    queue_item_id = event_store.ensure_pending_queue_item(accepted)
+    now_ms = accepted.timestamp_ms + 1_000
+
+    first_claim = event_store.claim_next_queue_item(
+        "worker",
+        lease_ms=1_000,
+        now_ms=now_ms,
+    )
+    event_store.reconcile_expired_queue_claims(now_ms=now_ms + 1_001)
+    second_claim = event_store.claim_next_queue_item(
+        "worker",
+        lease_ms=1_000,
+        now_ms=now_ms + 1_001,
+    )
+
+    assert first_claim is not None
+    assert second_claim is not None
+    assert first_claim.queue_item_id == queue_item_id
+    assert second_claim.queue_item_id == queue_item_id
+    assert first_claim.token != second_claim.token
+    assert (
+        event_store.release_queue_claim(
+            queue_item_id,
+            "worker",
+            claim_token=first_claim.token,
+            now_ms=now_ms + 1_002,
+        )
+        is False
+    )
+    assert event_store.list_queue_items()[0]["status"] == "claimed"
+    assert (
+        event_store.release_queue_claim(
+            queue_item_id,
+            "worker",
+            claim_token=second_claim.token,
+            now_ms=now_ms + 1_003,
+        )
+        is True
+    )
+
+
+def test_zeta_sqlite_event_store_rejects_stale_attempt_heartbeats(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    queue_item_id = event_store.ensure_pending_queue_item(accepted)
+    now_ms = accepted.timestamp_ms + 1_000
+    first_claim = event_store.claim_next_queue_item(
+        "worker",
+        lease_ms=1_000,
+        now_ms=now_ms,
+    )
+    assert first_claim is not None
+    event_store.append(
+        zeta_events.Event(
+            id="attempt-started",
+            event_type="runtime.attempt.started",
+            source="zeta",
+            payload={
+                "attempt_id": f"att_{queue_item_id}_1",
+                "queue_item_id": queue_item_id,
+                "event_id": accepted.id,
+                "attempt_number": 1,
+                "target_agent": "issue-triage",
+                "status": "running",
+                "started_at": "2026-06-20T10:00:01Z",
+                "worker_name": "worker",
+            },
+            idempotency_key=None,
+            caused_by=accepted.id,
+            session_id=None,
+            timestamp_ms=now_ms + 1,
+        )
+    )
+    event_store.reconcile_expired_queue_claims(now_ms=now_ms + 1_001)
+    second_claim = event_store.claim_next_queue_item(
+        "worker",
+        lease_ms=1_000,
+        now_ms=now_ms + 1_001,
+    )
+
+    assert second_claim is not None
+    assert (
+        event_store.heartbeat_attempt(
+            f"att_{queue_item_id}_1",
+            queue_item_id,
+            "worker",
+            claim_token=first_claim.token,
+            lease_ms=1_000,
+            now_ms=now_ms + 1_002,
+        )
+        is False
+    )
+    assert event_store.list_attempts()[0]["heartbeat_at"] == now_ms + 1
+    assert event_store.list_queue_items()[0]["claimed_until"] == now_ms + 2_001
 
 
 def test_zeta_sqlite_event_store_acquires_locks_all_or_none(

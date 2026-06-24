@@ -70,6 +70,7 @@ class AttemptHeartbeatStore(Protocol):
         queue_item_id: str,
         worker_name: str,
         *,
+        claim_token: str,
         lease_ms: int,
         now_ms: int,
     ) -> bool:
@@ -131,6 +132,7 @@ class EventDispatcher:
         worker_name: str | None = None,
         heartbeat_interval_seconds: float | None = None,
         lease_ms: int = 60_000,
+        claim_token: str | None = None,
     ) -> None:
         self.event_sink = event_sink
         self.executors = tuple(executors)
@@ -142,6 +144,7 @@ class EventDispatcher:
         self.worker_name = worker_name
         self.heartbeat_interval_seconds = heartbeat_interval_seconds
         self.lease_ms = lease_ms
+        self.claim_token = claim_token
 
     async def publish_event(
         self,
@@ -347,6 +350,7 @@ class EventDispatcher:
     ) -> asyncio.Task[None] | None:
         if (
             self.worker_name is None
+            or self.claim_token is None
             or self.heartbeat_interval_seconds is None
             or self.heartbeat_interval_seconds <= 0
             or not isinstance(self.event_sink, AttemptHeartbeatStore)
@@ -374,12 +378,15 @@ class EventDispatcher:
     ) -> None:
         if self.worker_name is None or self.heartbeat_interval_seconds is None:
             return
+        if self.claim_token is None:
+            return
         while True:
             await asyncio.sleep(self.heartbeat_interval_seconds)
             store.heartbeat_attempt(
                 attempt_id,
                 queue_item_id,
                 self.worker_name,
+                claim_token=self.claim_token,
                 lease_ms=self.lease_ms,
                 now_ms=current_time_ms(),
             )
