@@ -4055,6 +4055,58 @@ def test_zeta_local_runtime_heartbeats_running_attempt(
     assert queue_item["claimed_by"] == "local-runtime"
 
 
+def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+
+    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        now_ms = accepted.timestamp_ms + 10_000
+        event_store.reconcile_expired_queue_claims(now_ms=now_ms)
+        replacement = event_store.claim_next_queue_item(
+            "local-runtime",
+            lease_ms=60_000,
+            now_ms=now_ms,
+        )
+        assert replacement is not None
+        assert replacement.queue_item_id == run.queue_item_id
+        return {"event_id": run.triggering_event.id}
+
+    agent = zeta_dispatch.ExecutableAgent(
+        zeta_dispatch.AgentDefinition(
+            "issue-triage",
+            (zeta_dispatch.EventPattern("github.issue.opened"),),
+        ),
+        run=run_agent,
+    )
+    runtime = zeta_worker.RuntimeServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+        specs=(),
+        executors=(agent,),
+    )
+    monkeypatch.setattr(zeta_worker, "QUEUE_LEASE_MS", 1_000)
+
+    message = asyncio.run(zeta_worker.run_once(runtime))
+    event_types = [
+        event.event_type for event in event_store.list_events(zeta_events.Filter())
+    ]
+    queue_item = event_store.list_queue_items()[0]
+    attempt = event_store.list_attempts()[0]
+
+    assert message == f"ran qi_{accepted.id}"
+    assert "runtime.attempt.completed" not in event_types
+    assert "runtime.queue_item.completed" not in event_types
+    assert queue_item["status"] == "claimed"
+    assert queue_item["claimed_by"] == "local-runtime"
+    assert attempt["status"] == "running"
+
+
 def test_zeta_local_runtime_run_once_skips_leased_queue_item(tmp_path: Path) -> None:
     event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
     calls: list[zeta_dispatch.AgentInvocation] = []

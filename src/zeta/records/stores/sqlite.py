@@ -825,6 +825,26 @@ class SqliteEventStore:
         self.connection.commit()
         return cursor.rowcount == 1
 
+    def queue_claim_is_current(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        claim_token: str,
+    ) -> bool:
+        row = self.connection.execute(
+            """
+            SELECT 1
+            FROM queue_items
+            WHERE queue_item_id = ?
+              AND claimed_by = ?
+              AND claimed_token = ?
+              AND status = 'claimed'
+            LIMIT 1
+            """,
+            (queue_item_id, worker_name, claim_token),
+        ).fetchone()
+        return row is not None
+
     def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:
         cursor = self.connection.execute(
             """

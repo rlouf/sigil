@@ -77,6 +77,19 @@ class AttemptHeartbeatStore(Protocol):
         """Refresh a running attempt heartbeat and its queue lease."""
 
 
+@runtime_checkable
+class QueueClaimOwnershipStore(Protocol):
+    """Operational queue index used to fence lifecycle writes."""
+
+    def queue_claim_is_current(
+        self,
+        queue_item_id: str,
+        worker_name: str,
+        claim_token: str,
+    ) -> bool:
+        """Return whether the queue claim token still owns the item."""
+
+
 @dataclass(frozen=True)
 class DispatchOutcome:
     """Result of accepting and routing one incoming event."""
@@ -273,6 +286,8 @@ class EventDispatcher:
         events: list[Event] = []
         attempt_number = self._next_attempt_number(queue_item_id)
         attempt_id = f"att_{queue_item_id}_{attempt_number}"
+        if not self._queue_claim_is_current(queue_item_id):
+            return events
         events.append(
             self._append_queue_item_event(
                 triggering_event,
@@ -315,6 +330,8 @@ class EventDispatcher:
                     )
                 )
             except Exception as exc:
+                if not self._queue_claim_is_current(queue_item_id):
+                    return events
                 events.extend(
                     self._failed_agent_events(
                         exc,
@@ -330,6 +347,8 @@ class EventDispatcher:
         finally:
             await self._stop_attempt_heartbeat(heartbeat_task)
 
+        if not self._queue_claim_is_current(queue_item_id):
+            return events
         events.extend(
             self._terminal_agent_events(
                 result,
@@ -342,6 +361,17 @@ class EventDispatcher:
             )
         )
         return events
+
+    def _queue_claim_is_current(self, queue_item_id: str) -> bool:
+        if self.worker_name is None or self.claim_token is None:
+            return True
+        if not isinstance(self.event_sink, QueueClaimOwnershipStore):
+            return True
+        return self.event_sink.queue_claim_is_current(
+            queue_item_id,
+            self.worker_name,
+            self.claim_token,
+        )
 
     def _start_attempt_heartbeat(
         self,
