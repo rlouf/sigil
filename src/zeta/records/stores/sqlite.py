@@ -187,7 +187,9 @@ class SqliteEventStore:
             ).fetchall()
         }
         if "claimed_token" not in queue_columns:
-            self.connection.execute("ALTER TABLE queue_items ADD COLUMN claimed_token TEXT")
+            self.connection.execute(
+                "ALTER TABLE queue_items ADD COLUMN claimed_token TEXT"
+            )
         if "claim_token" not in attempt_columns:
             self.connection.execute("ALTER TABLE attempts ADD COLUMN claim_token TEXT")
         for name, kind in (

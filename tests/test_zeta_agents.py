@@ -151,7 +151,10 @@ Summarize the repo.
         ("name: Worker\ndescription: 1\n", "description"),
         ("name: Worker\ndescription: Worker\nenabled: maybe\n", "enabled"),
         ("name: Worker\ndescription: Worker\nresumable: later\n", "resumable"),
-        ("name: Worker\ndescription: Worker\naccepts: github.issue.opened\n", "accepts"),
+        (
+            "name: Worker\ndescription: Worker\naccepts: github.issue.opened\n",
+            "accepts",
+        ),
         ("name: Worker\ndescription: Worker\nreturns:\n  - 1\n", "returns"),
         ("name: Worker\ndescription: Worker\ntools:\n  - read\n  - 2\n", "tools"),
         ("name: Worker\ndescription: Worker\nschedules: hourly\n", "schedules"),
