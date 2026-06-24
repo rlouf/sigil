@@ -34,7 +34,7 @@ from zeta.records.stores import (
     Filter,
     InMemoryStore,
     SqliteEventStore,
-    SqliteStore,
+    SqliteObjectStore,
     Store,
     UnknownIdError,
     available_session_ids,
@@ -56,7 +56,7 @@ zeta_trace = SimpleNamespace(
     ObjectId=ObjectId,
     Ref=Ref,
     RefUpdate=RefUpdate,
-    SqliteStore=SqliteStore,
+    SqliteObjectStore=SqliteObjectStore,
     Store=Store,
     UnknownIdError=UnknownIdError,
     available_session_ids=available_session_ids,
@@ -135,7 +135,7 @@ def test_zeta_trace_move_ref_compares_expected_value(
     tmp_path: Path,
     store: zeta_trace.Store | None,
 ) -> None:
-    trace_store = store or zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    trace_store = store or zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     created = trace_store.move_ref("run/test/head", None, "sha256:first")
 
     assert created == zeta_trace.RefUpdate(
@@ -179,7 +179,7 @@ def test_zeta_trace_move_ref_expected_none_creates_only_when_absent(
     tmp_path: Path,
     store: zeta_trace.Store | None,
 ) -> None:
-    trace_store = store or zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    trace_store = store or zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
 
     trace_store.move_ref("run/test/head", None, "sha256:first")
 
@@ -251,7 +251,7 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "trace.sqlite3"
-    store = zeta_trace.SqliteStore(path)
+    store = zeta_trace.SqliteObjectStore(path)
     parent_id = store.put_object(
         zeta_trace.Object(kind="context", schema="v1", data={"text": "parent"})
     )
@@ -274,7 +274,7 @@ def test_zeta_trace_sqlite_persists_objects_refs_derivations_and_closure(
     )
     store.close()
 
-    reopened = zeta_trace.SqliteStore(path)
+    reopened = zeta_trace.SqliteObjectStore(path)
     assert reopened.get_object(parent_id) == zeta_trace.Object(
         kind="context", schema="v1", data={"text": "parent"}
     )
@@ -323,7 +323,7 @@ def test_zeta_trace_sqlite_reports_incompatible_substrate_schema(
     with pytest.raises(
         IncompatibleSchemaError, match="incompatible Zeta SQLite schema"
     ):
-        zeta_trace.SqliteStore(path, session_id="current")
+        zeta_trace.SqliteObjectStore(path, session_id="current")
 
 
 def test_sigil_trace_reinit_store_recreates_unified_database(
@@ -376,7 +376,7 @@ def seed_sigil_session_store(session_id: str, text: str) -> str:
 
 def seed_trace_store(path: Path, text: str, *, session_id: str | None = None) -> str:
     """Write one prompt object into a trace store path."""
-    store = zeta_trace.SqliteStore(path, session_id=session_id)
+    store = zeta_trace.SqliteObjectStore(path, session_id=session_id)
     prompt_id = store.put_object(
         zeta_trace.Object(
             kind="prompt",
@@ -393,13 +393,13 @@ def seed_trace_store(path: Path, text: str, *, session_id: str | None = None) ->
 
 def test_zeta_sqlite_store_read_only_rejects_writes(tmp_path: Path) -> None:
     path = tmp_path / "trace.sqlite3"
-    writer = zeta_trace.SqliteStore(path)
+    writer = zeta_trace.SqliteObjectStore(path)
     stored_id = writer.put_object(
         zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={})
     )
     writer.close()
 
-    reader = zeta_trace.SqliteStore(path, read_only=True)
+    reader = zeta_trace.SqliteObjectStore(path, read_only=True)
 
     assert reader.get_object(stored_id) is not None
     with pytest.raises(sqlite3.OperationalError):
@@ -413,7 +413,7 @@ def test_zeta_sqlite_store_opens_other_sessions_read_only(monkeypatch) -> None:
     monkeypatch.setenv("SIGIL_SESSION_ID", "current")
     prompt_id = seed_session_store("other", "from the other session")
 
-    store = zeta_trace.SqliteStore(
+    store = zeta_trace.SqliteObjectStore(
         zeta_trace.zeta_sqlite_path(),
         session_id="other",
         read_only=True,
@@ -423,7 +423,7 @@ def test_zeta_sqlite_store_opens_other_sessions_read_only(monkeypatch) -> None:
     assert store.get_object(prompt_id) is not None
     with pytest.raises(sqlite3.OperationalError):
         store.put_object(zeta_trace.Object(kind="prompt", schema="v1", data={}))
-    second = zeta_trace.SqliteStore(
+    second = zeta_trace.SqliteObjectStore(
         zeta_trace.zeta_sqlite_path(),
         session_id="other",
         read_only=True,
@@ -482,7 +482,7 @@ def test_sigil_zeta_trace_cli_log_all_sessions_prefixes_session_ids(
 def test_zeta_trace_sqlite_search_matches_data_and_filters_kind(
     tmp_path: Path,
 ) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     matching = store.put_object(
         zeta_trace.Object(
             kind="prompt", schema="v1", data={"text": "the Kubernetes incident"}
@@ -508,7 +508,7 @@ def test_zeta_trace_sqlite_search_matches_data_and_filters_kind(
 def test_zeta_trace_sqlite_search_treats_like_wildcards_literally(
     tmp_path: Path,
 ) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     percent = store.put_object(
         zeta_trace.Object(kind="prompt", schema="v1", data={"text": "100% done"})
     )
@@ -618,7 +618,7 @@ def test_sigil_zeta_trace_cli_smoke_with_sqlite_store(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     prompt_id = store.put_object(
         zeta_trace.Object(kind="prompt", schema="zeta.prompt.v1", data={})
     )
@@ -1334,8 +1334,8 @@ def test_zeta_chat_messages_trims_unanswered_tool_calls() -> None:
 
 
 def test_zeta_sqlite_store_batch_defers_commit(tmp_path: Path) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
-    reader = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
+    reader = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
 
     with store.batch():
         object_id = store.put_object(
@@ -1363,7 +1363,7 @@ def test_zeta_record_event_does_not_write_trace_timeline_batch() -> None:
 def test_zeta_trace_sqlite_answers_forward_derivation_queries(
     tmp_path: Path,
 ) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     first_input = store.put_object(
         zeta_trace.Object(kind="component", schema="v1", data={"text": "a"})
     )
@@ -1408,7 +1408,7 @@ def test_zeta_inmemory_store_answers_forward_derivation_queries() -> None:
 def test_zeta_trace_dedupes_forward_rows_for_repeated_derivations(
     tmp_path: Path,
 ) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     derivation = zeta_trace.Derivation(
         producer="test:v1",
         output_id="sha256:out",
@@ -1426,8 +1426,8 @@ def test_zeta_trace_derivation_ids_are_content_scoped_across_sessions(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "trace.sqlite3"
-    first = zeta_trace.SqliteStore(path, session_id="first")
-    second = zeta_trace.SqliteStore(path, session_id="second")
+    first = zeta_trace.SqliteObjectStore(path, session_id="first")
+    second = zeta_trace.SqliteObjectStore(path, session_id="second")
     derivation = zeta_trace.Derivation(
         producer="test:v1",
         output_id="sha256:out",
@@ -1450,7 +1450,7 @@ def test_zeta_trace_derivation_ids_are_content_scoped_across_sessions(
 
 
 def test_zeta_trace_resolves_refs_full_ids_and_prefixes(tmp_path: Path) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     object_id = store.put_object(
         zeta_trace.Object(kind="prompt", schema="v1", data={"text": "target"})
     )
@@ -1498,7 +1498,7 @@ def test_zeta_trace_resolver_raises_for_unknown_tokens() -> None:
 def test_zeta_trace_prefix_matching_treats_like_wildcards_literally(
     tmp_path: Path,
 ) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     store.put_object(zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1}))
 
     assert store.object_ids_with_prefix("sha256:%") == []
@@ -1507,7 +1507,7 @@ def test_zeta_trace_prefix_matching_treats_like_wildcards_literally(
 
 
 def test_zeta_trace_lists_objects_by_derivation_recency(tmp_path: Path) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     old = store.put_object(
         zeta_trace.Object(kind="prompt", schema="v1", data={"text": "old"})
     )
@@ -1558,7 +1558,7 @@ def test_zeta_inmemory_store_lists_objects_newest_first() -> None:
 
 
 def test_zeta_trace_sqlite_objects_filter_by_multiple_kinds(tmp_path: Path) -> None:
-    store = zeta_trace.SqliteStore(tmp_path / "trace.sqlite3")
+    store = zeta_trace.SqliteObjectStore(tmp_path / "trace.sqlite3")
     prompt = store.put_object(
         zeta_trace.Object(kind="prompt", schema="v1", data={"n": 1})
     )
@@ -2230,7 +2230,9 @@ def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
     tmp_path: Path,
 ) -> None:
     def seed_tool_result(session: str, call_id: str, created_at: float) -> None:
-        store = zeta_trace.SqliteStore(tmp_path / "zeta.sqlite3", session_id=session)
+        store = zeta_trace.SqliteObjectStore(
+            tmp_path / "zeta.sqlite3", session_id=session
+        )
         call_object_id = store.put_object(
             zeta_trace.Object(
                 kind="tool_call",
@@ -2267,7 +2269,7 @@ def test_sigil_zeta_trace_tools_all_sessions_sorts_by_trace_time(
     monkeypatch.setattr("sigil.cli.trace.available_session_ids", lambda: ["old", "new"])
     monkeypatch.setattr(
         "sigil.cli.trace.open_session_store",
-        lambda session: zeta_trace.SqliteStore(
+        lambda session: zeta_trace.SqliteObjectStore(
             tmp_path / "zeta.sqlite3",
             session_id=session,
             read_only=True,

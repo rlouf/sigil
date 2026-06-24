@@ -66,6 +66,7 @@ from zeta.records.stores import (
     Filter,
     MemoryEventStore,
     SqliteEventStore,
+    SqliteObjectStore,
     event_store_path,
 )
 from zeta.run import runs as zeta_kernel_runs
@@ -113,6 +114,16 @@ def test_zeta_events_exports_the_canonical_event_boundary() -> None:
     assert zeta_kernel_events.Event is Event
     assert not hasattr(zeta_kernel_events, "EventFilter")
     assert zeta_kernel_runs.Run(run_id="run_1", status="running").run_id == "run_1"
+
+
+def test_zeta_record_stores_exports_named_sqlite_stores() -> None:
+    import zeta.records.stores as stores
+
+    assert stores.SqliteEventStore is SqliteEventStore
+    assert stores.SqliteObjectStore is SqliteObjectStore
+    assert "SqliteObjectStore" in stores.__all__
+    assert "SqliteStore" not in stores.__all__
+    assert not hasattr(stores, "SqliteStore")
 
 
 def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:

@@ -3361,6 +3361,63 @@ def test_zeta_sqlite_event_store_does_not_patch_existing_projection_schema(
     assert "summary" not in attempt_columns
 
 
+def test_zeta_sqlite_event_store_serializes_threaded_appends(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    append_started = threading.Event()
+    release_append = threading.Event()
+    first_projection = threading.Event()
+    errors: list[BaseException] = []
+    original_projection = event_store._index_one_runtime_event
+
+    def blocked_first_projection(event: Event) -> None:
+        if not first_projection.is_set():
+            first_projection.set()
+            append_started.set()
+            assert release_append.wait(timeout=2.0)
+        original_projection(event)
+
+    event_store._index_one_runtime_event = blocked_first_projection
+
+    def append_event(event_id: str) -> None:
+        try:
+            event_store.append(
+                Event(
+                    id=event_id,
+                    event_type="github.issue.opened",
+                    source="github",
+                    payload={"id": event_id},
+                    idempotency_key=None,
+                    caused_by=None,
+                    session_id=None,
+                    run_id=None,
+                    turn_id=None,
+                    timestamp_ms=1,
+                )
+            )
+        except BaseException as error:
+            errors.append(error)
+
+    first = threading.Thread(target=append_event, args=("evt_thread_1",))
+    second = threading.Thread(target=append_event, args=("evt_thread_2",))
+
+    first.start()
+    assert append_started.wait(timeout=2.0)
+    second.start()
+    release_append.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert [event.id for event in event_store.list_events(Filter())] == [
+        "evt_thread_1",
+        "evt_thread_2",
+    ]
+
+
 def test_zeta_sqlite_event_store_rebuilds_projection_tables(
     tmp_path: Path,
 ) -> None:

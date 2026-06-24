@@ -17,7 +17,7 @@ from zeta.records.stores import (
     Filter,
     QueueClaim,
     SqliteEventStore,
-    SqliteStore,
+    SqliteObjectStore,
     zeta_sqlite_path,
 )
 from zeta.run.context import RuntimeContext
@@ -155,7 +155,7 @@ async def run_eventlog_rpc_request(
     )
 
     session_id = request.session_id or "default"
-    trace_store = SqliteStore(
+    trace_store = SqliteObjectStore(
         zeta_sqlite_path(runtime.state_dir),
         session_id=session_id,
     )
