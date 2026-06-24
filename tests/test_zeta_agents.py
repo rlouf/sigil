@@ -10,6 +10,7 @@ import pytest
 from zeta.agents.events import EventRegistry
 from zeta.agents.manifest import Manifest, ManifestError
 from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
+from zeta.agents.resources import load_event_registry, load_skill_registry
 from zeta.agents.returns import derive_returns_schema
 from zeta.agents.spec import (
     ScheduleEntry,
@@ -48,8 +49,10 @@ zeta_agents = SimpleNamespace(
     compile_agent_definition=compile_agent_definition,
     compile_agent_definitions=compile_agent_definitions,
     derive_returns_schema=derive_returns_schema,
+    load_event_registry=load_event_registry,
     load_spec=load_spec,
     load_specs=load_specs,
+    load_skill_registry=load_skill_registry,
     matches=matches,
     render_prompt=render_prompt,
     scheduled_event_type=scheduled_event_type,
@@ -108,6 +111,7 @@ User asked: {{ event.payload.text }}
     assert spec.accepts == ("slack.dm.received", "agent.slack-qa.scheduled")
     assert spec.returns == ("message.delivery.requested",)
     assert spec.tools == ("read",)
+    assert spec.skills == ()
     assert spec.schedules == (
         zeta_agents.ScheduleEntry(
             cron="* * * * *",
@@ -117,6 +121,57 @@ User asked: {{ event.payload.text }}
     assert spec.extensions == {"writes": {"paths": ["docs/**.md"]}}
     assert spec.instructions == "User asked: {{ event.payload.text }}\n"
     assert len(spec.sha256) == 64
+
+
+def test_zeta_agent_spec_loads_skills_as_core_metadata(tmp_path: Path) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "reviewer.md",
+            """---
+name: Reviewer
+description: Reviews changes.
+skills:
+  - code-review
+  - release-notes
+mode: strict
+---
+Review the change.
+""",
+        )
+    )
+
+    assert spec.skills == ("code-review", "release-notes")
+    assert spec.extensions == {"mode": "strict"}
+
+
+def test_zeta_agent_specs_load_only_flat_agent_files(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "top-level.md",
+        """---
+name: Top Level
+description: Loads as an agent.
+---
+Run.
+""",
+    )
+    for directory in ("skills", "events", "tools", "nested-agent"):
+        nested = agents_dir / directory
+        nested.mkdir()
+        _write_spec(
+            nested / "ignored.md",
+            """---
+name: Ignored
+description: Should not load.
+---
+Ignore.
+""",
+        )
+
+    specs = zeta_agents.load_specs(agents_dir)
+
+    assert [spec.slug for spec in specs] == ["top-level"]
 
 
 def test_zeta_agent_spec_adds_synthetic_schedule_event(
@@ -186,6 +241,7 @@ Summarize the repo.
         ),
         ("name: Worker\ndescription: Worker\nreturns:\n  - 1\n", "returns"),
         ("name: Worker\ndescription: Worker\ntools:\n  - read\n  - 2\n", "tools"),
+        ("name: Worker\ndescription: Worker\nskills:\n  - review\n  - 2\n", "skills"),
         ("name: Worker\ndescription: Worker\nschedules: hourly\n", "schedules"),
         (
             "name: Worker\ndescription: Worker\naccepts:\n"
@@ -313,6 +369,70 @@ Use a tool.
 
     with pytest.raises(zeta_agents.ManifestError, match="unknown tool 'Missing'"):
         zeta_agents.Manifest(tools=CapabilityRegistry()).validate(spec)
+
+
+def test_zeta_agent_manifest_rejects_unknown_skill(tmp_path: Path) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: Worker
+description: Does work.
+skills:
+  - missing
+---
+Use a skill.
+""",
+        )
+    )
+
+    with pytest.raises(zeta_agents.ManifestError, match="unknown skill 'missing'"):
+        zeta_agents.Manifest(skills={}).validate(spec)
+
+
+def test_zeta_agent_resource_loaders_read_flat_skills_and_events(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    skills_dir = agents_dir / "skills"
+    events_dir = agents_dir / "events"
+    skills_dir.mkdir(parents=True)
+    events_dir.mkdir()
+    _write_spec(skills_dir / "code-review.md", "Review for correctness.\n")
+    (events_dir / "github.pr.opened.yaml").write_text(
+        """schema:
+  type: object
+  required:
+    - title
+  properties:
+    title:
+      type: string
+""",
+        encoding="utf-8",
+    )
+    (events_dir / "release.ready.yml").write_text(
+        """type: object
+properties:
+  version:
+    type: string
+""",
+        encoding="utf-8",
+    )
+
+    skills = zeta_agents.load_skill_registry(agents_dir)
+    events = zeta_agents.load_event_registry(agents_dir)
+
+    assert skills.knows("code-review")
+    assert events.knows("github.pr.opened")
+    assert events.schema("github.pr.opened") == {
+        "type": "object",
+        "required": ["title"],
+        "properties": {"title": {"type": "string"}},
+    }
+    assert events.schema("release.ready") == {
+        "type": "object",
+        "properties": {"version": {"type": "string"}},
+    }
 
 
 def test_zeta_agent_manifest_allows_unvalidated_runtime_vocabularies(

@@ -18,6 +18,7 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "resumable",
         "accepts",
         "returns",
+        "skills",
         "tools",
         "schedules",
     }
@@ -46,6 +47,7 @@ class AgentSpec:
     resumable: bool = False
     accepts: tuple[str, ...] = ()
     returns: tuple[str, ...] = ()
+    skills: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
     schedules: tuple[ScheduleEntry, ...] = ()
     extensions: dict[str, Any] | None = None
@@ -89,6 +91,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             ),
             accepts=accepts,
             returns=string_tuple(frontmatter.get("returns", ()), "returns", path),
+            skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
             tools=string_tuple(frontmatter.get("tools", ()), "tools", path),
             schedules=schedules,
             extensions={
@@ -108,9 +111,6 @@ def load_specs(agents_dir: Path) -> tuple[AgentSpec, ...]:
         return ()
     specs: list[AgentSpec] = []
     for path in sorted(agents_dir.iterdir()):
-        if path.is_dir() and not path.is_symlink():
-            specs.extend(load_specs(path))
-            continue
         if path.suffix != ".md" or not path.is_file() or path.is_symlink():
             continue
         spec = load_spec(path)

@@ -22,17 +22,26 @@ class ToolResolver(Protocol):
     def resolve(self, name: str) -> Any: ...
 
 
+@runtime_checkable
+class SkillResolver(Protocol):
+    """Anything that can look up a skill by name."""
+
+    def knows(self, name: str) -> bool: ...
+
+
 @dataclass(frozen=True)
 class Manifest:
     """Deployment manifest used to validate authored agent specs."""
 
     tools: ToolResolver | None = None
+    skills: SkillResolver | Mapping[str, Any] | None = None
     events: EventRegistry | None = None
     extensions: Mapping[str, type[Any]] | None = None
 
     def validate(self, spec: AgentSpec) -> None:
         validate_prompt(spec)
         validate_tools(spec, self.tools)
+        validate_skills(spec, self.skills)
         validate_events(spec, self.events)
         validate_extensions(spec, self.extensions or {})
 
@@ -43,6 +52,21 @@ def validate_tools(spec: AgentSpec, registry: ToolResolver | None) -> None:
             raise ManifestError(f"agent {spec.slug!r} lists reserved tool {name!r}")
         if registry is not None and registry.resolve(name) is None:
             raise ManifestError(f"agent {spec.slug!r} lists unknown tool {name!r}")
+
+
+def validate_skills(
+    spec: AgentSpec,
+    registry: SkillResolver | Mapping[str, Any] | None,
+) -> None:
+    if registry is None:
+        return
+    for name in spec.skills:
+        if isinstance(registry, Mapping):
+            known = name in registry
+        else:
+            known = registry.knows(name)
+        if not known:
+            raise ManifestError(f"agent {spec.slug!r} lists unknown skill {name!r}")
 
 
 def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:

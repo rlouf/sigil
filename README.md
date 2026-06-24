@@ -104,6 +104,75 @@ plus prompt processing (a long prefill sends nothing), and
 flows; `llama-server --timeout` is a read/write timeout, not a generation
 cancellation guarantee.
 
+## Zeta Agent Runtime
+
+Zeta is the event-driven runtime underneath Sigil's agent workflows. It runs
+assistant/tool loops against an OpenAI-compatible model endpoint, records each
+model call and tool result as durable events, and projects those events into a
+trace graph for replay, inspection, and debugging.
+
+The runtime has two layers:
+
+- session turns, used by Sigil's `ask`, `propose`, and `do` workflows;
+- authored agents, which react to durable events, schedules, and eventually
+  project-specific integrations.
+
+Authored agents live in a flat `agents/` directory. Each top-level Markdown
+file is one agent. Shared resource directories sit beside those files and are
+not recursively interpreted as agents:
+
+```text
+agents/
+  release-manager.md
+  support-triage.md
+  skills/
+    code-review.md
+    release-notes.md
+  events/
+    github.pr.opened.yaml
+    release.summary.ready.yaml
+  tools/
+```
+
+An agent file uses YAML frontmatter for routing and grants, followed by a
+Jinja prompt body rendered with one root variable, `event`:
+
+```markdown
+---
+name: Release Manager
+description: Prepares release summaries from repository events.
+accepts:
+  - github.pr.opened
+returns:
+  - release.summary.ready
+tools:
+  - read
+  - grep
+skills:
+  - code-review
+schedules:
+  - cron: "0 9 * * 1"
+    timezone: Europe/Paris
+resumable: true
+---
+Review {{ event.payload.title }} and produce a concise release summary.
+```
+
+Core frontmatter fields are `name`, `description`, `enabled`, `resumable`,
+`accepts`, `returns`, `tools`, `skills`, and `schedules`. Unknown fields are
+kept as resource extensions for hosts that need extra policy.
+
+Files under `agents/events/` define optional event payload JSON Schemas. The
+file stem is the event type, so `github.pr.opened.yaml` registers
+`github.pr.opened`. The file may either be a JSON Schema object directly or an
+object with a `schema:` field whose value is the JSON Schema. Files under
+`agents/skills/` define shared Markdown skills that agents may explicitly list
+in `skills:`.
+
+`agents/tools/` is reserved for project-local tool definitions. Runtime tool
+execution still goes through Zeta's capability registry and Sigil's built-in
+tools.
+
 ## Zeta JSON-RPC Protocol
 
 `zeta rpc --stdio` serves a newline-delimited JSON-RPC 2.0 protocol. Each line
