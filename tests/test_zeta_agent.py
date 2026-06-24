@@ -4035,7 +4035,7 @@ def test_zeta_cli_run_once_routes_unhandled_event(tmp_path: Path) -> None:
     assert [item.status for item in items] == ["unhandled"]
 
 
-def test_zeta_cli_schedule_once_requests_due_schedules(tmp_path: Path) -> None:
+def test_zeta_cli_schedule_once_publishes_due_schedules(tmp_path: Path) -> None:
     agents_dir = tmp_path / "agents"
     agents_dir.mkdir()
     (agents_dir / "scheduled.md").write_text(
@@ -4062,9 +4062,9 @@ Summarize the repo.
 
     assert result.exit_code == 0
     assert result.output.startswith("requested agent.scheduled.scheduled evt_")
-    assert [event.event_type for event in events] == ["rpc.requested"]
-    assert events[0].payload["method"] == "events.publish"
-    assert events[0].payload["params"]["event_type"] == "agent.scheduled.scheduled"
+    assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
+    assert events[0].source == "zeta:scheduler"
+    assert events[0].payload == {}
 
 
 def test_zeta_scheduler_builds_project_services(tmp_path: Path) -> None:
@@ -4563,7 +4563,7 @@ def test_zeta_local_runtime_cron_matcher_supports_basic_v0_shapes(
     )
 
 
-def test_zeta_scheduler_requests_due_schedules_via_eventlog_rpc_once_per_minute(
+def test_zeta_scheduler_publishes_due_schedules_directly_once_per_minute(
     tmp_path: Path,
 ) -> None:
     agents_dir = tmp_path / "agents"
@@ -4597,20 +4597,16 @@ Summarize the repo.
     finally:
         event_store.close()
 
-    assert [event.event_type for event in first] == ["rpc.requested"]
+    assert [event.event_type for event in first] == ["agent.scheduled.scheduled"]
     assert second == []
-    assert [event.event_type for event in events] == ["rpc.requested"]
-    request = first[0]
-    assert request.source == "zeta:scheduler"
-    assert request.payload["method"] == "events.publish"
+    assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
+    scheduled_event = first[0]
+    assert scheduled_event.source == "zeta:scheduler"
+    assert scheduled_event.payload == {}
     assert (
-        request.payload["request_id"]
+        scheduled_event.idempotency_key
         == "schedule:scheduled:* * * * *:2026-06-22T12:34:00+00:00"
     )
-    assert request.payload["params"]["event_type"] == "agent.scheduled.scheduled"
-    assert request.payload["params"]["source"] == "zeta:scheduler"
-    assert request.payload["params"]["payload"] == {}
-    assert request.payload["params"]["idempotency_key"] == request.payload["request_id"]
 
 
 def test_zeta_local_runtime_scheduled_event_is_accepted_by_agent(
@@ -4673,7 +4669,7 @@ Summarize the repo.
     monkeypatch.setattr(zeta_worker, "compile_agent_definitions", compile_agents)
     event_store = zeta_events.SqliteEventStore(event_store_path(tmp_path / ".zeta"))
     specs = zeta_agent_spec.load_specs(tmp_path / "agents")
-    requests = zeta_scheduling.request_due_schedules(
+    scheduled_events = zeta_scheduling.request_due_schedules(
         event_store,
         specs,
         now=datetime(2026, 6, 22, 12, 34, tzinfo=UTC),
@@ -4685,11 +4681,6 @@ Summarize the repo.
     )
 
     try:
-        rpc_message = asyncio.run(zeta_worker.run_once(runtime))
-        scheduled_events = runtime.events.list_events(
-            zeta_events.Filter(event_type="agent.scheduled.scheduled")
-        )
-        calls_after_rpc = list(calls)
         message = asyncio.run(zeta_worker.run_once(runtime))
         items = zeta_queue.project_queue_items(
             runtime.events.list_events(zeta_events.Filter())
@@ -4697,10 +4688,8 @@ Summarize the repo.
     finally:
         runtime.close()
 
-    assert rpc_message == f"rpc {requests[0].id}"
     assert [event.payload for event in scheduled_events] == [{}]
-    assert calls_after_rpc == []
-    assert message == f"ran {items[0].queue_item_id}"
+    assert message == f"ran qi_{scheduled_events[0].id}"
     assert [call.triggering_event.event_type for call in calls] == [
         "agent.scheduled.scheduled"
     ]

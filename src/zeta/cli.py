@@ -263,8 +263,7 @@ def schedule(project_root: Path, state_dir: Path | None, once: bool) -> int:
         while True:
             requested = scheduling.request_due_project_schedules(runtime)
             for request in requested:
-                event_type = request.payload["params"]["event_type"]
-                click.echo(f"requested {event_type} {request.id}")
+                click.echo(f"requested {request.event_type} {request.id}")
             if once:
                 return 0
             time.sleep(seconds_until_next_minute())

@@ -6,13 +6,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 from zoneinfo import ZoneInfo
 
 from zeta.agents.spec import AgentSpec, ScheduleEntry, load_specs, scheduled_event_type
 from zeta.events import DraftEvent, Event
 from zeta.records.stores import EventWriter, SqliteEventStore, event_store_path
-from zeta.rpc.routes import rpc_requested_draft
 
 
 @dataclass(frozen=True)
@@ -74,14 +72,7 @@ def request_due_schedules(
             if not cron_matches(schedule.cron, scheduled_time):
                 continue
             draft = schedule_event_draft(spec, schedule, scheduled_time)
-            outcome = event_sink.accept(
-                rpc_requested_draft(
-                    "events.publish",
-                    draft_event_params(draft),
-                    request_id=draft.idempotency_key,
-                    source="zeta:scheduler",
-                )
-            )
+            outcome = event_sink.accept(draft)
             if outcome.inserted:
                 requested.append(outcome.event)
     return requested
@@ -102,19 +93,6 @@ def schedule_event_draft(
             scheduled_time,
         ),
     )
-
-
-def draft_event_params(draft: DraftEvent) -> dict[str, Any]:
-    return {
-        "event_type": draft.event_type,
-        "source": draft.source,
-        "payload": dict(draft.payload),
-        "idempotency_key": draft.idempotency_key,
-        "caused_by": draft.caused_by,
-        "session_id": draft.session_id,
-        "run_id": draft.run_id,
-        "turn_id": draft.turn_id,
-    }
 
 
 def schedule_current_time(schedule: ScheduleEntry, now: datetime) -> datetime:
