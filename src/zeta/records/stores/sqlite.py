@@ -276,6 +276,27 @@ class SqliteEventStore:
         if event.event_type.startswith("runtime.attempt."):
             self._index_one_attempt(event)
 
+    def rebuild_projections(self) -> int:
+        _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+        try:
+            events = self.list_events(Filter())
+            self.connection.executescript(
+                """
+                DELETE FROM attempt_results;
+                DELETE FROM attempts;
+                DELETE FROM queue_items;
+                DELETE FROM session_mappings;
+                """
+            )
+            for event in events:
+                self._index_one_session_mapping(event)
+                self._index_one_runtime_event(event)
+            self.connection.commit()
+            return len(events)
+        except Exception:
+            self.connection.rollback()
+            raise
+
     def ensure_pending_queue_item(self, event: Event) -> str:
         queue_item_id = pending_queue_item_id(event)
         self.connection.execute(

@@ -3305,6 +3305,83 @@ def test_zeta_sqlite_event_store_projects_runtime_lifecycle_tables(
     assert dict(session_mapping_row) == {"session_id": "repo", "run_id": "run-1"}
 
 
+def test_zeta_sqlite_event_store_rebuilds_projection_tables(
+    tmp_path: Path,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+
+    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        return {
+            "final_answer": "handled issue",
+            "events": [{"type": "issue.triaged", "event": run.triggering_event.id}],
+            "tool_calls": [{"name": "read"}],
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        }
+
+    dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        executors=[
+            zeta_dispatch.ExecutableAgent(
+                zeta_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=run_agent,
+            )
+        ],
+    )
+    dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent(
+            "github.issue.opened",
+            "github",
+            {},
+            session_id="repo",
+            run_id="run-1",
+        ),
+    )
+    expected_queue_items = event_store.list_queue_items()
+    expected_attempts = event_store.list_attempts()
+    expected_session_mappings = [
+        dict(row)
+        for row in event_store.connection.execute(
+            """
+            SELECT session_id, run_id, updated_at
+            FROM session_mappings
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+    ]
+
+    event_store.connection.executescript(
+        """
+        DELETE FROM attempt_results;
+        DELETE FROM attempts;
+        DELETE FROM queue_items;
+        DELETE FROM session_mappings;
+        """
+    )
+    event_store.connection.commit()
+
+    rebuilt = event_store.rebuild_projections()
+    replayed = event_store.rebuild_projections()
+
+    assert rebuilt == len(event_store.list_events(zeta_events.Filter()))
+    assert replayed == rebuilt
+    assert event_store.list_queue_items() == expected_queue_items
+    assert event_store.list_attempts() == expected_attempts
+    assert [
+        dict(row)
+        for row in event_store.connection.execute(
+            """
+            SELECT session_id, run_id, updated_at
+            FROM session_mappings
+            ORDER BY session_id ASC
+            """
+        ).fetchall()
+    ] == expected_session_mappings
+
+
 def test_zeta_sqlite_event_store_projects_attempt_result_details(
     tmp_path: Path,
 ) -> None:
