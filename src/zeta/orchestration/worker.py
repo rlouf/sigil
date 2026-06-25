@@ -3,17 +3,29 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from zeta.agents.resources import load_agent_project, validate_agent_project
+from jsonschema import Draft202012Validator
+
+from zeta.agents.manifest import PluginResolver, selected_plugin_event
+from zeta.agents.resources import (
+    AgentProject,
+    load_agent_project,
+    validate_agent_project,
+)
+from zeta.agents.spec import EgressBinding, IngressBinding
 from zeta.capabilities.registry import CapabilityRegistry
-from zeta.events import Event
+from zeta.events import DraftEvent, Event
 from zeta.orchestration.agents import (
+    AgentDefinition,
     AgentInvocation,
+    EventPattern,
     ExecutableAgent,
     agent_session_id,
     compile_agent_definitions,
@@ -47,6 +59,7 @@ class WorkerServices:
     state_dir: Path
     events: SqliteEventStore
     tool_registry: CapabilityRegistry = field(default_factory=CapabilityRegistry)
+    plugin_resolver: PluginResolver | None = None
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
 
@@ -59,6 +72,7 @@ def build_worker_services(
     project_root: Path,
     state_dir: Path | None = None,
     tool_registry: CapabilityRegistry | None = None,
+    plugin_resolver: PluginResolver | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = (
@@ -71,6 +85,7 @@ def build_worker_services(
         state_dir=resolved_state_dir,
         events=SqliteEventStore(event_store_path(resolved_state_dir)),
         tool_registry=tool_registry or CapabilityRegistry(),
+        plugin_resolver=plugin_resolver,
     )
 
 
@@ -91,17 +106,205 @@ async def run_once(runtime: WorkerServices) -> str:
 
 
 def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
-    project = load_agent_project(runtime.project_root / "agents")
+    project = load_agent_project(
+        runtime.project_root / "agents",
+        plugin_resolver=runtime.plugin_resolver,
+    )
     validate_agent_project(project)
     return tuple(
-        agent
-        for spec in project.specs
-        for agent in compile_agent_definitions(
-            spec,
-            event_registry=project.events,
-            run_turn=project_agent_run_turn(runtime),
-        )
+        [
+            *(
+                agent
+                for spec in project.specs
+                for agent in compile_agent_definitions(
+                    spec,
+                    event_registry=project.events,
+                    run_turn=project_agent_run_turn(runtime),
+                )
+            ),
+            *project_egress_executors(project),
+        ]
     )
+
+
+def project_egress_executors(
+    project: AgentProject,
+) -> tuple[ExecutableAgent, ...]:
+    executors: list[ExecutableAgent] = []
+    for spec in project.specs:
+        for index, binding in enumerate(spec.egress):
+            plugin = project.plugins.get(binding.sink)
+            if plugin is None:
+                continue
+            event_type = selected_plugin_event(
+                binding.accepts,
+                plugin.egress,
+                "egress sink",
+                binding.sink,
+                "accept",
+            )
+            handler = plugin.egress_handlers.get(event_type)
+            if handler is None:
+                continue
+            agent_id = f"egress:{spec.slug}:{index}:{binding.sink}:{event_type}"
+            executors.append(
+                ExecutableAgent(
+                    AgentDefinition(
+                        agent_id,
+                        (EventPattern(event_type),),
+                        dispatch_mode="one_shot",
+                    ),
+                    run=egress_runner(binding, handler),
+                )
+            )
+    return tuple(executors)
+
+
+def egress_runner(binding: EgressBinding, handler):
+    async def run(invocation: AgentInvocation) -> dict[str, Any]:
+        event = invocation.triggering_event
+        idempotency_key = egress_idempotency_key(binding, event)
+        await invocation.publish(
+            DraftEvent(
+                "runtime.egress.started",
+                f"egress:{binding.sink}",
+                {
+                    "sink": binding.sink,
+                    "event_id": event.id,
+                    "event_type": event.event_type,
+                    "idempotency_key": idempotency_key,
+                },
+                idempotency_key=f"runtime.egress.started:{idempotency_key}",
+            )
+        )
+        try:
+            result = handler(event, binding, idempotency_key)
+            if inspect.isawaitable(result):
+                result = await result
+            result_payload = dict(result or {})
+        except Exception as exc:
+            await invocation.publish(
+                DraftEvent(
+                    "runtime.egress.failed",
+                    f"egress:{binding.sink}",
+                    {
+                        "sink": binding.sink,
+                        "event_id": event.id,
+                        "event_type": event.event_type,
+                        "idempotency_key": idempotency_key,
+                        "error": str(exc),
+                    },
+                    idempotency_key=f"runtime.egress.failed:{idempotency_key}",
+                )
+            )
+            raise
+        await invocation.publish(
+            DraftEvent(
+                "runtime.egress.completed",
+                f"egress:{binding.sink}",
+                {
+                    "sink": binding.sink,
+                    "event_id": event.id,
+                    "event_type": event.event_type,
+                    "idempotency_key": idempotency_key,
+                    "result": result_payload,
+                },
+                idempotency_key=f"runtime.egress.completed:{idempotency_key}",
+            )
+        )
+        return {
+            "egress": {
+                "sink": binding.sink,
+                "event_id": event.id,
+                "result": result_payload,
+            }
+        }
+
+    return run
+
+
+async def run_ingress_once(runtime: WorkerServices) -> int:
+    project = load_agent_project(
+        runtime.project_root / "agents",
+        plugin_resolver=runtime.plugin_resolver,
+    )
+    validate_agent_project(project)
+    inserted = 0
+    for spec in project.specs:
+        for binding in spec.ingress:
+            plugin = project.plugins.get(binding.source)
+            if plugin is None:
+                continue
+            event_type = selected_plugin_event(
+                binding.produces,
+                plugin.ingress,
+                "ingress source",
+                binding.source,
+                "produce",
+            )
+            poller = plugin.ingress_pollers.get(event_type)
+            if poller is None:
+                continue
+            drafts = poller(binding)
+            if inspect.isawaitable(drafts):
+                drafts = await drafts
+            for draft in cast(Iterable[DraftEvent], drafts):
+                if draft.event_type != event_type:
+                    raise RuntimeError(
+                        f"ingress source {binding.source!r} produced {draft.event_type!r}, "
+                        f"expected {event_type!r}"
+                    )
+                validate_event_payload(project.events, draft)
+                outcome = runtime.events.accept(
+                    DraftEvent(
+                        draft.event_type,
+                        draft.source,
+                        draft.payload,
+                        idempotency_key=ingress_idempotency_key(binding, draft),
+                        caused_by=draft.caused_by,
+                        session_id=draft.session_id,
+                        run_id=draft.run_id,
+                        turn_id=draft.turn_id,
+                    )
+                )
+                if outcome.inserted:
+                    inserted += 1
+    return inserted
+
+
+async def run_ingress_forever(
+    runtime: WorkerServices,
+    *,
+    poll_interval_seconds: float = 1.0,
+    stop_event: asyncio.Event | None = None,
+) -> None:
+    while stop_event is None or not stop_event.is_set():
+        await run_ingress_once(runtime)
+        await asyncio.sleep(poll_interval_seconds)
+
+
+def validate_event_payload(events, draft: DraftEvent) -> None:
+    schema = events.schema(draft.event_type)
+    if schema is not None:
+        Draft202012Validator(schema).validate(dict(draft.payload))
+
+
+def ingress_idempotency_key(binding: IngressBinding, draft: DraftEvent) -> str:
+    if binding.idempotency_key is None:
+        raise RuntimeError(
+            f"ingress source {binding.source!r} requires idempotency_key"
+        )
+    return render_template(binding.idempotency_key, draft)
+
+
+def egress_idempotency_key(binding: EgressBinding, event: Event) -> str:
+    if binding.idempotency_key is None:
+        return f"{binding.sink}:{event.id}"
+    return render_template(binding.idempotency_key, event)
+
+
+def render_template(template: str, event: DraftEvent | Event) -> str:
+    return template.format(event=event, **dict(event.payload))
 
 
 def project_agent_run_turn(runtime: WorkerServices):
@@ -221,7 +424,9 @@ def enqueue_pending_events(events: SqliteEventStore) -> int:
 
 
 def is_runtime_event(event: Event) -> bool:
-    return event.event_type.startswith(("runtime.queue_item.", "runtime.attempt."))
+    return event.event_type.startswith(
+        ("runtime.queue_item.", "runtime.attempt.", "runtime.egress.")
+    )
 
 
 def pending_rpc_request(runtime: WorkerServices) -> Event | None:
@@ -381,39 +586,104 @@ async def run_forever(
     stop_event: asyncio.Event | None = None,
 ) -> None:
     running: set[asyncio.Task[str]] = set()
+    ingress_task = start_ingress_task(
+        runtime,
+        poll_interval_seconds=poll_interval_seconds,
+        stop_event=stop_event,
+    )
+    try:
+        await run_worker_loop(
+            runtime,
+            running,
+            poll_interval_seconds=poll_interval_seconds,
+            stop_event=stop_event,
+        )
+    finally:
+        await stop_ingress_task(ingress_task)
+        await log_worker_results(running)
+
+
+def start_ingress_task(
+    runtime: WorkerServices,
+    *,
+    poll_interval_seconds: float,
+    stop_event: asyncio.Event | None,
+) -> asyncio.Task[None] | None:
+    if runtime.plugin_resolver is None:
+        return None
+    return asyncio.create_task(
+        run_ingress_forever(
+            runtime,
+            poll_interval_seconds=poll_interval_seconds,
+            stop_event=stop_event,
+        )
+    )
+
+
+async def run_worker_loop(
+    runtime: WorkerServices,
+    running: set[asyncio.Task[str]],
+    *,
+    poll_interval_seconds: float,
+    stop_event: asyncio.Event | None,
+) -> None:
     should_refill = True
     while stop_event is None or not stop_event.is_set():
         if should_refill:
-            while len(running) < runtime.max_concurrent:
-                running.add(asyncio.create_task(run_once(runtime)))
+            refill_worker_tasks(runtime, running)
         if not running:
             await asyncio.sleep(poll_interval_seconds)
             should_refill = True
             continue
-        done, running = await asyncio.wait(
+        done, running_tasks = await asyncio.wait(
             running,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        finished = {task for task in running if task.done()}
-        if finished:
-            done.update(finished)
-            running.difference_update(finished)
-        saw_empty_queue = False
-        for task in done:
-            if _run_once_task_result(task) == "queue empty":
-                saw_empty_queue = True
+        running.clear()
+        running.update(running_tasks)
+        done.update(reap_finished_tasks(running))
+        saw_empty_queue = task_results_saw_empty_queue(done)
         should_refill = not saw_empty_queue
         if saw_empty_queue and not running:
             await asyncio.sleep(poll_interval_seconds)
             should_refill = True
-    if running:
-        results = await asyncio.gather(*running, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception):
-                logger.error(
-                    "queue worker task failed",
-                    exc_info=(type(result), result, result.__traceback__),
-                )
+
+
+def refill_worker_tasks(
+    runtime: WorkerServices,
+    running: set[asyncio.Task[str]],
+) -> None:
+    while len(running) < runtime.max_concurrent:
+        running.add(asyncio.create_task(run_once(runtime)))
+
+
+def reap_finished_tasks(running: set[asyncio.Task[str]]) -> set[asyncio.Task[str]]:
+    finished = {task for task in running if task.done()}
+    running.difference_update(finished)
+    return finished
+
+
+def task_results_saw_empty_queue(tasks: set[asyncio.Task[str]]) -> bool:
+    return any(_run_once_task_result(task) == "queue empty" for task in tasks)
+
+
+async def stop_ingress_task(task: asyncio.Task[None] | None) -> None:
+    if task is None:
+        return
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+
+async def log_worker_results(running: set[asyncio.Task[str]]) -> None:
+    if not running:
+        return
+    results = await asyncio.gather(*running, return_exceptions=True)
+    for result in results:
+        if isinstance(result, Exception):
+            logger.error(
+                "queue worker task failed",
+                exc_info=(type(result), result, result.__traceback__),
+            )
 
 
 def _run_once_task_result(task: asyncio.Task[str]) -> str | None:

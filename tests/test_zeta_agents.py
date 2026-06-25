@@ -41,6 +41,8 @@ from zeta.capabilities.types import (
 from zeta.events import DraftEvent, Event
 from zeta.orchestration import dispatch as zeta_dispatch
 from zeta.orchestration import queue as zeta_queue
+from zeta.orchestration import scheduling as zeta_scheduling
+from zeta.orchestration import worker as zeta_worker
 from zeta.orchestration.agents import (
     AgentDefinition,
     EventPattern,
@@ -103,7 +105,17 @@ def _read_capability() -> RegisteredCapability:
 def _slack_plugin(
     *,
     message_schema: dict[str, Any] | None = None,
+    ingress_poller: Callable[..., Any] | None = None,
+    egress_handler: Callable[..., Any] | None = None,
 ) -> AgentPlugin:
+    ingress_pollers = (
+        {"slack.dm.received": ingress_poller} if ingress_poller is not None else {}
+    )
+    egress_handlers = (
+        {"slack.message.send.requested": egress_handler}
+        if egress_handler is not None
+        else {}
+    )
     return zeta_agents.AgentPlugin(
         name="slack",
         events={
@@ -149,6 +161,8 @@ def _slack_plugin(
                 "additionalProperties": False,
             }
         },
+        ingress_pollers=ingress_pollers,
+        egress_handlers=egress_handlers,
     )
 
 
@@ -923,6 +937,179 @@ Reply.
 
     with pytest.raises(zeta_agents.ManifestError, match=message):
         zeta_agents.validate_agent_project(project)
+
+
+def test_zeta_ingress_once_appends_plugin_events(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Replies to Slack support messages.
+accepts:
+  - slack.dm.received
+ingress:
+  - source: slack
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+---
+Reply.
+""",
+    )
+
+    def poll_slack(binding: IngressBinding) -> list[DraftEvent]:
+        assert binding.filter == {"channel_ids": ["C123"]}
+        return [
+            zeta_events.DraftEvent(
+                "slack.dm.received",
+                "slack",
+                {
+                    "team_id": "T1",
+                    "channel_id": "C123",
+                    "message_ts": "42",
+                    "text": "hello",
+                },
+            )
+        ]
+
+    plugin = _slack_plugin(
+        message_schema={
+            "type": "object",
+            "required": ["team_id", "channel_id", "message_ts", "text"],
+            "properties": {
+                "team_id": {"type": "string"},
+                "channel_id": {"type": "string"},
+                "message_ts": {"type": "string"},
+                "text": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        ingress_poller=poll_slack,
+    )
+    runtime = zeta_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        plugin_resolver=PluginMap(plugin),
+    )
+
+    try:
+        inserted = asyncio.run(zeta_worker.run_ingress_once(runtime))
+        events = runtime.events.list_events(
+            zeta_events.Filter(event_type="slack.dm.received")
+        )
+    finally:
+        runtime.close()
+
+    assert inserted == 1
+    assert len(events) == 1
+    assert events[0].source == "slack"
+    assert events[0].payload["text"] == "hello"
+    assert events[0].idempotency_key == "slack:message:T1:C123:42"
+
+
+def test_zeta_egress_binding_handles_returned_event(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str]] = []
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Sends Slack support messages.
+returns:
+  - slack.message.send.requested
+egress:
+  - sink: slack
+    filter:
+      channel_ids: ["C123"]
+---
+Send.
+""",
+    )
+
+    async def send_slack(
+        event: Event,
+        binding: EgressBinding,
+        idempotency_key: str,
+    ) -> dict[str, str]:
+        assert binding.filter == {"channel_ids": ["C123"]}
+        calls.append((event.payload["text"], idempotency_key))
+        return {"provider_message_id": "m1"}
+
+    runtime = zeta_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        plugin_resolver=PluginMap(_slack_plugin(egress_handler=send_slack)),
+    )
+    runtime.events.accept(
+        zeta_events.DraftEvent(
+            "slack.message.send.requested",
+            "agent:support",
+            {"channel_id": "C123", "text": "hello"},
+        )
+    )
+
+    try:
+        message = asyncio.run(zeta_worker.run_once(runtime))
+        egress_events = runtime.events.list_events(
+            zeta_events.Filter(event_type_prefix="runtime.egress.")
+        )
+        queue_items = zeta_queue.project_queue_items(
+            runtime.events.list_events(zeta_events.Filter())
+        )
+    finally:
+        runtime.close()
+
+    assert message.startswith("ran qi_")
+    assert calls == [("hello", f"slack:{egress_events[0].caused_by}")]
+    assert [event.event_type for event in egress_events] == [
+        "runtime.egress.started",
+        "runtime.egress.completed",
+    ]
+    assert egress_events[1].payload["result"] == {"provider_message_id": "m1"}
+    assert [item.status for item in queue_items] == ["completed"]
+
+
+def test_zeta_scheduler_loads_project_with_plugin_bindings(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "scheduled.md",
+        """---
+name: Scheduled
+description: Sends scheduled Slack updates.
+returns:
+  - slack.message.send.requested
+schedules:
+  - cron: "* * * * *"
+egress:
+  - sink: slack
+    accepts: slack.message.send.requested
+    filter:
+      channel_ids: ["C123"]
+---
+Send a scheduled update.
+""",
+    )
+    runtime = zeta_scheduling.build_scheduler_services(
+        project_root=tmp_path,
+        plugin_resolver=PluginMap(_slack_plugin()),
+    )
+
+    try:
+        events = zeta_scheduling.request_due_project_schedules(runtime)
+    finally:
+        runtime.close()
+
+    assert [event.event_type for event in events] == ["agent.scheduled.scheduled"]
 
 
 def test_zeta_agent_manifest_allows_unvalidated_runtime_vocabularies(

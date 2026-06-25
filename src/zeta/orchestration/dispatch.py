@@ -833,7 +833,10 @@ class EventDispatcher:
                 run_id=draft.run_id or run_id,
                 turn_id=draft.turn_id or triggering_event.turn_id,
             )
-            outcome = await self.publish_and_run(tagged)
+            if tagged.event_type.startswith("runtime.egress."):
+                outcome = await self.publish_event(tagged)
+            else:
+                outcome = await self.publish_and_run(tagged)
             return outcome.event
 
         return publish

@@ -1,6 +1,6 @@
 """Deployment manifest validation for authored agents."""
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -10,6 +10,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from zeta.agents.events import EventRegistry
 from zeta.agents.prompts import validate_prompt
 from zeta.agents.spec import AgentSpec, EgressBinding, IngressBinding
+from zeta.events import DraftEvent, Event
 
 RESERVED_TOOL_NAMES = frozenset({"__return"})
 
@@ -32,6 +33,16 @@ class SkillResolver(Protocol):
     def knows(self, name: str) -> bool: ...
 
 
+PluginIngressPoller = Callable[
+    [IngressBinding],
+    Iterable[DraftEvent] | Awaitable[Iterable[DraftEvent]],
+]
+PluginEgressHandler = Callable[
+    [Event, EgressBinding, str],
+    Mapping[str, Any] | None | Awaitable[Mapping[str, Any] | None],
+]
+
+
 @dataclass(frozen=True)
 class AgentPlugin:
     """Static ingress/egress plugin metadata used by Zeta core validation."""
@@ -40,6 +51,8 @@ class AgentPlugin:
     events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
     ingress: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
     egress: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
+    ingress_pollers: Mapping[str, PluginIngressPoller] = field(default_factory=dict)
+    egress_handlers: Mapping[str, PluginEgressHandler] = field(default_factory=dict)
 
 
 @runtime_checkable
