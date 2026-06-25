@@ -60,18 +60,23 @@ class DefaultModelGateway:
         stream: Any | None = None,
         telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> ModelOutput:
+        api = getattr(config, "model_api", None)
+        options = {
+            "api": api,
+            "tools": model_input.tools or [],
+            "tool_choice": model_input.tool_choice,
+            "selected_model": getattr(config, "model_name", None),
+            "selected_url": getattr(config, "model_url", None),
+            "stream_sink": stream,
+            "telemetry_sink": telemetry_sink,
+            "thinking": getattr(config, "thinking", None),
+        }
+        if api == CODEX_RESPONSES_API:
+            options["session_id"] = getattr(config, "model_session_id", None)
         assistant = await asyncio.to_thread(
             chat_completion_messages,
             model_input.messages,
-            api=getattr(config, "model_api", None),
-            tools=model_input.tools or [],
-            tool_choice=model_input.tool_choice,
-            selected_model=getattr(config, "model_name", None),
-            selected_url=getattr(config, "model_url", None),
-            session_id=getattr(config, "model_session_id", None),
-            stream_sink=stream,
-            telemetry_sink=telemetry_sink,
-            thinking=getattr(config, "thinking", None),
+            **options,
         )
         return ModelOutput(message=assistant)
 
