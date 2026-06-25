@@ -153,14 +153,27 @@ skills:
 schedules:
   - cron: "0 9 * * 1"
     timezone: Europe/Paris
+ingress:
+  - source: slack
+    produces: slack.dm.received
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+egress:
+  - sink: slack
+    accepts: slack.message.send.requested
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:send:{event.id}"
 resumable: true
 ---
 Review {{ event.payload.title }} and produce a concise release summary.
 ```
 
 Core frontmatter fields are `name`, `description`, `enabled`, `resumable`,
-`accepts`, `returns`, `tools`, `skills`, and `schedules`. Unknown fields are
-kept as resource extensions for hosts that need extra policy.
+`accepts`, `returns`, `tools`, `skills`, `schedules`, `ingress`, and `egress`.
+Unknown fields are kept as resource extensions for hosts that need extra
+policy.
 
 Files under `agents/events/` define optional event payload JSON Schemas. The
 file stem is the event type, so `github.pr.opened.json` registers
@@ -169,11 +182,27 @@ object with a `schema:` field whose value is the JSON Schema. Files under
 `agents/skills/` define shared Markdown skills that agents may explicitly list
 in `skills:`.
 
+Ingress and egress integrations are plugin-owned, but each agent selects its
+bindings in its own manifest. `ingress.source` names the plugin that polls or
+receives external input and publishes a durable event. `egress.sink` names the
+plugin that handles a returned event. If a plugin exposes exactly one ingress
+or egress event, `produces` or `accepts` may be omitted; otherwise the agent
+must select the event explicitly. `filter` is plugin-defined deterministic
+configuration, such as Slack channel ids, and is validated against the
+plugin-provided binding schema. `idempotency_key` is rendered from the event
+payload and `event` object so plugins can avoid duplicate sends or ingests.
+
+Plugin event schemas are JSON Schemas too. During project loading, Zeta merges
+plugin-provided event schemas with files under `agents/events/`; duplicate
+schemas must be identical. This keeps ingress/egress provider code outside the
+core library while still making `accepts:`, `returns:`, `ingress:`, and
+`egress:` checkable before the worker or scheduler runs.
+
 Worker and scheduler project loading validates authored agents before running
 them. External events listed in `accepts:` and all events listed in `returns:`
-must have a matching file under `agents/events/`. Synthetic scheduled events
-such as `agent.release-manager.scheduled` are registered internally with an
-empty payload schema.
+must have a matching schema from `agents/events/` or from a selected plugin.
+Synthetic scheduled events such as `agent.release-manager.scheduled` are
+registered internally with an empty payload schema.
 
 Authored agents run in the same durable agent loop as `session.run`. Resumable
 agents share one runtime session, `agent/<slug>`, while one-shot invocations use
