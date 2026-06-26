@@ -9,7 +9,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 
 from zeta.agents.events import EventRegistry
 from zeta.agents.prompts import validate_prompt
-from zeta.agents.spec import AgentSpec, EgressBinding, IngressBinding
+from zeta.agents.spec import AgentSpec
 from zeta.events import DraftEvent, Event
 
 RESERVED_TOOL_NAMES = frozenset({"__return"})
@@ -33,6 +33,26 @@ class SkillResolver(Protocol):
     def knows(self, name: str) -> bool: ...
 
 
+@dataclass(frozen=True)
+class IngressBinding:
+    """External source binding parsed from a plugin-owned manifest section."""
+
+    source: str
+    produces: str | None = None
+    filter: Mapping[str, Any] = field(default_factory=dict)
+    idempotency_key: str | None = None
+
+
+@dataclass(frozen=True)
+class EgressBinding:
+    """External sink binding parsed from a plugin-owned manifest section."""
+
+    sink: str
+    accepts: str | None = None
+    filter: Mapping[str, Any] = field(default_factory=dict)
+    idempotency_key: str | None = None
+
+
 PluginIngressPoller = Callable[
     [IngressBinding],
     Iterable[DraftEvent] | Awaitable[Iterable[DraftEvent]],
@@ -44,22 +64,32 @@ PluginEgressHandler = Callable[
 
 
 @dataclass(frozen=True)
+class PluginManifestSection:
+    """Plugin-owned frontmatter section metadata."""
+
+    key: str
+    schema: Mapping[str, Any] | None = None
+    events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class AgentPlugin:
-    """Static ingress/egress plugin metadata used by Zeta core validation."""
+    """Static plugin metadata used by Zeta project validation."""
 
     name: str
     events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
-    ingress: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
-    egress: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
+    manifest_sections: Mapping[str, PluginManifestSection] = field(default_factory=dict)
     ingress_pollers: Mapping[str, PluginIngressPoller] = field(default_factory=dict)
     egress_handlers: Mapping[str, PluginEgressHandler] = field(default_factory=dict)
 
 
 @runtime_checkable
 class PluginResolver(Protocol):
-    """Anything that can resolve installed ingress/egress plugin metadata."""
+    """Anything that can resolve installed plugin metadata."""
 
     def resolve(self, name: str) -> AgentPlugin | None: ...
+
+    def names_for_section(self, key: str, value: Any) -> Iterable[str]: ...
 
 
 @dataclass(frozen=True)
@@ -70,15 +100,14 @@ class Manifest:
     skills: SkillResolver | Mapping[str, Any] | None = None
     events: EventRegistry | None = None
     plugins: PluginResolver | Mapping[str, AgentPlugin] | None = None
-    extensions: Mapping[str, type[Any]] | None = None
 
     def validate(self, spec: AgentSpec) -> None:
         validate_prompt(spec)
         validate_tools(spec, self.tools)
         validate_skills(spec, self.skills)
+        validate_plugin_sections(spec, self.plugins)
         validate_plugin_bindings(spec, self.plugins)
         validate_events(spec, self.events)
-        validate_extensions(spec, self.extensions or {})
 
 
 def validate_tools(spec: AgentSpec, registry: ToolResolver | None) -> None:
@@ -123,10 +152,39 @@ def validate_plugin_bindings(
     spec: AgentSpec,
     plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
 ) -> None:
-    for binding in spec.ingress:
+    for binding in ingress_bindings(spec):
         validate_ingress_binding(spec, binding, plugins)
-    for binding in spec.egress:
+    for binding in egress_bindings(spec):
         validate_egress_binding(spec, binding, plugins)
+
+
+def validate_plugin_sections(
+    spec: AgentSpec,
+    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+) -> None:
+    plugin_map = resolved_plugins_for_spec(spec, plugins)
+    for key, value in spec.manifest.items():
+        if key in {"ingress", "egress"}:
+            continue
+        claimants = [
+            plugin for plugin in plugin_map.values() if key in plugin.manifest_sections
+        ]
+        if not claimants:
+            raise ManifestError(
+                f"agent {spec.slug!r} uses unknown manifest section {key!r}"
+            )
+        if len(claimants) > 1:
+            names = "', '".join(plugin.name for plugin in claimants)
+            raise ManifestError(
+                f"agent {spec.slug!r} manifest section {key!r} is claimed by "
+                f"multiple plugins: '{names}'"
+            )
+        section = claimants[0].manifest_sections[key]
+        validate_section_schema(
+            value,
+            section.schema,
+            f"agent {spec.slug!r} has invalid manifest section {key!r}",
+        )
 
 
 def validate_ingress_binding(
@@ -139,9 +197,15 @@ def validate_ingress_binding(
         raise ManifestError(
             f"agent {spec.slug!r} references unknown ingress source {binding.source!r}"
         )
+    section = plugin_manifest_section(plugin, "ingress")
+    validate_section_schema(
+        ingress_binding_record(binding),
+        section.schema,
+        f"agent {spec.slug!r} has invalid ingress binding for {binding.source!r}",
+    )
     event_type = selected_plugin_event(
         binding.produces,
-        plugin.ingress,
+        section.events,
         "ingress source",
         binding.source,
         "produce",
@@ -156,7 +220,7 @@ def validate_ingress_binding(
         )
     validate_binding_filter(
         binding.filter,
-        plugin.ingress[event_type],
+        section.events[event_type],
         f"agent {spec.slug!r} has invalid ingress filter for {binding.source!r}",
     )
 
@@ -171,9 +235,15 @@ def validate_egress_binding(
         raise ManifestError(
             f"agent {spec.slug!r} references unknown egress sink {binding.sink!r}"
         )
+    section = plugin_manifest_section(plugin, "egress")
+    validate_section_schema(
+        egress_binding_record(binding),
+        section.schema,
+        f"agent {spec.slug!r} has invalid egress binding for {binding.sink!r}",
+    )
     event_type = selected_plugin_event(
         binding.accepts,
-        plugin.egress,
+        section.events,
         "egress sink",
         binding.sink,
         "accept",
@@ -184,7 +254,7 @@ def validate_egress_binding(
         )
     validate_binding_filter(
         binding.filter,
-        plugin.egress[event_type],
+        section.events[event_type],
         f"agent {spec.slug!r} has invalid egress filter for {binding.sink!r}",
     )
 
@@ -198,6 +268,30 @@ def resolve_plugin(
     if isinstance(plugins, Mapping):
         return cast(Mapping[str, AgentPlugin], plugins).get(name)
     return plugins.resolve(name)
+
+
+def resolved_plugins_for_spec(
+    spec: AgentSpec,
+    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+) -> Mapping[str, AgentPlugin]:
+    if isinstance(plugins, Mapping):
+        return cast(Mapping[str, AgentPlugin], plugins)
+    if plugins is None:
+        return {}
+    resolved: dict[str, AgentPlugin] = {}
+    for key, value in spec.manifest.items():
+        for name in plugins.names_for_section(key, value):
+            plugin = plugins.resolve(name)
+            if plugin is not None:
+                resolved[name] = plugin
+    return resolved
+
+
+def plugin_manifest_section(plugin: AgentPlugin, key: str) -> PluginManifestSection:
+    section = plugin.manifest_sections.get(key)
+    if section is None:
+        raise ManifestError(f"plugin {plugin.name!r} does not support {key!r}")
+    return section
 
 
 def selected_plugin_event(
@@ -241,7 +335,153 @@ def validate_binding_filter(
         raise ManifestError(f"{message}: {exc.message}") from exc
 
 
-def validate_extensions(spec: AgentSpec, extensions: Mapping[str, type[Any]]) -> None:
-    for key in spec.extensions or {}:
-        if key not in extensions:
-            raise ManifestError(f"agent {spec.slug!r} uses unknown extension {key!r}")
+def validate_section_schema(
+    value: Any,
+    schema: Mapping[str, Any] | None,
+    message: str,
+) -> None:
+    if schema is None:
+        return
+    try:
+        Draft202012Validator.check_schema(schema)
+        Draft202012Validator(schema).validate(value)
+    except SchemaError as exc:
+        raise ManifestError(
+            f"{message}: plugin section schema is invalid: {exc.message}"
+        ) from exc
+    except ValidationError as exc:
+        raise ManifestError(f"{message}: {exc.message}") from exc
+
+
+def ingress_bindings(spec: AgentSpec) -> tuple[IngressBinding, ...]:
+    section = spec.manifest.get("ingress", ())
+    return tuple(
+        IngressBinding(
+            source=required_binding_string(item, "ingress", "source", spec),
+            produces=optional_binding_string(
+                item.get("produces"), "ingress", "produces", spec
+            ),
+            filter=binding_filter(item.get("filter", {}), "ingress", spec),
+            idempotency_key=optional_binding_string(
+                item.get("idempotency_key"),
+                "ingress",
+                "idempotency_key",
+                spec,
+            ),
+        )
+        for item in binding_items(section, "ingress", spec)
+    )
+
+
+def egress_bindings(spec: AgentSpec) -> tuple[EgressBinding, ...]:
+    section = spec.manifest.get("egress", ())
+    return tuple(
+        EgressBinding(
+            sink=required_binding_string(item, "egress", "sink", spec),
+            accepts=optional_binding_string(
+                item.get("accepts"), "egress", "accepts", spec
+            ),
+            filter=binding_filter(item.get("filter", {}), "egress", spec),
+            idempotency_key=optional_binding_string(
+                item.get("idempotency_key"),
+                "egress",
+                "idempotency_key",
+                spec,
+            ),
+        )
+        for item in binding_items(section, "egress", spec)
+    )
+
+
+def binding_items(
+    section: Any,
+    key: str,
+    spec: AgentSpec,
+) -> tuple[Mapping[str, Any], ...]:
+    if section is None or section == ():
+        return ()
+    if not isinstance(section, list | tuple):
+        raise ManifestError(
+            f"agent {spec.slug!r} has invalid {key!r} section: expected list"
+        )
+    return tuple(binding_item(item, key, spec) for item in section)
+
+
+def binding_item(value: Any, key: str, spec: AgentSpec) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ManifestError(
+            f"agent {spec.slug!r} has invalid {key!r} section: expected object"
+        )
+    supported = (
+        {"source", "produces", "filter", "idempotency_key"}
+        if key == "ingress"
+        else {"sink", "accepts", "filter", "idempotency_key"}
+    )
+    unknown = sorted(set(value) - supported)
+    if unknown:
+        raise ManifestError(
+            f"agent {spec.slug!r} has invalid {key!r} section: "
+            f"unsupported field {unknown[0]!r}"
+        )
+    return value
+
+
+def required_binding_string(
+    value: Mapping[str, Any],
+    key: str,
+    name: str,
+    spec: AgentSpec,
+) -> str:
+    item = value.get(name)
+    if not isinstance(item, str) or item == "":
+        raise ManifestError(
+            f"agent {spec.slug!r} has invalid {key!r} section: {name} is required"
+        )
+    return item
+
+
+def optional_binding_string(
+    value: Any,
+    key: str,
+    name: str,
+    spec: AgentSpec,
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value == "":
+        raise ManifestError(
+            f"agent {spec.slug!r} has invalid {key!r} section: {name} must be a string"
+        )
+    return value
+
+
+def binding_filter(value: Any, key: str, spec: AgentSpec) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ManifestError(
+            f"agent {spec.slug!r} has invalid {key!r} section: filter must be an object"
+        )
+    return dict(value)
+
+
+def ingress_binding_record(binding: IngressBinding) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "source": binding.source,
+        "filter": dict(binding.filter),
+    }
+    if binding.produces is not None:
+        record["produces"] = binding.produces
+    if binding.idempotency_key is not None:
+        record["idempotency_key"] = binding.idempotency_key
+    return record
+
+
+def egress_binding_record(binding: EgressBinding) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "sink": binding.sink,
+        "filter": dict(binding.filter),
+    }
+    if binding.accepts is not None:
+        record["accepts"] = binding.accepts
+    if binding.idempotency_key is not None:
+        record["idempotency_key"] = binding.idempotency_key
+    return record

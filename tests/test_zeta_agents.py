@@ -9,7 +9,16 @@ from typing import Any
 import pytest
 
 from zeta.agents.events import EventRegistry
-from zeta.agents.manifest import AgentPlugin, Manifest, ManifestError
+from zeta.agents.manifest import (
+    AgentPlugin,
+    EgressBinding,
+    IngressBinding,
+    Manifest,
+    ManifestError,
+    PluginManifestSection,
+    egress_bindings,
+    ingress_bindings,
+)
 from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
 from zeta.agents.resources import (
     ResourceError,
@@ -21,8 +30,6 @@ from zeta.agents.resources import (
 from zeta.agents.returns import derive_returns_schema
 from zeta.agents.spec import (
     AgentSpec,
-    EgressBinding,
-    IngressBinding,
     ScheduleEntry,
     SpecError,
     load_spec,
@@ -61,6 +68,7 @@ zeta_agents = SimpleNamespace(
     AgentPlugin=AgentPlugin,
     Manifest=Manifest,
     ManifestError=ManifestError,
+    PluginManifestSection=PluginManifestSection,
     ResourceError=ResourceError,
     ScheduleEntry=ScheduleEntry,
     SpecError=SpecError,
@@ -74,6 +82,8 @@ zeta_agents = SimpleNamespace(
     load_specs=load_specs,
     load_skill_registry=load_skill_registry,
     matches=matches,
+    egress_bindings=egress_bindings,
+    ingress_bindings=ingress_bindings,
     render_prompt=render_prompt,
     scheduled_event_type=scheduled_event_type,
     validate_agent_project=validate_agent_project,
@@ -116,6 +126,27 @@ def _slack_plugin(
         if egress_handler is not None
         else {}
     )
+    ingress_filter_schema = {
+        "type": "object",
+        "required": ["channel_ids"],
+        "properties": {
+            "channel_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            }
+        },
+        "additionalProperties": False,
+    }
+    egress_filter_schema = {
+        "type": "object",
+        "properties": {
+            "channel_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            }
+        },
+        "additionalProperties": False,
+    }
     return zeta_agents.AgentPlugin(
         name="slack",
         events={
@@ -136,33 +167,73 @@ def _slack_plugin(
                 "additionalProperties": False,
             },
         },
-        ingress={
-            "slack.dm.received": {
-                "type": "object",
-                "required": ["channel_ids"],
-                "properties": {
-                    "channel_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    }
+        manifest_sections={
+            "ingress": zeta_agents.PluginManifestSection(
+                "ingress",
+                schema={
+                    "type": "object",
+                    "required": ["source"],
+                    "properties": {
+                        "source": {"const": "slack"},
+                        "produces": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "idempotency_key": {"type": "string"},
+                    },
+                    "additionalProperties": False,
                 },
-                "additionalProperties": False,
-            }
-        },
-        egress={
-            "slack.message.send.requested": {
-                "type": "object",
-                "properties": {
-                    "channel_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    }
+                events={"slack.dm.received": ingress_filter_schema},
+            ),
+            "egress": zeta_agents.PluginManifestSection(
+                "egress",
+                schema={
+                    "type": "object",
+                    "required": ["sink"],
+                    "properties": {
+                        "sink": {"const": "slack"},
+                        "accepts": {"type": "string"},
+                        "filter": {"type": "object"},
+                        "idempotency_key": {"type": "string"},
+                    },
+                    "additionalProperties": False,
                 },
-                "additionalProperties": False,
-            }
+                events={"slack.message.send.requested": egress_filter_schema},
+            ),
         },
         ingress_pollers=ingress_pollers,
         egress_handlers=egress_handlers,
+    )
+
+
+def _audit_plugin() -> AgentPlugin:
+    return zeta_agents.AgentPlugin(
+        name="audit",
+        manifest_sections={
+            "audit": zeta_agents.PluginManifestSection(
+                "audit",
+                schema={
+                    "type": "object",
+                    "required": ["level"],
+                    "properties": {"level": {"enum": ["info", "strict"]}},
+                    "additionalProperties": False,
+                },
+            )
+        },
+    )
+
+
+def _approval_plugin(name: str) -> AgentPlugin:
+    return zeta_agents.AgentPlugin(
+        name=name,
+        manifest_sections={
+            "approval": zeta_agents.PluginManifestSection(
+                "approval",
+                schema={
+                    "type": "object",
+                    "properties": {"required": {"type": "boolean"}},
+                    "additionalProperties": False,
+                },
+            )
+        },
     )
 
 
@@ -172,6 +243,25 @@ class PluginMap:
 
     def resolve(self, name: str) -> AgentPlugin | None:
         return self.plugins.get(name)
+
+    def names_for_section(self, key: str, value: Any) -> tuple[str, ...]:
+        if key == "ingress" and isinstance(value, list | tuple):
+            return tuple(
+                item["source"]
+                for item in value
+                if isinstance(item, dict) and isinstance(item.get("source"), str)
+            )
+        if key == "egress" and isinstance(value, list | tuple):
+            return tuple(
+                item["sink"]
+                for item in value
+                if isinstance(item, dict) and isinstance(item.get("sink"), str)
+            )
+        return tuple(
+            plugin.name
+            for plugin in self.plugins.values()
+            if key in plugin.manifest_sections
+        )
 
 
 def _slack_return_agent_spec(tmp_path: Path) -> AgentSpec:
@@ -287,7 +377,7 @@ def _assert_terminal_return_event(terminal: dict[str, Any] | None) -> None:
     assert terminal["returned_events"][0]["type"] == "message.delivery.requested"
 
 
-def test_zeta_agent_spec_loads_frontmatter_body_and_extensions(tmp_path: Path) -> None:
+def test_zeta_agent_spec_loads_frontmatter_body_and_manifest(tmp_path: Path) -> None:
     spec_path = _write_spec(
         tmp_path / "slack-qa.md",
         """---
@@ -328,12 +418,14 @@ User asked: {{ event.payload.text }}
             timezone=None,
         ),
     )
-    assert spec.extensions == {"writes": {"paths": ["docs/**.md"]}}
+    assert spec.manifest == {"writes": {"paths": ["docs/**.md"]}}
     assert spec.instructions == "User asked: {{ event.payload.text }}\n"
     assert len(spec.sha256) == 64
 
 
-def test_zeta_agent_spec_loads_ingress_and_egress_bindings(tmp_path: Path) -> None:
+def test_zeta_agent_spec_keeps_ingress_and_egress_as_manifest_sections(
+    tmp_path: Path,
+) -> None:
     spec = zeta_agents.load_spec(
         _write_spec(
             tmp_path / "support.md",
@@ -361,7 +453,24 @@ Reply.
         )
     )
 
-    assert spec.ingress == (
+    assert spec.manifest == {
+        "ingress": [
+            {
+                "source": "slack",
+                "produces": "slack.dm.received",
+                "filter": {"channel_ids": ["C123"]},
+                "idempotency_key": "slack:message:{team_id}:{channel_id}:{message_ts}",
+            }
+        ],
+        "egress": [
+            {
+                "sink": "slack",
+                "accepts": "slack.message.send.requested",
+                "filter": {"channel_ids": ["C123"]},
+            }
+        ],
+    }
+    assert zeta_agents.ingress_bindings(spec) == (
         zeta_agents.IngressBinding(
             source="slack",
             produces="slack.dm.received",
@@ -369,7 +478,7 @@ Reply.
             idempotency_key="slack:message:{team_id}:{channel_id}:{message_ts}",
         ),
     )
-    assert spec.egress == (
+    assert zeta_agents.egress_bindings(spec) == (
         zeta_agents.EgressBinding(
             sink="slack",
             accepts="slack.message.send.requested",
@@ -377,7 +486,6 @@ Reply.
             idempotency_key=None,
         ),
     )
-    assert spec.extensions == {}
 
 
 def test_zeta_agent_spec_loads_skills_as_core_metadata(tmp_path: Path) -> None:
@@ -398,7 +506,7 @@ Review the change.
     )
 
     assert spec.skills == ("code-review", "release-notes")
-    assert spec.extensions == {"mode": "strict"}
+    assert spec.manifest == {"mode": "strict"}
 
 
 def test_zeta_agent_specs_load_only_flat_agent_files(tmp_path: Path) -> None:
@@ -500,25 +608,6 @@ Summarize the repo.
         ("name: Worker\ndescription: Worker\ntools:\n  - read\n  - 2\n", "tools"),
         ("name: Worker\ndescription: Worker\nskills:\n  - review\n  - 2\n", "skills"),
         ("name: Worker\ndescription: Worker\nschedules: hourly\n", "schedules"),
-        ("name: Worker\ndescription: Worker\ningress: slack\n", "ingress"),
-        ("name: Worker\ndescription: Worker\ningress:\n  - source: 1\n", "source"),
-        (
-            "name: Worker\ndescription: Worker\ningress:\n"
-            "  - source: slack\n    extra: nope\n",
-            "extra",
-        ),
-        (
-            "name: Worker\ndescription: Worker\ningress:\n"
-            "  - source: slack\n    filter: C123\n",
-            "filter",
-        ),
-        ("name: Worker\ndescription: Worker\negress: slack\n", "egress"),
-        ("name: Worker\ndescription: Worker\negress:\n  - sink: 1\n", "sink"),
-        (
-            "name: Worker\ndescription: Worker\negress:\n"
-            "  - sink: slack\n    accepts: 1\n",
-            "accepts",
-        ),
         (
             "name: Worker\ndescription: Worker\naccepts:\n"
             "  - runtime.schedule.triggered\nschedules:\n  - soon\n",
@@ -553,6 +642,44 @@ Do work.
 
     with pytest.raises(ValueError, match=message):
         zeta_agents.load_spec(spec_path)
+
+
+@pytest.mark.parametrize(
+    "frontmatter",
+    [
+        "name: Worker\ndescription: Worker\ningress: slack\n",
+        "name: Worker\ndescription: Worker\ningress:\n  - source: 1\n",
+        (
+            "name: Worker\ndescription: Worker\ningress:\n"
+            "  - source: slack\n    extra: nope\n"
+        ),
+        (
+            "name: Worker\ndescription: Worker\ningress:\n"
+            "  - source: slack\n    filter: C123\n"
+        ),
+        "name: Worker\ndescription: Worker\negress: slack\n",
+        "name: Worker\ndescription: Worker\negress:\n  - sink: 1\n",
+        (
+            "name: Worker\ndescription: Worker\negress:\n"
+            "  - sink: slack\n    accepts: 1\n"
+        ),
+    ],
+)
+def test_zeta_agent_spec_defers_plugin_section_validation(
+    tmp_path: Path,
+    frontmatter: str,
+) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            f"""---
+{frontmatter}---
+Run.
+""",
+        )
+    )
+
+    assert spec.manifest
 
 
 def test_zeta_agent_spec_validates_renders_matches_and_derives_schema(
@@ -755,8 +882,8 @@ Reply.
 
     assert project.events.knows("slack.dm.received")
     assert project.events.knows("slack.message.send.requested")
-    assert project.specs[0].ingress[0].produces is None
-    assert project.specs[0].egress[0].accepts is None
+    assert zeta_agents.ingress_bindings(project.specs[0])[0].produces is None
+    assert zeta_agents.egress_bindings(project.specs[0])[0].accepts is None
 
 
 def test_zeta_agent_project_rejects_conflicting_plugin_event_schema(
@@ -832,6 +959,105 @@ Reply.
     )
 
     assert project.events.schema("slack.dm.received") == schema
+
+
+def test_zeta_agent_project_validates_generic_plugin_manifest_section(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "audited.md",
+        """---
+name: Audited
+description: Uses an audit plugin manifest section.
+audit:
+  level: strict
+---
+Run.
+""",
+    )
+
+    project = zeta_agents.load_agent_project(
+        agents_dir,
+        plugin_resolver=PluginMap(_audit_plugin()),
+    )
+
+    zeta_agents.validate_agent_project(project)
+
+
+def test_zeta_agent_project_rejects_unknown_manifest_section(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "worker.md",
+        """---
+name: Worker
+description: Uses an unknown plugin manifest section.
+mode: strict
+---
+Run.
+""",
+    )
+    project = zeta_agents.load_agent_project(agents_dir)
+
+    with pytest.raises(zeta_agents.ManifestError, match="unknown manifest section"):
+        zeta_agents.validate_agent_project(project)
+
+
+def test_zeta_agent_project_rejects_conflicting_manifest_section_claims(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "worker.md",
+        """---
+name: Worker
+description: Uses a contested plugin manifest section.
+approval:
+  required: true
+---
+Run.
+""",
+    )
+    project = zeta_agents.load_agent_project(
+        agents_dir,
+        plugin_resolver=PluginMap(
+            _approval_plugin("linear"),
+            _approval_plugin("github"),
+        ),
+    )
+
+    with pytest.raises(zeta_agents.ManifestError, match="multiple plugins"):
+        zeta_agents.validate_agent_project(project)
+
+
+def test_zeta_agent_project_rejects_invalid_generic_plugin_manifest_section(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    _write_spec(
+        agents_dir / "audited.md",
+        """---
+name: Audited
+description: Uses an audit plugin manifest section.
+audit:
+  level: loud
+---
+Run.
+""",
+    )
+    project = zeta_agents.load_agent_project(
+        agents_dir,
+        plugin_resolver=PluginMap(_audit_plugin()),
+    )
+
+    with pytest.raises(zeta_agents.ManifestError, match="invalid manifest section"):
+        zeta_agents.validate_agent_project(project)
 
 
 @pytest.mark.parametrize(

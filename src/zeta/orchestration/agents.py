@@ -205,7 +205,7 @@ def compile_agent_definitions(
 
 
 def runtime_lock_keys(spec: AgentSpec) -> tuple[str, ...]:
-    value = spec.extension("locks")
+    value = spec.manifest.get("locks")
     if value is None:
         return ()
     if isinstance(value, str):

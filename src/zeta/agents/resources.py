@@ -6,10 +6,14 @@ import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from zeta.agents.events import EventRegistry, EventRegistryError
-from zeta.agents.manifest import AgentPlugin, Manifest, PluginResolver
+from zeta.agents.manifest import (
+    AgentPlugin,
+    Manifest,
+    PluginResolver,
+)
 from zeta.agents.spec import AgentSpec, load_specs, scheduled_event_type
 
 
@@ -42,7 +46,7 @@ class AgentProject:
 
 def resource_extensions(spec: AgentSpec) -> dict[str, object]:
     """Return non-core frontmatter extensions for resource-aware hosts."""
-    return dict(spec.extensions or {})
+    return dict(spec.manifest)
 
 
 def load_agent_project(
@@ -116,16 +120,57 @@ def resolve_agent_plugins(
 ) -> dict[str, AgentPlugin]:
     if plugin_resolver is None:
         return {}
-    names = sorted(
-        {binding.source for spec in specs for binding in spec.ingress}
-        | {binding.sink for spec in specs for binding in spec.egress}
-    )
+    names = sorted(plugin_names_for_specs(specs, plugin_resolver))
     plugins: dict[str, AgentPlugin] = {}
     for name in names:
         plugin = plugin_resolver.resolve(name)
         if plugin is not None:
             plugins[name] = plugin
     return plugins
+
+
+def plugin_names_for_specs(
+    specs: tuple[AgentSpec, ...],
+    plugin_resolver: PluginResolver,
+) -> set[str]:
+    names: set[str] = set()
+    for spec in specs:
+        for key, value in spec.manifest.items():
+            names.update(plugin_names_for_section(plugin_resolver, key, value))
+    return names
+
+
+def plugin_names_for_section(
+    plugin_resolver: PluginResolver,
+    key: str,
+    value: object,
+) -> set[str]:
+    try:
+        return set(plugin_resolver.names_for_section(key, value))
+    except AttributeError:
+        return plugin_names_from_builtin_sections(key, value)
+
+
+def plugin_names_from_builtin_sections(key: str, value: object) -> set[str]:
+    if not isinstance(value, list | tuple):
+        return set()
+    if key == "ingress":
+        return binding_plugin_names(value, "source")
+    if key == "egress":
+        return binding_plugin_names(value, "sink")
+    return set()
+
+
+def binding_plugin_names(items: Iterable[object], field: str) -> set[str]:
+    names: set[str] = set()
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        mapping = cast(Mapping[str, object], item)
+        name = mapping.get(field)
+        if isinstance(name, str):
+            names.add(name)
+    return names
 
 
 def load_event_registry(

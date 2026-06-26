@@ -13,13 +13,20 @@ from typing import Any, cast
 
 from jsonschema import Draft202012Validator
 
-from zeta.agents.manifest import PluginResolver, selected_plugin_event
+from zeta.agents.manifest import (
+    EgressBinding,
+    IngressBinding,
+    PluginResolver,
+    egress_bindings,
+    ingress_bindings,
+    plugin_manifest_section,
+    selected_plugin_event,
+)
 from zeta.agents.resources import (
     AgentProject,
     load_agent_project,
     validate_agent_project,
 )
-from zeta.agents.spec import EgressBinding, IngressBinding
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import DraftEvent, Event
 from zeta.orchestration.agents import (
@@ -132,13 +139,14 @@ def project_egress_executors(
 ) -> tuple[ExecutableAgent, ...]:
     executors: list[ExecutableAgent] = []
     for spec in project.specs:
-        for index, binding in enumerate(spec.egress):
+        for index, binding in enumerate(egress_bindings(spec)):
             plugin = project.plugins.get(binding.sink)
             if plugin is None:
                 continue
+            section = plugin_manifest_section(plugin, "egress")
             event_type = selected_plugin_event(
                 binding.accepts,
-                plugin.egress,
+                section.events,
                 "egress sink",
                 binding.sink,
                 "accept",
@@ -239,13 +247,14 @@ async def run_ingress_once(runtime: WorkerServices) -> int:
     validate_agent_project(project)
     inserted = 0
     for spec in project.specs:
-        for binding in spec.ingress:
+        for binding in ingress_bindings(spec):
             plugin = project.plugins.get(binding.source)
             if plugin is None:
                 continue
+            section = plugin_manifest_section(plugin, "ingress")
             event_type = selected_plugin_event(
                 binding.produces,
-                plugin.ingress,
+                section.events,
                 "ingress source",
                 binding.source,
                 "produce",
