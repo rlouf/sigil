@@ -4027,6 +4027,221 @@ def test_zeta_cli_attempts_json_projects_runtime_attempts(tmp_path: Path) -> Non
     ]
 
 
+def test_zeta_cli_runs_json_projects_runtime_runs(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+
+    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        del run
+        return {
+            "final_answer": "handled",
+            "events": [{"type": "issue.triaged"}],
+            "tool_calls": [{"name": "read"}],
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        }
+
+    dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        executors=[
+            zeta_dispatch.ExecutableAgent(
+                zeta_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=run_agent,
+            )
+        ],
+    )
+    outcome = dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo"),
+    )
+    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+    session_id = f"agent/issue-triage/{outcome.event.id}"
+    run_id = f"run_att_{queue_item_id}_1"
+
+    result = CliRunner().invoke(
+        zeta_cli.cli,
+        ["runs", "--project-root", str(tmp_path), "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output) == [
+        {
+            "run_id": run_id,
+            "attempt_id": f"att_{queue_item_id}_1",
+            "queue_item_id": queue_item_id,
+            "event_id": outcome.event.id,
+            "trigger_event_type": "github.issue.opened",
+            "target_agent": "issue-triage",
+            "status": "completed",
+            "session_id": session_id,
+            "started_at": outcome.lifecycle_events[2].payload["started_at"],
+            "finished_at": outcome.lifecycle_events[3].payload["finished_at"],
+            "summary": "handled",
+            "error": None,
+            "input_tokens": 12,
+            "output_tokens": 3,
+        }
+    ]
+
+
+def test_zeta_cli_runs_plain_reports_empty_and_rows(tmp_path: Path) -> None:
+    empty = CliRunner().invoke(
+        zeta_cli.cli,
+        ["runs", "--project-root", str(tmp_path)],
+    )
+
+    assert empty.exit_code == 0
+    assert empty.output == "runs empty\n"
+
+    state_dir = tmp_path / ".zeta"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+
+    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        del run
+        return {"final_answer": "handled"}
+
+    dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        executors=[
+            zeta_dispatch.ExecutableAgent(
+                zeta_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=run_agent,
+            )
+        ],
+    )
+    outcome = dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo"),
+    )
+    run_id = f"run_att_qi_{outcome.event.id}_issue-triage_1"
+
+    listed = CliRunner().invoke(
+        zeta_cli.cli,
+        ["runs", "--project-root", str(tmp_path)],
+    )
+
+    assert listed.exit_code == 0
+    assert listed.output == (
+        f"completed\t{run_id}\tissue-triage\tgithub.issue.opened\t"
+        f"agent/issue-triage/{outcome.event.id}\thandled\n"
+    )
+
+
+def test_zeta_cli_run_show_json_projects_runtime_run_details(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+
+    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        del run
+        return {
+            "final_answer": "handled",
+            "events": [{"type": "issue.triaged"}],
+            "tool_calls": [{"name": "read"}],
+            "usage": {"input_tokens": 12, "output_tokens": 3},
+        }
+
+    dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        executors=[
+            zeta_dispatch.ExecutableAgent(
+                zeta_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=run_agent,
+            )
+        ],
+    )
+    outcome = dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo"),
+    )
+    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+    run_id = f"run_att_{queue_item_id}_1"
+
+    result = CliRunner().invoke(
+        zeta_cli.cli,
+        ["run", "show", run_id, "--project-root", str(tmp_path), "--json"],
+    )
+
+    assert result.exit_code == 0
+    record = json.loads(result.output)
+    assert record["run"]["run_id"] == run_id
+    assert record["run"]["trigger_event_type"] == "github.issue.opened"
+    assert record["trigger_event"]["id"] == outcome.event.id
+    assert record["queue_item"]["queue_item_id"] == queue_item_id
+    assert record["attempt"]["result"] == {
+        "final_answer": "handled",
+        "events": [{"type": "issue.triaged"}],
+        "tool_calls": [{"name": "read"}],
+        "usage": {"input_tokens": 12, "output_tokens": 3},
+    }
+    assert record["events"] == [{"type": "issue.triaged"}]
+    assert record["usage"] == {"input_tokens": 12, "output_tokens": 3}
+    assert record["tool_calls"] == [{"name": "read"}]
+
+
+def test_zeta_cli_run_show_plain_prints_runtime_run_summary(tmp_path: Path) -> None:
+    state_dir = tmp_path / ".zeta"
+    event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
+
+    async def run_agent(run: zeta_dispatch.AgentInvocation) -> dict[str, object]:
+        del run
+        return {"final_answer": "handled"}
+
+    dispatcher = zeta_dispatch.EventDispatcher(
+        event_store,
+        executors=[
+            zeta_dispatch.ExecutableAgent(
+                zeta_dispatch.AgentDefinition(
+                    "issue-triage",
+                    (zeta_dispatch.EventPattern("github.issue.opened"),),
+                ),
+                run=run_agent,
+            )
+        ],
+    )
+    outcome = dispatch_event(
+        dispatcher,
+        zeta_events.DraftEvent("github.issue.opened", "github", {}, session_id="repo"),
+    )
+    queue_item_id = f"qi_{outcome.event.id}_issue-triage"
+    run_id = f"run_att_{queue_item_id}_1"
+
+    result = CliRunner().invoke(
+        zeta_cli.cli,
+        ["run", "show", run_id, "--project-root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert result.output == (
+        f"run: {run_id}\n"
+        "status: completed\n"
+        "agent: issue-triage\n"
+        f"trigger: github.issue.opened {outcome.event.id}\n"
+        f"session: agent/issue-triage/{outcome.event.id}\n"
+        f"started: {outcome.lifecycle_events[2].payload['started_at']}\n"
+        f"finished: {outcome.lifecycle_events[3].payload['finished_at']}\n"
+        "\n"
+        "handled\n"
+    )
+
+
+def test_zeta_cli_run_show_reports_unknown_run(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        zeta_cli.cli,
+        ["run", "show", "run_missing", "--project-root", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "run not found: run_missing" in result.output
+
+
 def test_zeta_cli_events_json_lists_durable_events(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))

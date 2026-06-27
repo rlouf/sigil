@@ -5,6 +5,7 @@ import json
 import sys
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import click
 
@@ -60,6 +61,82 @@ def event_record(event: Event) -> dict[str, object]:
         "timestamp_ms": event.timestamp_ms,
         "cursor": event.cursor,
     }
+
+
+def run_summary_records(event_store: RuntimeEventStore) -> list[dict[str, object]]:
+    events_by_id = {event.id: event for event in event_store.list_events(Filter())}
+    summaries: list[dict[str, object]] = []
+    for attempt in event_store.list_attempts():
+        trigger = events_by_id.get(str(attempt["event_id"]))
+        summaries.append(run_summary_record(attempt, trigger))
+    return summaries
+
+
+def run_summary_record(
+    attempt: dict[str, Any],
+    trigger: Event | None,
+) -> dict[str, object]:
+    return {
+        "run_id": attempt.get("run_id"),
+        "attempt_id": attempt["attempt_id"],
+        "queue_item_id": attempt["queue_item_id"],
+        "event_id": attempt["event_id"],
+        "trigger_event_type": trigger.event_type if trigger is not None else None,
+        "target_agent": attempt["target_agent"],
+        "status": attempt["status"],
+        "session_id": attempt.get("session_id"),
+        "started_at": attempt["started_at"],
+        "finished_at": attempt.get("finished_at"),
+        "summary": attempt.get("summary"),
+        "error": attempt.get("error"),
+        "input_tokens": attempt.get("input_tokens"),
+        "output_tokens": attempt.get("output_tokens"),
+    }
+
+
+def run_detail_record(
+    event_store: RuntimeEventStore,
+    run_id: str,
+) -> dict[str, object] | None:
+    attempts_by_run = {
+        str(attempt["run_id"]): attempt
+        for attempt in event_store.list_attempts()
+        if attempt.get("run_id") is not None
+    }
+    attempt = attempts_by_run.get(run_id)
+    if attempt is None:
+        return None
+    queue_items = {
+        str(row["queue_item_id"]): row for row in event_store.list_queue_items()
+    }
+    trigger = event_store.get(str(attempt["event_id"]))
+    return {
+        "run": run_summary_record(attempt, trigger),
+        "trigger_event": event_record(trigger) if trigger is not None else None,
+        "queue_item": queue_items.get(str(attempt["queue_item_id"])),
+        "attempt": attempt,
+        "result": attempt.get("result"),
+        "events": attempt.get("events"),
+        "tool_calls": attempt.get("tool_calls"),
+        "usage": attempt.get("usage"),
+    }
+
+
+def run_display_id(record: dict[str, object]) -> str:
+    run_id = record.get("run_id")
+    if isinstance(run_id, str) and run_id:
+        return run_id
+    return str(record["attempt_id"])
+
+
+def run_summary_text(record: dict[str, object]) -> str:
+    summary = record.get("summary")
+    if isinstance(summary, str) and summary:
+        return summary
+    error = record.get("error")
+    if isinstance(error, str) and error:
+        return error
+    return "-"
 
 
 @cli.command("queue")
@@ -210,7 +287,51 @@ def events(
     return 0
 
 
-@cli.command("run")
+@cli.command("runs")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def runs(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
+    """List durable runtime runs."""
+
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        rows = run_summary_records(event_store)
+    finally:
+        event_store.close()
+    if json_output:
+        click.echo(json.dumps(rows, ensure_ascii=False))
+        return 0
+    if not rows:
+        click.echo("runs empty")
+        return 0
+    for row in rows:
+        click.echo(
+            "\t".join(
+                [
+                    str(row["status"]),
+                    run_display_id(row),
+                    str(row["target_agent"]),
+                    str(row["trigger_event_type"] or "-"),
+                    str(row["session_id"] or "-"),
+                    run_summary_text(row),
+                ]
+            )
+        )
+    return 0
+
+
+@cli.group("run", invoke_without_command=True)
 @click.option(
     "--project-root",
     type=click.Path(file_okay=False, path_type=Path),
@@ -224,8 +345,16 @@ def events(
     help="Override the runtime state directory.",
 )
 @click.option("--once", is_flag=True, help="Process at most one unit of work.")
-def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
+@click.pass_context
+def run(
+    ctx: click.Context,
+    project_root: Path,
+    state_dir: Path | None,
+    once: bool,
+) -> int:
     """Run the local runtime worker."""
+    if ctx.invoked_subcommand is not None:
+        return 0
 
     runtime = worker.build_worker_services(
         project_root=project_root,
@@ -239,6 +368,57 @@ def run(project_root: Path, state_dir: Path | None, once: bool) -> int:
             asyncio.run(worker.run_forever(runtime))
     finally:
         runtime.close()
+    return 0
+
+
+@run.command("show")
+@click.argument("run_id")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+def run_show(
+    run_id: str,
+    project_root: Path,
+    state_dir: Path | None,
+    json_output: bool,
+) -> int:
+    """Show one durable runtime run."""
+
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        record = run_detail_record(event_store, run_id)
+    finally:
+        event_store.close()
+    if record is None:
+        raise click.ClickException(f"run not found: {run_id}")
+    if json_output:
+        click.echo(json.dumps(record, ensure_ascii=False))
+        return 0
+    raw_run_record = record["run"]
+    if not isinstance(raw_run_record, dict):
+        raise click.ClickException(f"run record was invalid: {run_id}")
+    run_record = cast("dict[str, object]", raw_run_record)
+    click.echo(f"run: {run_display_id(run_record)}")
+    click.echo(f"status: {run_record['status']}")
+    click.echo(f"agent: {run_record['target_agent']}")
+    click.echo(f"trigger: {run_record['trigger_event_type']} {run_record['event_id']}")
+    click.echo(f"session: {run_record['session_id'] or '-'}")
+    click.echo(f"started: {run_record['started_at']}")
+    click.echo(f"finished: {run_record['finished_at'] or '-'}")
+    summary = run_summary_text(run_record)
+    if summary != "-":
+        click.echo()
+        click.echo(summary)
     return 0
 
 
