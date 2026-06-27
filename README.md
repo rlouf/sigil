@@ -139,12 +139,12 @@ Jinja prompt body rendered with one root variable, `event`:
 
 ```markdown
 ---
-name: Release Manager
-description: Prepares release summaries from repository events.
+name: Slack Support
+description: Replies to Slack support messages.
 accepts:
-  - github.pr.opened
+  - slack.message.received
 returns:
-  - release.summary.ready
+  - slack.message.post
 tools:
   - read
   - grep
@@ -154,27 +154,24 @@ schedules:
   - cron: "0 9 * * 1"
     timezone: Europe/Paris
 ingress:
-  - source: slack
-    event: slack.dm.received
+  - event: slack.message.received
     filter:
       channel_ids: ["C123"]
     idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
 egress:
-  - sink: slack
-    event: slack.message.send.requested
+  - event: slack.message.post
     filter:
       channel_ids: ["C123"]
-    idempotency_key: "slack:send:{event.id}"
 resumable: true
 ---
-Review {{ event.payload.title }} and produce a concise release summary.
+Reply to the Slack message: {{ event.payload.text }}
 ```
 
 Core frontmatter fields are `name`, `description`, `enabled`, `resumable`,
-`accepts`, `returns`, `tools`, `skills`, and `schedules`. Every other
-top-level key is a manifest section owned by a plugin or runtime adapter.
-Project validation rejects unclaimed sections and validates claimed sections
-with the owning plugin's JSON Schema.
+`accepts`, `returns`, `tools`, `skills`, and `schedules`. `ingress` and
+`egress` are event connector sections. Project validation rejects unknown
+sections and validates connector filters with the owning connector's JSON
+Schema.
 
 Files under `agents/events/` define optional event payload JSON Schemas. The
 file stem is the event type, so `github.pr.opened.json` registers
@@ -183,27 +180,31 @@ object with a `schema:` field whose value is the JSON Schema. Files under
 `agents/skills/` define shared Markdown skills that agents may explicitly list
 in `skills:`.
 
-Ingress and egress are conventional plugin-owned manifest sections. Zeta core
-stores them as manifest data; the worker interprets them through ingress and
-egress adapters. `ingress.source` names the plugin that polls or receives
-external input and publishes a durable event. `egress.sink` names the plugin
-that handles a returned event. If a plugin exposes exactly one ingress or
-egress event, `event` may be omitted; otherwise the agent must select the event
-explicitly. `filter` is plugin-defined deterministic
-configuration, such as Slack channel ids, and is validated against the
-plugin-provided section schema. `idempotency_key` is rendered from the event
-payload and `event` object so plugins can avoid duplicate sends or ingests.
+Ingress and egress are conventional event connector manifest sections. Zeta
+core stores them as manifest data; the worker interprets them through enabled
+event connectors. Each binding names the event type directly. `filter` is
+connector-defined deterministic configuration, such as Slack channel ids, and
+is validated against the connector-provided filter schema. `idempotency_key` is
+rendered from the event payload and `event` object so connectors can avoid
+duplicate ingests or sends.
 
-Plugin event schemas are JSON Schemas too. During project loading, Zeta merges
-plugin-provided event schemas with files under `agents/events/`; duplicate
-schemas must be identical. This keeps ingress/egress provider code outside the
-core library while still making `accepts:`, `returns:`, and plugin manifest
-sections such as `ingress:` and `egress:` checkable before the worker or
-scheduler runs.
+EventConnector event schemas are JSON Schemas too. During project loading,
+Zeta merges connector-provided event schemas with files under `agents/events/`;
+duplicate schemas must be identical. This keeps ingress/egress provider code
+outside the core library while still making `accepts:`, `returns:`, and
+connector manifest sections such as `ingress:` and `egress:` checkable before
+the worker or scheduler runs. Installed connector packages are discovered
+through the `zeta.event_connectors` entry point group, but they only run when
+listed in `agents/connectors.yaml`:
+
+```yaml
+event_connectors:
+  - slack
+```
 
 Worker and scheduler project loading validates authored agents before running
 them. External events listed in `accepts:` and all events listed in `returns:`
-must have a matching schema from `agents/events/` or from a selected plugin.
+must have a matching schema from `agents/events/` or from a selected connector.
 Synthetic scheduled events such as `agent.release-manager.scheduled` are
 registered internally with an empty payload schema.
 
