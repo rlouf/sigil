@@ -15,13 +15,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+import zeta.models.chat_completions as zeta_model
 from zeta.context.builder import (
     PreparedPrompt,
     ReconstructedPrompt,
     reconstructed_prompt_request,
 )
 from zeta.context.components import PromptComponent, prompt_components
-from zeta.models import chat_completions as zeta_model
 from zeta.records.events import (
     DraftEvent,
     Event,
@@ -31,7 +31,9 @@ from zeta.records.events import (
 )
 from zeta.records.objects import Object, ObjectId
 from zeta.records.provenance import project_prompt_trace_projection
-from zeta.records.stores import Filter, InMemoryStore, Store
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.memory import InMemoryStore
+from zeta.records.stores.object_store import Store
 from zeta.run.context import RuntimeContext
 from zeta.run.runtime import AgentRunResult
 

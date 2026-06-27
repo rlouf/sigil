@@ -10,9 +10,10 @@ from typing import Any, cast
 import click
 
 from zeta.events import Event
-from zeta.records.stores import Filter, event_store_path
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.sqlite import event_store_path
 from zetad import scheduling, worker
-from zetad.rpc import run_stdio
+from zetad.rpc.stdio import run_stdio
 from zetad.store import RuntimeEventStore
 
 QUEUE_STATUS_ORDER = (

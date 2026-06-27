@@ -5,7 +5,8 @@ from typing import Any, cast
 
 from sigil.display.summarize import truncate
 from zeta.records.objects import Object, ObjectId
-from zeta.records.stores import SqliteObjectStore, Store
+from zeta.records.stores.object_store import Store
+from zeta.records.stores.sqlite import SqliteObjectStore
 
 
 def tool_failure_detail(row: dict[str, Any]) -> str:

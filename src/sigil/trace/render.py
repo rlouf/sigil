@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sigil.display.summarize import short_trace_id, text_content, trace_object_summary
 from zeta.records.objects import Object, ObjectId
-from zeta.records.stores import Store
+from zeta.records.stores.object_store import Store
 
 BODY_LINE_LIMIT = 8
 

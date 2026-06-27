@@ -16,34 +16,36 @@ from _zeta_helpers import (
 )
 from click.testing import CliRunner
 
+import zeta.capabilities.execution as zeta_capability_execution
 import zeta.context.components as zeta_context
+import zeta.models.chat_completions as zeta_model
+import zeta.models.profiles as zeta_models
 from sigil.agent_io import last_event_time
 from sigil.cli import cli as sigil_cli
 from sigil.display.summarize import assistant_trace_summary
 from sigil.trace.replay import latest_model_answer
 from zeta import models as zeta_models_api
-from zeta.capabilities import execution as zeta_capability_execution
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
 from zeta.events import DraftEvent
-from zeta.models import chat_completions as zeta_model
-from zeta.models import profiles as zeta_models
 from zeta.objects import Derivation, Object, ObjectId, Ref, RefUpdate
 from zeta.records.events import event_view
-from zeta.records.stores import (
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.memory import InMemoryStore
+from zeta.records.stores.object_store import (
     AmbiguousIdError,
-    Filter,
-    InMemoryStore,
-    SqliteEventStore,
-    SqliteObjectStore,
+    IncompatibleSchemaError,
     Store,
     UnknownIdError,
+    resolve_object_id,
+)
+from zeta.records.stores.sqlite import (
+    SqliteEventStore,
+    SqliteObjectStore,
     available_session_ids,
     event_store_path,
-    resolve_object_id,
     zeta_sqlite_path,
 )
-from zeta.records.stores.object_store import IncompatibleSchemaError
 from zeta.run import runtime as zeta_agent
 from zeta.run.context import RuntimeContext, default_session
 from zeta.run.runtime import AgentRunResult

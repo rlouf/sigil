@@ -4,7 +4,7 @@ from typing import Any
 
 from sigil.history import import_history_records
 from sigil.state import event_store_path, history_view
-from zeta.records.stores import export_trace_refs, import_trace_graph
+from zeta.records.stores.sqlite import export_trace_refs, import_trace_graph
 
 BUNDLE_VERSION = 1
 

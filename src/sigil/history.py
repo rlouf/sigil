@@ -11,10 +11,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from zeta.records.events import Event
-from zeta.records.stores import (
-    Filter,
-    SqliteEventStore,
-)
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.sqlite import SqliteEventStore
 from zeta.run.events import (
     TURN_RECORD_SCHEMA,
     turn_event_type,

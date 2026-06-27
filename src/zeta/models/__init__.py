@@ -1,49 +1,19 @@
-"""Model profiles and protocol clients behind one package surface.
-
-Profile discovery and selection load eagerly. Transport-specific helpers live
-in their transport modules.
-"""
+"""High-level model gateway helpers."""
 
 from __future__ import annotations
 
 import asyncio
+import importlib
 from collections.abc import Callable
 from typing import Any
 
-from zeta.models.profiles import (
-    CHAT_COMPLETIONS_API,
-    CODEX_RESPONSES_API,
-    DEFAULT_CODEX_BASE_URL,
-    DEFAULT_MODEL_NAME,
-    DEFAULT_MODEL_URL,
-    MODEL_APIS,
-    THINKING_EFFORTS,
-    ModelCatalog,
-    ModelDiagnostic,
-    ModelProfile,
-    ModelResolution,
-    ModelSelection,
-    ModelSource,
-    active_model_profile,
-    active_model_selection,
-    clear_active_model_profile,
-    configured_default_selection,
-    default_model_selection,
-    load_model_profiles,
-    model_name,
-    model_selection_event,
-    model_url,
-    resolve_active_model,
-    resolve_model_profile,
-    set_active_model_profile,
-    user_models_config_path,
-)
-from zeta.models.types import ModelInput, ModelOutput, ModelUsage
+import zeta.models.profiles as _profiles
+import zeta.models.types as _model_types
 
 
 class DefaultModelGateway:
     def available(self, config: Any) -> bool:
-        if getattr(config, "model_api", None) == CODEX_RESPONSES_API:
+        if getattr(config, "model_api", None) == _profiles.CODEX_RESPONSES_API:
             return True
         from zeta.models.chat_completions import model_endpoint_open
 
@@ -54,12 +24,12 @@ class DefaultModelGateway:
 
     async def generate(
         self,
-        model_input: ModelInput,
+        model_input: _model_types.ModelInput,
         config: Any,
         *,
         stream: Any | None = None,
         telemetry_sink: Callable[[dict[str, Any]], None] | None = None,
-    ) -> ModelOutput:
+    ) -> _model_types.ModelOutput:
         api = getattr(config, "model_api", None)
         options = {
             "api": api,
@@ -71,49 +41,20 @@ class DefaultModelGateway:
             "telemetry_sink": telemetry_sink,
             "thinking": getattr(config, "thinking", None),
         }
-        if api == CODEX_RESPONSES_API:
+        if api == _profiles.CODEX_RESPONSES_API:
             options["session_id"] = getattr(config, "model_session_id", None)
         assistant = await asyncio.to_thread(
             chat_completion_messages,
             model_input.messages,
             **options,
         )
-        return ModelOutput(message=assistant)
+        return _model_types.ModelOutput(message=assistant)
 
 
 __all__ = [
-    "CHAT_COMPLETIONS_API",
-    "CODEX_RESPONSES_API",
-    "DEFAULT_CODEX_BASE_URL",
-    "DEFAULT_MODEL_NAME",
-    "DEFAULT_MODEL_URL",
     "DefaultModelGateway",
-    "MODEL_APIS",
-    "THINKING_EFFORTS",
-    "ModelCatalog",
-    "ModelDiagnostic",
-    "ModelInput",
-    "ModelOutput",
-    "ModelProfile",
-    "ModelResolution",
-    "ModelSelection",
-    "ModelSource",
-    "ModelUsage",
-    "active_model_profile",
-    "active_model_selection",
     "chat_completion_messages",
     "chat_structured_output",
-    "clear_active_model_profile",
-    "configured_default_selection",
-    "default_model_selection",
-    "load_model_profiles",
-    "model_name",
-    "model_selection_event",
-    "model_url",
-    "resolve_active_model",
-    "resolve_model_profile",
-    "set_active_model_profile",
-    "user_models_config_path",
 ]
 
 
@@ -124,13 +65,11 @@ def chat_completion_messages(
     **options: Any,
 ) -> dict[str, Any]:
     """Request one assistant message from the selected protocol client."""
-    if api is None or api == CHAT_COMPLETIONS_API:
-        from zeta.models import chat_completions
-
+    if api is None or api == _profiles.CHAT_COMPLETIONS_API:
+        chat_completions = importlib.import_module("zeta.models.chat_completions")
         return chat_completions.chat_completion_messages(messages, **options)
-    if api == CODEX_RESPONSES_API:
-        from zeta.models import responses
-
+    if api == _profiles.CODEX_RESPONSES_API:
+        responses = importlib.import_module("zeta.models.responses")
         return responses.codex_completion_messages(messages, **options)
     raise ValueError(f"unknown model api: {api!r}")
 
@@ -142,12 +81,10 @@ def chat_structured_output(
     **options: Any,
 ) -> dict[str, Any]:
     """Request one schema-validated JSON object from the selected client."""
-    if api is None or api == CHAT_COMPLETIONS_API:
-        from zeta.models import chat_completions
-
+    if api is None or api == _profiles.CHAT_COMPLETIONS_API:
+        chat_completions = importlib.import_module("zeta.models.chat_completions")
         return chat_completions.chat_structured_output(messages, **options)
-    if api == CODEX_RESPONSES_API:
-        from zeta.models import responses
-
+    if api == _profiles.CODEX_RESPONSES_API:
+        responses = importlib.import_module("zeta.models.responses")
         return responses.codex_structured_output(messages, **options)
     raise ValueError(f"unknown model api: {api!r}")

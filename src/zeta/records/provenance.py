@@ -7,7 +7,7 @@ from typing import Any
 from zeta.events import DraftEvent, Event
 from zeta.objects import Derivation, Object, ObjectId
 from zeta.records.events import draft_event_id, event_timeline_type
-from zeta.records.stores import Store
+from zeta.records.stores.object_store import Store
 
 
 @dataclass(frozen=True)

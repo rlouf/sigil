@@ -4,11 +4,9 @@ import logging
 import os
 from collections.abc import Mapping
 
-from zeta.context.compaction import (
-    DropOldestPromptTransform,
-    StructuralTrimPromptTransform,
-    TaskStateExtractionPromptTransform,
-)
+from zeta.context.compaction.drop_oldest import DropOldestPromptTransform
+from zeta.context.compaction.structural_trim import StructuralTrimPromptTransform
+from zeta.context.compaction.task_state import TaskStateExtractionPromptTransform
 from zeta.context.transforms import (
     BudgetThresholdPromptTransform,
     NoOpPromptTransform,

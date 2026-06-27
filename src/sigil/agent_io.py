@@ -22,11 +22,8 @@ from sigil.display.state import (
 )
 from sigil.display.tty import is_interactive
 from sigil.turn import TurnRecorder
-from zeta.models import (
-    CODEX_RESPONSES_API,
-    ModelSelection,
-)
 from zeta.models.chat_completions import ensure_server
+from zeta.models.profiles import CODEX_RESPONSES_API, ModelSelection
 from zeta.records.events import (
     DraftEvent,
     Event,
@@ -37,13 +34,9 @@ from zeta.records.events import (
     user_message_draft,
 )
 from zeta.records.provenance import project_prompt_trace_projection
-from zeta.records.stores import (
-    EventReader,
-    Filter,
-    SqliteEventStore,
-    Store,
-    warn_trace_failure_once,
-)
+from zeta.records.stores.event_store import EventReader, Filter
+from zeta.records.stores.object_store import Store, warn_trace_failure_once
+from zeta.records.stores.sqlite import SqliteEventStore
 from zeta.run.context import RuntimeContext
 from zeta.run.runtime import (
     AgentRunResult,

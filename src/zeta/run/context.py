@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from zeta.records.stores import (
+from zeta.records.stores.sqlite import (
     SqliteEventStore,
     SqliteObjectStore,
     event_store_path,
@@ -16,7 +16,8 @@ from zeta.records.stores import (
 
 if TYPE_CHECKING:
     from zeta.capabilities.registry import CapabilityRegistry
-    from zeta.records.stores import EventStoreProtocol, Store
+    from zeta.records.stores.event_store import EventStoreProtocol
+    from zeta.records.stores.object_store import Store
 
 
 @dataclass(frozen=True)

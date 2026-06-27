@@ -19,6 +19,8 @@ from _zeta_helpers import (
     write_skill,
 )
 
+import zeta.models.chat_completions as zeta_model
+import zeta.models.types as zeta_models_api
 from sigil.tools import ensure_builtin_tools_registered
 from zeta.agents import skills as zeta_skills
 from zeta.capabilities.execution import (
@@ -40,9 +42,9 @@ from zeta.context.builder import (
     reconstructed_prompt_request,
     render_model_input,
 )
-from zeta.context.compaction import (
-    DropOldestPromptTransform,
-    StructuralTrimPromptTransform,
+from zeta.context.compaction.drop_oldest import DropOldestPromptTransform
+from zeta.context.compaction.structural_trim import StructuralTrimPromptTransform
+from zeta.context.compaction.task_state import (
     TaskStateExtractionPromptTransform,
     task_state_extraction_messages,
 )
@@ -60,11 +62,9 @@ from zeta.context.instructions import (
 )
 from zeta.context.system import model_capability_descriptors, system_prompt
 from zeta.events import Event
-from zeta.models import chat_completions as zeta_model
-from zeta.models import types as zeta_models_api
 from zeta.objects import Derivation, Object
 from zeta.records.provenance import project_prompt_trace_projection
-from zeta.records.stores import InMemoryStore
+from zeta.records.stores.memory import InMemoryStore
 
 ensure_builtin_tools_registered()
 

@@ -30,11 +30,13 @@ from _zeta_helpers import (
 )
 from click.testing import CliRunner
 
+import zeta.capabilities.execution as zeta_capability_execution
+import zeta.models.chat_completions as zeta_model
+import zeta.models.types as zeta_model_shapes
 from sigil.tools import ensure_builtin_tools_registered
 from zeta import models as zeta_models_api
 from zeta.agents import spec as zeta_agent_spec
 from zeta.agents.manifest import ManifestError
-from zeta.capabilities import execution as zeta_capability_execution
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
@@ -45,15 +47,10 @@ from zeta.capabilities.types import (
 )
 from zeta.context import builder as zeta_context
 from zeta.events import DraftEvent, Event
-from zeta.models import chat_completions as zeta_model
-from zeta.models import types as zeta_model_shapes
 from zeta.records import events as zeta_event_model
-from zeta.records.stores import (
-    Filter,
-    InMemoryStore,
-    MemoryEventStore,
-    event_store_path,
-)
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.memory import InMemoryStore, MemoryEventStore
+from zeta.records.stores.sqlite import event_store_path
 from zeta.run import context as zeta_runtime_context
 from zeta.run import outcomes as zeta_outcomes
 from zeta.run import runtime as zeta_agent
@@ -63,12 +60,13 @@ from zeta.run.runtime import AgentRunResult
 from zetad import cli as zetad_cli
 from zetad import dispatch as zetad_dispatch
 from zetad import queue as zetad_queue
-from zetad import rpc as zetad_rpc
 from zetad import scheduling as zetad_scheduling
 from zetad import session_turn as zetad_session_turn
 from zetad import worker as zetad_worker
 from zetad.attempts import Attempt
 from zetad.queue import QueueItem
+from zetad.rpc import jsonrpc as zetad_jsonrpc
+from zetad.rpc import routes as zetad_rpc_routes
 from zetad.store import RuntimeEventStore
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
@@ -1380,9 +1378,13 @@ def rpc_client(
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
     dispatcher: zetad_dispatch.EventDispatcher | None = None,
-) -> tuple[zetad_rpc.JsonRpcConnection, zetad_rpc.RpcClient, zetad_rpc.JsonRpcRouter]:
+) -> tuple[
+    zetad_jsonrpc.JsonRpcConnection,
+    zetad_rpc_routes.RpcClient,
+    zetad_jsonrpc.JsonRpcRouter,
+]:
     reader, writer, output = rpc_streams(output=output)
-    connection = zetad_rpc.JsonRpcConnection(input_stream or reader, writer)
+    connection = zetad_jsonrpc.JsonRpcConnection(input_stream or reader, writer)
     if session is None:
         event_store = zeta_events.MemoryEventStore()
         session = zeta_runtime_context.RuntimeContext(
@@ -1397,7 +1399,7 @@ def rpc_client(
     def notify_event(event: Event) -> None:
         asyncio.create_task(
             connection.notify(
-                "events.notify", {"event": zetad_rpc.event_to_wire(event)}
+                "events.notify", {"event": zeta_event_model.event_to_wire(event)}
             )
         )
 
@@ -1406,28 +1408,28 @@ def rpc_client(
             session.event_sink,
             publish_event=notify_event,
         )
-    client = zetad_rpc.RpcClient(
+    client = zetad_rpc_routes.RpcClient(
         connection=connection,
         session=session,
         dispatcher=dispatcher,
         pending_runs={},
         pending_tool_calls={},
     )
-    router = zetad_rpc.JsonRpcRouter(client)
-    router.route("initialize", zetad_rpc.initialize)
-    router.route("events.publish", zetad_rpc.events_publish)
-    router.route("events.list", zetad_rpc.events_list)
-    router.route("session.run", zetad_rpc.session_run)
-    router.route("session.cancel", zetad_rpc.session_cancel)
-    router.route("tools.register", zetad_rpc.tools_register)
-    router.route("tools.respond", zetad_rpc.tools_respond)
+    router = zetad_jsonrpc.JsonRpcRouter(client)
+    router.route("initialize", zetad_rpc_routes.initialize)
+    router.route("events.publish", zetad_rpc_routes.events_publish)
+    router.route("events.list", zetad_rpc_routes.events_list)
+    router.route("session.run", zetad_rpc_routes.session_run)
+    router.route("session.cancel", zetad_rpc_routes.session_cancel)
+    router.route("tools.register", zetad_rpc_routes.tools_register)
+    router.route("tools.respond", zetad_rpc_routes.tools_respond)
     return connection, client, router
 
 
 def rpc_client_without_connection(
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
-) -> zetad_rpc.RpcClient:
+) -> zetad_rpc_routes.RpcClient:
     if session is None:
         event_store = zeta_events.MemoryEventStore()
         session = zeta_runtime_context.RuntimeContext(
@@ -1438,7 +1440,7 @@ def rpc_client_without_connection(
             state_dir=Path("/tmp"),
             session_dir=Path("/tmp") / "sessions" / "ctx-session",
         )
-    return zetad_rpc.RpcClient(
+    return zetad_rpc_routes.RpcClient(
         connection=None,
         session=session,
         dispatcher=zetad_dispatch.EventDispatcher(session.event_sink),
@@ -1453,7 +1455,7 @@ def run_rpc_messages(
     *,
     session: zeta_runtime_context.RuntimeContext | None = None,
     dispatcher: zetad_dispatch.EventDispatcher | None = None,
-) -> zetad_rpc.RpcClient:
+) -> zetad_rpc_routes.RpcClient:
     input_stream, _, _ = rpc_streams(input_text)
     connection, client, router = rpc_client(
         input_stream,
@@ -1734,7 +1736,7 @@ def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
         )
     ).event
     request = event_store.accept(
-        zetad_rpc.rpc_requested_draft(
+        zetad_rpc_routes.rpc_requested_draft(
             "events.list",
             {"event_type": "zeta.user_message"},
             request_id="req_1",
@@ -1751,7 +1753,7 @@ def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
     )
     _, _, router = rpc_client(session=session)
 
-    response = asyncio.run(zetad_rpc.run_eventlog_rpc_once(router))
+    response = asyncio.run(zetad_rpc_routes.run_eventlog_rpc_once(router))
 
     assert response is not None
     assert response.event_type == "rpc.responded"
@@ -1763,7 +1765,7 @@ def test_zeta_rpc_eventlog_events_list_request_produces_response() -> None:
 def test_zeta_rpc_eventlog_invalid_session_run_produces_failed_event() -> None:
     event_store = zeta_events.MemoryEventStore()
     request = event_store.accept(
-        zetad_rpc.rpc_requested_draft(
+        zetad_rpc_routes.rpc_requested_draft(
             "session.run",
             {},
             request_id="req_invalid",
@@ -1780,7 +1782,7 @@ def test_zeta_rpc_eventlog_invalid_session_run_produces_failed_event() -> None:
     )
     _, _, router = rpc_client(session=session)
 
-    response = asyncio.run(zetad_rpc.run_eventlog_rpc_once(router))
+    response = asyncio.run(zetad_rpc_routes.run_eventlog_rpc_once(router))
 
     assert response is not None
     assert response.event_type == "rpc.failed"
@@ -1795,7 +1797,7 @@ def test_zeta_rpc_eventlog_session_run_request_produces_started_response(
 ) -> None:
     event_store = zeta_events.MemoryEventStore()
     request = event_store.accept(
-        zetad_rpc.rpc_requested_draft(
+        zetad_rpc_routes.rpc_requested_draft(
             "session.run",
             {"objective": "answer", "tools": []},
             request_id="req_run",
@@ -1811,9 +1813,9 @@ def test_zeta_rpc_eventlog_session_run_request_produces_started_response(
         session_dir=Path("/tmp") / "sessions" / "ctx-session",
     )
     _, _, router = rpc_client(session=session)
-    monkeypatch.setattr(zetad_rpc.routes, "session_run_id", lambda: "run_eventlog")
+    monkeypatch.setattr(zetad_rpc_routes, "session_run_id", lambda: "run_eventlog")
 
-    response = asyncio.run(zetad_rpc.run_eventlog_rpc_once(router))
+    response = asyncio.run(zetad_rpc_routes.run_eventlog_rpc_once(router))
 
     assert response is not None
     assert response.event_type == "rpc.responded"
@@ -1840,7 +1842,7 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
         + "\n"
     )
     output = RpcMemoryTransport()
-    monkeypatch.setattr(zetad_rpc.routes, "session_run_id", lambda: "run_test")
+    monkeypatch.setattr(zetad_rpc_routes, "session_run_id", lambda: "run_test")
 
     client = run_rpc_messages(input_text, output)
 
@@ -1868,13 +1870,13 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
 def test_zeta_rpc_session_cancel_updates_run_state() -> None:
     _, client, router = rpc_client()
     cancellation_event = asyncio.Event()
-    client.pending_runs["run_active"] = zetad_rpc.RunState(
+    client.pending_runs["run_active"] = zetad_rpc_routes.RunState(
         run_id="run_active",
         cancellation_event=cancellation_event,
     )
 
     result = asyncio.run(
-        zetad_rpc.session_cancel({"run_id": "run_active"}, router.client)
+        zetad_rpc_routes.session_cancel({"run_id": "run_active"}, router.client)
     )
 
     assert result == {
@@ -1899,7 +1901,7 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
     client = rpc_client_without_connection(session=session)
 
     result = asyncio.run(
-        zetad_rpc.tools_register(
+        zetad_rpc_routes.tools_register(
             {
                 "tools": [
                     {
@@ -1946,9 +1948,9 @@ def test_zeta_rpc_tools_register_uses_documented_tool_shape() -> None:
 def test_zeta_rpc_tools_register_rejects_old_capability_shape() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zetad_rpc.RpcError) as error:
+    with pytest.raises(zetad_jsonrpc.RpcError) as error:
         asyncio.run(
-            zetad_rpc.tools_register(
+            zetad_rpc_routes.tools_register(
                 {
                     "capabilities": [
                         {
@@ -1971,9 +1973,9 @@ def test_zeta_rpc_tools_register_rejects_old_capability_shape() -> None:
 def test_zeta_rpc_tools_register_rejects_unknown_tool_fields() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zetad_rpc.RpcError) as error:
+    with pytest.raises(zetad_jsonrpc.RpcError) as error:
         asyncio.run(
-            zetad_rpc.tools_register(
+            zetad_rpc_routes.tools_register(
                 {
                     "tools": [
                         {
@@ -1998,9 +2000,9 @@ def test_zeta_rpc_tools_register_rejects_unknown_tool_fields() -> None:
 def test_zeta_rpc_tools_register_rejects_missing_tool_schema() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zetad_rpc.RpcError) as error:
+    with pytest.raises(zetad_jsonrpc.RpcError) as error:
         asyncio.run(
-            zetad_rpc.tools_register(
+            zetad_rpc_routes.tools_register(
                 {"tools": [{"name": "pick_file", "description": "Pick a file."}]},
                 client,
             )
@@ -2015,9 +2017,9 @@ def test_zeta_rpc_tools_register_rejects_missing_tool_schema() -> None:
 def test_zeta_rpc_tools_register_rejects_malformed_tool_schema() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zetad_rpc.RpcError) as error:
+    with pytest.raises(zetad_jsonrpc.RpcError) as error:
         asyncio.run(
-            zetad_rpc.tools_register(
+            zetad_rpc_routes.tools_register(
                 {
                     "tools": [
                         {
@@ -2038,9 +2040,9 @@ def test_zeta_rpc_tools_register_rejects_malformed_tool_schema() -> None:
 def test_zeta_rpc_tools_register_rejects_invalid_timeout() -> None:
     client = rpc_client_without_connection()
 
-    with pytest.raises(zetad_rpc.RpcError) as error:
+    with pytest.raises(zetad_jsonrpc.RpcError) as error:
         asyncio.run(
-            zetad_rpc.tools_register(
+            zetad_rpc_routes.tools_register(
                 {
                     "tools": [
                         {
@@ -2089,7 +2091,7 @@ def test_zeta_rpc_registered_tool_invokes_peer_call_tool() -> None:
     cast(Any, client).call_tool = fake_call_tool
 
     async def run() -> dict[str, Any]:
-        await zetad_rpc.tools_register(
+        await zetad_rpc_routes.tools_register(
             {
                 "tools": [
                     {
@@ -2126,7 +2128,7 @@ def test_zeta_rpc_tools_respond_resolves_pending_call() -> None:
             asyncio.get_running_loop().create_future()
         )
         client.pending_tool_calls["call_1"] = future
-        await zetad_rpc.tools_respond(
+        await zetad_rpc_routes.tools_respond(
             {
                 "id": "call_1",
                 "result": {"ok": True},
@@ -5114,7 +5116,7 @@ def test_zeta_local_runtime_run_once_handles_eventlog_rpc_request(
         )
     ).event
     request = event_store.accept(
-        zetad_rpc.rpc_requested_draft(
+        zetad_rpc_routes.rpc_requested_draft(
             "events.list",
             {"event_type": "zeta.user_message"},
             request_id="req_runtime",

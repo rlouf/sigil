@@ -18,7 +18,7 @@ from zeta.records.events import (
     tool_call_draft,
 )
 from zeta.records.provenance import project_prompt_trace_projection
-from zeta.records.stores import InMemoryStore
+from zeta.records.stores.memory import InMemoryStore
 
 SESSION_ID = "session-1"
 TURN_ID = "turn-1"

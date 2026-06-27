@@ -18,11 +18,8 @@ from zeta.records.events import (
     Event,
     durable_event_idempotency_key,
 )
-from zeta.records.stores import (
-    EVENT_STORE_NAME,
-    Filter,
-    SqliteEventStore,
-)
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.sqlite import EVENT_STORE_NAME, SqliteEventStore
 
 TIMELINE_DURABLE_TYPES = {
     "user_message": "zeta.user_message",

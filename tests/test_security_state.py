@@ -49,14 +49,17 @@ from sigil.workflows.ask import (
 )
 from zeta.records import events as zeta_events
 from zeta.records import events as zeta_kernel_events
-from zeta.records.events import DraftEvent, Event, event_view, publish_event
-from zeta.records.stores import (
+from zeta.records.events import (
     AppendOutcome,
-    EventStoreProtocol,
-    Filter,
-    MemoryEventStore,
+    DraftEvent,
+    Event,
+    event_view,
+    publish_event,
+)
+from zeta.records.stores.event_store import EventStoreProtocol, Filter
+from zeta.records.stores.memory import MemoryEventStore
+from zeta.records.stores.sqlite import (
     SqliteEventStore,
-    SqliteObjectStore,
     event_store_path,
 )
 from zeta.run import runs as zeta_kernel_runs
@@ -136,14 +139,95 @@ def test_zeta_events_exports_the_canonical_event_boundary() -> None:
     assert zeta_kernel_runs.Run(run_id="run_1", status="running").run_id == "run_1"
 
 
-def test_zeta_record_stores_exports_named_sqlite_stores() -> None:
+def test_zeta_record_stores_package_does_not_reexport_store_symbols() -> None:
     import zeta.records.stores as stores
 
-    assert stores.SqliteEventStore is SqliteEventStore
-    assert stores.SqliteObjectStore is SqliteObjectStore
-    assert "SqliteObjectStore" in stores.__all__
-    assert "QueueClaim" not in stores.__all__
-    assert "SqliteStore" not in stores.__all__
+    reexported_names = {
+        "AppendOutcome",
+        "EventReader",
+        "EventStoreProtocol",
+        "Filter",
+        "InMemoryStore",
+        "MemoryEventStore",
+        "SqliteEventStore",
+        "SqliteObjectStore",
+        "Store",
+        "QueueClaim",
+        "SqliteStore",
+    }
+
+    assert reexported_names.isdisjoint(dir(stores))
+    assert not hasattr(stores, "__all__")
+
+
+def test_zeta_capabilities_package_does_not_reexport_leaf_symbols() -> None:
+    import zeta.capabilities as capabilities
+
+    reexported_names = {
+        "Capability",
+        "CapabilityError",
+        "CapabilityExecutor",
+        "CapabilityId",
+        "CapabilityRegistry",
+        "ExecutionMode",
+        "InProcessCapabilityExecutor",
+    }
+
+    assert reexported_names.isdisjoint(dir(capabilities))
+    if hasattr(capabilities, "registry"):
+        assert (
+            getattr(capabilities.registry, "__name__", "")
+            == "zeta.capabilities.registry"
+        )
+    assert not hasattr(capabilities, "__all__")
+
+
+def test_zeta_context_compaction_package_does_not_reexport_leaf_symbols() -> None:
+    import zeta.context.compaction as compaction
+
+    reexported_names = {
+        "DropOldestPromptTransform",
+        "StructuralTrimPromptTransform",
+        "TASK_STATE_SCHEMA",
+        "TaskStateExtractionPromptTransform",
+        "TaskStateExtractor",
+        "task_state_component",
+    }
+
+    assert reexported_names.isdisjoint(dir(compaction))
+    assert not hasattr(compaction, "__all__")
+
+
+def test_zetad_rpc_package_does_not_reexport_leaf_symbols() -> None:
+    import zetad.rpc as rpc
+
+    reexported_names = {
+        "JsonRpcConnection",
+        "JsonRpcRouter",
+        "RpcClient",
+        "RpcError",
+        "RunState",
+        "events_publish",
+        "run_stdio",
+        "session_run",
+        "tools_register",
+    }
+
+    assert reexported_names.isdisjoint(dir(rpc))
+    assert not hasattr(rpc, "__all__")
+
+
+def test_zeta_models_package_exposes_only_high_level_gateway_api() -> None:
+    import zeta.models as models
+
+    assert set(models.__all__) == {
+        "DefaultModelGateway",
+        "chat_completion_messages",
+        "chat_structured_output",
+    }
+    assert not hasattr(models, "ModelSelection")
+    assert not hasattr(models, "resolve_active_model")
+    assert not hasattr(models, "ModelInput")
 
 
 def test_plain_sqlite_event_store_does_not_import_zetad_modules(
@@ -152,7 +236,7 @@ def test_plain_sqlite_event_store_does_not_import_zetad_modules(
     script = """
 import sys
 from pathlib import Path
-from zeta.records.stores import SqliteEventStore
+from zeta.records.stores.sqlite import SqliteEventStore
 
 store = SqliteEventStore(Path(sys.argv[1]) / "events.sqlite3")
 store.close()
@@ -210,8 +294,8 @@ def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:
     assert attempt.error is None
     assert attempt.session_id is None
     assert attempt.run_id == "run_123"
-    assert zetad_dispatch.QueueItem is QueueItem
-    assert zetad_dispatch.Attempt is Attempt
+    assert "QueueItem" not in zetad_dispatch.__all__
+    assert "Attempt" not in zetad_dispatch.__all__
 
 
 def test_zeta_queue_item_runtime_payload_round_trips() -> None:

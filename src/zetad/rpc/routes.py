@@ -14,7 +14,7 @@ from zeta.capabilities.execution import error_result
 from zeta.capabilities.registry import RegisteredCapability
 from zeta.capabilities.types import Capability, CapabilityId
 from zeta.records.events import DraftEvent, Event, event_to_wire
-from zeta.records.stores import EventReader, EventStoreProtocol, Filter
+from zeta.records.stores.event_store import EventReader, EventStoreProtocol, Filter
 from zeta.run.context import RuntimeContext
 from zeta.run.runs import RunStatus
 from zeta.run.thread_run import (

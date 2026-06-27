@@ -9,7 +9,12 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 from zeta.records.events import DraftEvent, Event
-from zeta.records.stores import EventReader, EventStoreProtocol, EventWriter, Filter
+from zeta.records.stores.event_store import (
+    EventReader,
+    EventStoreProtocol,
+    EventWriter,
+    Filter,
+)
 from zetad.agents import (
     AgentDefinition,
     AgentInvocation,

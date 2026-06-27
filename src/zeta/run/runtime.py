@@ -26,9 +26,7 @@ from zeta.context.builder import (
     render_model_input,
 )
 from zeta.context.components import PromptTrace
-from zeta.models import (
-    DefaultModelGateway,
-)
+from zeta.models import DefaultModelGateway
 from zeta.models.chat_completions import tool_call_id
 from zeta.models.types import ModelInput, ModelOutput
 from zeta.records.events import (
@@ -50,7 +48,8 @@ from zeta.records.provenance import (
     PromptTraceProjection,
     project_prompt_trace_projection,
 )
-from zeta.records.stores import EventReader, Filter, Store, warn_trace_failure_once
+from zeta.records.stores.event_store import EventReader, Filter
+from zeta.records.stores.object_store import Store, warn_trace_failure_once
 from zeta.run.cancellation import (
     AbortReason,
     AgentRunAborted,

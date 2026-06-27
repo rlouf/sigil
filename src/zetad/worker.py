@@ -29,8 +29,8 @@ from zeta.agents.resources import (
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import DraftEvent, Event
-from zeta.records.stores import (
-    Filter,
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.sqlite import (
     SqliteObjectStore,
     event_store_path,
     zeta_sqlite_path,

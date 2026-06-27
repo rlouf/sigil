@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from sigil.sessions import latest_active_failure, session_id
 from sigil.state import history_view
-from zeta.models import resolve_active_model
+from zeta.models.profiles import resolve_active_model
 
 StatusState = Literal["clean", "attention"]
 DELEGATION_WORKFLOWS = ("ask", "propose", "do")

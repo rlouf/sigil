@@ -22,7 +22,7 @@ from sigil.protocols import (
     SHELL_HANDOFF_OUTCOME_EXECUTED,
 )
 from zeta.records.objects import Object
-from zeta.records.stores import InMemoryStore
+from zeta.records.stores.memory import InMemoryStore
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore, Object=Object)
 

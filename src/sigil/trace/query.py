@@ -6,7 +6,7 @@ import click
 
 from sigil.display.summarize import estimated_prompt_tokens
 from zeta.records.objects import Object, ObjectId
-from zeta.records.stores import (
+from zeta.records.stores.object_store import (
     AmbiguousIdError,
     Store,
     UnknownIdError,

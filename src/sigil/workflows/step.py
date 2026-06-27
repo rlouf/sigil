@@ -45,10 +45,7 @@ from zeta.capabilities.types import ExecutionMode
 from zeta.context.components import latest_prompt_trace_fields
 from zeta.context.instructions import load_project_instructions
 from zeta.context.system import system_prompt
-from zeta.models import (
-    active_model_selection,
-    model_selection_event,
-)
+from zeta.models.profiles import active_model_selection, model_selection_event
 from zeta.records.events import DraftEvent, Event
 from zeta.run.config import AgentConfig
 from zeta.run.context import RuntimeContext

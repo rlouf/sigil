@@ -46,7 +46,7 @@ from zeta.capabilities.types import (
     CapabilityId,
 )
 from zeta.events import DraftEvent, Event
-from zeta.records.stores import Filter
+from zeta.records.stores.event_store import Filter
 from zeta.run.config import AgentConfig
 from zeta.run.runtime import AgentRunResult
 from zetad import dispatch as zetad_dispatch

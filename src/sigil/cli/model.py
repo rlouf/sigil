@@ -7,7 +7,7 @@ import click
 
 from sigil.cli._base import cli, examples
 from sigil.sessions import session_dir
-from zeta.models import (
+from zeta.models.profiles import (
     clear_active_model_profile,
     default_model_selection,
     load_model_profiles,

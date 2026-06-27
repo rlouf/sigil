@@ -24,7 +24,7 @@ from sigil.state import (
     state_dir,
 )
 from zeta.records.events import DraftEvent
-from zeta.records.stores import SqliteEventStore
+from zeta.records.stores.sqlite import SqliteEventStore
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:
@@ -557,7 +557,7 @@ def test_sigil_blame_reports_untouched_files(monkeypatch) -> None:
 def seed_bundle_state(monkeypatch) -> dict[str, str]:
     """Record one turn with an effect, bridged into its session trace store."""
     from zeta.records.objects import Derivation, Object
-    from zeta.records.stores import SqliteObjectStore, zeta_sqlite_path
+    from zeta.records.stores.sqlite import SqliteObjectStore, zeta_sqlite_path
 
     monkeypatch.setenv("SIGIL_SESSION_ID", "bundle-src")
     append_event(

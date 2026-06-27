@@ -24,7 +24,7 @@ from zeta.capabilities.execution import proposed_effect
 from zeta.context.components import PromptTrace
 from zeta.records.events import DraftEvent, Event
 from zeta.records.objects import Derivation, Object, ObjectId
-from zeta.records.stores import warn_trace_failure_once
+from zeta.records.stores.object_store import warn_trace_failure_once
 from zeta.run.context import RuntimeContext
 from zeta.run.events import TURN_RECORD_SCHEMA
 

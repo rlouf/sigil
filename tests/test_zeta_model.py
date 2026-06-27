@@ -16,12 +16,12 @@ from _zeta_helpers import (
 )
 from click.testing import CliRunner
 
+import zeta.models.chat_completions as zeta_model
+import zeta.models.profiles as zeta_models
+import zeta.models.types as zeta_models_api
 from sigil.cli import cli as sigil_cli
 from sigil.sessions import session_dir
-from zeta.context.compaction import TASK_STATE_SCHEMA
-from zeta.models import chat_completions as zeta_model
-from zeta.models import profiles as zeta_models
-from zeta.models import types as zeta_models_api
+from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
 
 
 def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:
@@ -1545,8 +1545,8 @@ def test_zeta_models_package_dispatches_default_api_to_chat_completions(
 
 
 def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
+    import zeta.models.responses as zeta_responses
     from zeta import models as models_pkg
-    from zeta.models import responses as zeta_responses
 
     captured: dict[str, Any] = {}
 

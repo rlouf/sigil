@@ -12,11 +12,6 @@ from typing import Any
 
 from sigil.sessions import session_dir
 from sigil.state import state_dir
-from zeta.models import (
-    CODEX_RESPONSES_API,
-    load_model_profiles,
-    resolve_active_model,
-)
 from zeta.models.chat_completions import (
     endpoint_reachable,
     model_endpoint_valid,
@@ -26,6 +21,11 @@ from zeta.models.codex_auth import (
     access_token_expired,
     codex_auth_path,
     read_auth_tokens,
+)
+from zeta.models.profiles import (
+    CODEX_RESPONSES_API,
+    load_model_profiles,
+    resolve_active_model,
 )
 
 BINDING_NAME = "sigil.zsh"

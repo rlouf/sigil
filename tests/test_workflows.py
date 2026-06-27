@@ -18,6 +18,8 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 import sigil
+import zeta.models.chat_completions as zeta_model
+import zeta.models.profiles as zeta_models
 from sigil import agent_io
 from sigil import handoff as sigil_handoff
 from sigil.cli import cli as sigil_cli
@@ -48,17 +50,12 @@ from sigil.workflows import ask as ask_runner
 from sigil.workflows import step as zeta_runner
 from zeta import models as zeta_models_api
 from zeta.context.components import PromptTrace, chat_messages
-from zeta.models import chat_completions as zeta_model
-from zeta.models import profiles as zeta_models
 from zeta.records import events as zeta_event_model
 from zeta.records.events import DraftEvent, Event, event_view
 from zeta.records.objects import Ref
-from zeta.records.stores import (
-    Filter,
-    SqliteEventStore,
-    event_store_path,
-    resolve_object_id,
-)
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.object_store import resolve_object_id
+from zeta.records.stores.sqlite import SqliteEventStore, event_store_path
 from zeta.run import runtime as zeta_agent
 from zeta.run.runtime import AgentRunResult
 

@@ -24,10 +24,7 @@ from zeta.models.chat_completions import (
 )
 from zeta.models.types import ModelInput
 from zeta.objects import Derivation, Object, ObjectId
-from zeta.records.stores import (
-    Store,
-    warn_trace_failure_once,
-)
+from zeta.records.stores.object_store import Store, warn_trace_failure_once
 
 
 @dataclass(frozen=True)

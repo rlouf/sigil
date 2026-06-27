@@ -13,7 +13,8 @@ from typing import Any
 
 from zeta.events import Event
 from zeta.records.events import AppendOutcome, DraftEvent
-from zeta.records.stores import Filter, SqliteEventStore
+from zeta.records.stores.event_store import Filter
+from zeta.records.stores.sqlite import SqliteEventStore
 from zetad.projections import runtime_event_projection
 
 
