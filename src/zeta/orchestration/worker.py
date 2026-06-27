@@ -38,12 +38,10 @@ from zeta.orchestration.agents import (
     compile_agent_definitions,
 )
 from zeta.orchestration.dispatch import EventDispatcher
-from zeta.orchestration.projections import runtime_event_projection
 from zeta.orchestration.session_turn_agent import session_turn_agent
+from zeta.orchestration.store import QueueClaim, RuntimeEventStore
 from zeta.records.stores import (
     Filter,
-    QueueClaim,
-    SqliteEventStore,
     SqliteObjectStore,
     event_store_path,
     zeta_sqlite_path,
@@ -65,7 +63,7 @@ class WorkerServices:
 
     project_root: Path
     state_dir: Path
-    events: SqliteEventStore
+    events: RuntimeEventStore
     tool_registry: CapabilityRegistry = field(default_factory=CapabilityRegistry)
     plugin_resolver: PluginResolver | None = None
     worker_name: str = LOCAL_WORKER_NAME
@@ -91,10 +89,7 @@ def build_worker_services(
     return WorkerServices(
         project_root=resolved_project_root,
         state_dir=resolved_state_dir,
-        events=SqliteEventStore(
-            event_store_path(resolved_state_dir),
-            projections=(runtime_event_projection(),),
-        ),
+        events=RuntimeEventStore.open(event_store_path(resolved_state_dir)),
         tool_registry=tool_registry or CapabilityRegistry(),
         plugin_resolver=plugin_resolver,
     )
@@ -381,7 +376,7 @@ def project_agent_run_turn(runtime: WorkerServices):
 
 
 async def run_available_queue_item(
-    events: SqliteEventStore,
+    events: RuntimeEventStore,
     executors: tuple[ExecutableAgent, ...],
     *,
     worker_name: str,
@@ -431,7 +426,7 @@ async def run_available_queue_item(
             events.release_locks(lock_keys, lock_owner)
 
 
-def enqueue_pending_events(events: SqliteEventStore) -> int:
+def enqueue_pending_events(events: RuntimeEventStore) -> int:
     queued = 0
     for event in events.list_events(Filter()):
         if is_runtime_event(event) or event.event_type.startswith(
@@ -544,7 +539,7 @@ def run_once_message(queue_item_id: str, lifecycle_events: list[Event]) -> str:
 
 
 def claim_available_queue_item(
-    events: SqliteEventStore,
+    events: RuntimeEventStore,
     *,
     worker_name: str,
     skipped_queue_items: set[str] | None = None,
@@ -562,7 +557,7 @@ def claim_available_queue_item(
 
 
 def queue_item_lock_keys(
-    events: SqliteEventStore,
+    events: RuntimeEventStore,
     executors: tuple[ExecutableAgent, ...],
     queue_item_id: str,
 ) -> tuple[str, ...]:

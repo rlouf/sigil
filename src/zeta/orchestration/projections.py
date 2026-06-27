@@ -61,6 +61,13 @@ class RuntimeEventProjection:
               usage_json TEXT,
               finished_at TEXT
             ) STRICT;
+
+            CREATE TABLE IF NOT EXISTS locks (
+              key TEXT PRIMARY KEY,
+              owner TEXT NOT NULL,
+              acquired_at INTEGER NOT NULL,
+              expires_at INTEGER NOT NULL
+            ) STRICT;
             """
         )
 

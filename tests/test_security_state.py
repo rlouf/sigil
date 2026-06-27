@@ -123,6 +123,7 @@ def test_zeta_record_stores_exports_named_sqlite_stores() -> None:
     assert stores.SqliteEventStore is SqliteEventStore
     assert stores.SqliteObjectStore is SqliteObjectStore
     assert "SqliteObjectStore" in stores.__all__
+    assert "QueueClaim" not in stores.__all__
     assert "SqliteStore" not in stores.__all__
 
 
@@ -145,6 +146,27 @@ for module in ("zeta.orchestration.queue", "zeta.orchestration.attempts"):
         check=True,
         text=True,
     )
+
+
+def test_plain_sqlite_event_store_does_not_expose_runtime_queue_api() -> None:
+    runtime_api = {
+        "ensure_pending_queue_item",
+        "event_has_queue_item",
+        "queue_item",
+        "list_queue_items",
+        "list_attempts",
+        "heartbeat_attempt",
+        "claim_next_queue_item",
+        "release_queue_claim",
+        "queue_claim_is_current",
+        "reconcile_expired_queue_claims",
+        "list_locks",
+        "acquire_locks",
+        "release_locks",
+        "reconcile_expired_locks",
+    }
+
+    assert runtime_api.isdisjoint(dir(SqliteEventStore))
 
 
 def test_zeta_dispatch_kernel_defines_queue_item_and_attempt_shapes() -> None:

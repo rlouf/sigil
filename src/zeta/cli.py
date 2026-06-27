@@ -10,8 +10,8 @@ import click
 
 from zeta.events import Event
 from zeta.orchestration import scheduling, worker
-from zeta.orchestration.projections import runtime_event_projection
-from zeta.records.stores import Filter, SqliteEventStore, event_store_path
+from zeta.orchestration.store import RuntimeEventStore
+from zeta.records.stores import Filter, event_store_path
 from zeta.rpc import run_stdio
 
 QUEUE_STATUS_ORDER = (
@@ -37,10 +37,12 @@ def runtime_state_dir(project_root: Path, state_dir: Path | None) -> Path:
     return project_root.expanduser().resolve() / ".zeta"
 
 
-def runtime_event_store(project_root: Path, state_dir: Path | None) -> SqliteEventStore:
-    return SqliteEventStore(
-        event_store_path(runtime_state_dir(project_root, state_dir)),
-        projections=(runtime_event_projection(),),
+def runtime_event_store(
+    project_root: Path,
+    state_dir: Path | None,
+) -> RuntimeEventStore:
+    return RuntimeEventStore.open(
+        event_store_path(runtime_state_dir(project_root, state_dir))
     )
 
 

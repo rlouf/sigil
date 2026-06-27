@@ -55,14 +55,13 @@ from zeta.orchestration import scheduling as zeta_scheduling
 from zeta.orchestration import session_turn_agent as zeta_session_turn_agent
 from zeta.orchestration import worker as zeta_worker
 from zeta.orchestration.attempts import Attempt
-from zeta.orchestration.projections import runtime_event_projection
 from zeta.orchestration.queue import QueueItem
+from zeta.orchestration.store import RuntimeEventStore
 from zeta.records import events as zeta_event_model
 from zeta.records.stores import (
     Filter,
     InMemoryStore,
     MemoryEventStore,
-    SqliteEventStore,
     event_store_path,
 )
 from zeta.run import context as zeta_runtime_context
@@ -77,8 +76,8 @@ zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 ensure_builtin_tools_registered()
 
 
-def runtime_sqlite_event_store(path: Path) -> SqliteEventStore:
-    return SqliteEventStore(path, projections=(runtime_event_projection(),))
+def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
+    return RuntimeEventStore.open(path)
 
 
 zeta_events = SimpleNamespace(
@@ -3466,7 +3465,7 @@ def test_zeta_sqlite_event_store_serializes_threaded_appends(
     release_append = threading.Event()
     first_projection = threading.Event()
     errors: list[BaseException] = []
-    original_projection = event_store._index_one_runtime_event
+    original_projection = event_store.events._index_one_runtime_event
 
     def blocked_first_projection(event: Event) -> None:
         if not first_projection.is_set():
@@ -3475,7 +3474,7 @@ def test_zeta_sqlite_event_store_serializes_threaded_appends(
             assert release_append.wait(timeout=2.0)
         original_projection(event)
 
-    event_store._index_one_runtime_event = blocked_first_projection
+    event_store.events._index_one_runtime_event = blocked_first_projection
 
     def append_event(event_id: str) -> None:
         try:
