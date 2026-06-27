@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 if TYPE_CHECKING:
-    from zeta.rpc.routes import RpcClient
+    from zetad.rpc.routes import RpcClient
 
 
 RpcResult = dict[str, Any] | None

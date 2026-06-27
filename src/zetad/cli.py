@@ -9,10 +9,10 @@ from pathlib import Path
 import click
 
 from zeta.events import Event
-from zeta.orchestration import scheduling, worker
-from zeta.orchestration.store import RuntimeEventStore
 from zeta.records.stores import Filter, event_store_path
-from zeta.rpc import run_stdio
+from zetad import scheduling, worker
+from zetad.rpc import run_stdio
+from zetad.store import RuntimeEventStore
 
 QUEUE_STATUS_ORDER = (
     "pending",

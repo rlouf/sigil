@@ -1,7 +1,7 @@
 """JSON-RPC entrypoints for the Zeta runtime."""
 
-from zeta.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError, RpcHandler
-from zeta.rpc.routes import (
+from zetad.rpc.jsonrpc import JsonRpcConnection, JsonRpcRouter, RpcError, RpcHandler
+from zetad.rpc.routes import (
     CapabilityRegistration,
     RpcClient,
     RunState,
@@ -23,7 +23,7 @@ from zeta.rpc.routes import (
     tools_register,
     tools_respond,
 )
-from zeta.rpc.stdio import run_stdio
+from zetad.rpc.stdio import run_stdio
 
 __all__ = [
     "CapabilityRegistration",

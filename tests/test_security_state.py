@@ -47,17 +47,6 @@ from sigil.workflows.ask import (
     ASK_SYSTEM_PROMPT,
     ask,
 )
-from zeta.orchestration import dispatch as zeta_kernel_dispatch
-from zeta.orchestration.attempts import (
-    Attempt,
-    attempt_event_payload,
-    attempt_from_event_payload,
-)
-from zeta.orchestration.queue import (
-    QueueItem,
-    queue_item_event_payload,
-    queue_item_from_event_payload,
-)
 from zeta.records import events as zeta_events
 from zeta.records import events as zeta_kernel_events
 from zeta.records.events import DraftEvent, Event, event_view, publish_event
@@ -71,6 +60,17 @@ from zeta.records.stores import (
     event_store_path,
 )
 from zeta.run import runs as zeta_kernel_runs
+from zetad import dispatch as zeta_kernel_dispatch
+from zetad.attempts import (
+    Attempt,
+    attempt_event_payload,
+    attempt_from_event_payload,
+)
+from zetad.queue import (
+    QueueItem,
+    queue_item_event_payload,
+    queue_item_from_event_payload,
+)
 
 
 class TtyStringIO(StringIO):
@@ -92,6 +92,25 @@ def test_zeta_package_does_not_import_parent_sigil_modules() -> None:
             if isinstance(node, ast.ImportFrom):
                 resolved = resolved_import_module(package_parts, node)
                 if resolved and resolved[0] == "sigil":
+                    module = "." * node.level + (node.module or "")
+                    violations.append(f"{path}:{node.lineno}: from {module}")
+    assert violations == []
+
+
+def test_zeta_package_does_not_import_zetad_modules() -> None:
+    zeta_root = Path("src/zeta")
+    violations: list[str] = []
+    for path in sorted(zeta_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        package_parts = ("zeta", *path.relative_to(zeta_root).parts[:-1])
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "zetad" or alias.name.startswith("zetad."):
+                        violations.append(f"{path}:{node.lineno}: import {alias.name}")
+            if isinstance(node, ast.ImportFrom):
+                resolved = resolved_import_module(package_parts, node)
+                if resolved and resolved[0] == "zetad":
                     module = "." * node.level + (node.module or "")
                     violations.append(f"{path}:{node.lineno}: from {module}")
     assert violations == []
@@ -127,7 +146,7 @@ def test_zeta_record_stores_exports_named_sqlite_stores() -> None:
     assert "SqliteStore" not in stores.__all__
 
 
-def test_plain_sqlite_event_store_does_not_import_orchestration(
+def test_plain_sqlite_event_store_does_not_import_zetad_modules(
     tmp_path: Path,
 ) -> None:
     script = """
@@ -137,7 +156,7 @@ from zeta.records.stores import SqliteEventStore
 
 store = SqliteEventStore(Path(sys.argv[1]) / "events.sqlite3")
 store.close()
-for module in ("zeta.orchestration.queue", "zeta.orchestration.attempts"):
+for module in ("zetad.queue", "zetad.attempts"):
     if module in sys.modules:
         raise SystemExit(f"{module} was imported")
 """

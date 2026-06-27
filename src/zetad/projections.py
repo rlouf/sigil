@@ -6,8 +6,8 @@ import json
 import sqlite3
 
 from zeta.events import Event
-from zeta.orchestration.attempts import attempt_from_event_payload
-from zeta.orchestration.queue import project_one_queue_item
+from zetad.attempts import attempt_from_event_payload
+from zetad.queue import project_one_queue_item
 
 
 class RuntimeEventProjection:

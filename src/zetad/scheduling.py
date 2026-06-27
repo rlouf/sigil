@@ -14,13 +14,13 @@ from zeta.agents.manifest import PluginResolver
 from zeta.agents.resources import load_agent_project, validate_agent_project
 from zeta.agents.spec import AgentSpec, ScheduleEntry, scheduled_event_type
 from zeta.events import DraftEvent, Event
-from zeta.orchestration.store import RuntimeEventStore
 from zeta.records.stores import (
     EventReader,
     EventWriter,
     Filter,
     event_store_path,
 )
+from zetad.store import RuntimeEventStore
 
 SCHEDULER_TICK_PREFIX = "scheduler.tick."
 

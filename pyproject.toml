@@ -52,7 +52,7 @@ Issues = "https://github.com/rlouf/sigil/issues"
 
 [project.scripts]
 sigil = "sigil.cli:main"
-zeta = "zeta.cli:main"
+zeta = "zetad.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -100,5 +100,5 @@ paths = ["src", "tests"]
 min_confidence = 80
 
 [tool.deptry]
-known_first_party = ["sigil", "zeta"]
+known_first_party = ["sigil", "zeta", "zetad"]
 package_module_name_map = { PyYAML = "yaml" }

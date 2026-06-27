@@ -31,9 +31,7 @@ from _zeta_helpers import (
 from click.testing import CliRunner
 
 from sigil.tools import ensure_builtin_tools_registered
-from zeta import cli as zeta_cli
 from zeta import models as zeta_models_api
-from zeta import rpc as zeta_rpc
 from zeta.agents import spec as zeta_agent_spec
 from zeta.agents.manifest import ManifestError
 from zeta.capabilities import execution as zeta_capability_execution
@@ -49,14 +47,6 @@ from zeta.context import builder as zeta_context
 from zeta.events import DraftEvent, Event
 from zeta.models import chat_completions as zeta_model
 from zeta.models import types as zeta_model_shapes
-from zeta.orchestration import dispatch as zeta_dispatch
-from zeta.orchestration import queue as zeta_queue
-from zeta.orchestration import scheduling as zeta_scheduling
-from zeta.orchestration import session_turn_agent as zeta_session_turn_agent
-from zeta.orchestration import worker as zeta_worker
-from zeta.orchestration.attempts import Attempt
-from zeta.orchestration.queue import QueueItem
-from zeta.orchestration.store import RuntimeEventStore
 from zeta.records import events as zeta_event_model
 from zeta.records.stores import (
     Filter,
@@ -70,6 +60,16 @@ from zeta.run import runtime as zeta_agent
 from zeta.run import thread_run as zeta_requests
 from zeta.run.config import CompactionPolicy
 from zeta.run.runtime import AgentRunResult
+from zetad import cli as zeta_cli
+from zetad import dispatch as zeta_dispatch
+from zetad import queue as zeta_queue
+from zetad import rpc as zeta_rpc
+from zetad import scheduling as zeta_scheduling
+from zetad import session_turn as zeta_session_turn_agent
+from zetad import worker as zeta_worker
+from zetad.attempts import Attempt
+from zetad.queue import QueueItem
+from zetad.store import RuntimeEventStore
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
@@ -242,7 +242,7 @@ def _test_capability(
 def test_zeta_console_script_is_declared() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert pyproject["project"]["scripts"]["zeta"] == "zeta.cli:main"
+    assert pyproject["project"]["scripts"]["zeta"] == "zetad.cli:main"
 
 
 def test_zeta_agent_turn_carries_reasoning_into_event(monkeypatch) -> None:

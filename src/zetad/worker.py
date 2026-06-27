@@ -29,17 +29,6 @@ from zeta.agents.resources import (
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import DraftEvent, Event
-from zeta.orchestration.agents import (
-    AgentDefinition,
-    AgentInvocation,
-    EventPattern,
-    ExecutableAgent,
-    agent_session_id,
-    compile_agent_definitions,
-)
-from zeta.orchestration.dispatch import EventDispatcher
-from zeta.orchestration.session_turn_agent import session_turn_agent
-from zeta.orchestration.store import QueueClaim, RuntimeEventStore
 from zeta.records.stores import (
     Filter,
     SqliteObjectStore,
@@ -49,6 +38,17 @@ from zeta.records.stores import (
 from zeta.run.config import AgentConfig
 from zeta.run.context import RuntimeContext
 from zeta.run.runtime import AgentRunRequest, run_agent
+from zetad.agents import (
+    AgentDefinition,
+    AgentInvocation,
+    EventPattern,
+    ExecutableAgent,
+    agent_session_id,
+    compile_agent_definitions,
+)
+from zetad.dispatch import EventDispatcher
+from zetad.session_turn import session_turn_agent
+from zetad.store import QueueClaim, RuntimeEventStore
 
 logger = logging.getLogger(__name__)
 
@@ -447,7 +447,7 @@ def is_runtime_event(event: Event) -> bool:
 
 
 def pending_rpc_request(runtime: WorkerServices) -> Event | None:
-    from zeta.rpc.routes import RPC_REQUESTED, rpc_request_has_terminal_response
+    from zetad.rpc.routes import RPC_REQUESTED, rpc_request_has_terminal_response
 
     for event in runtime.events.list_events(Filter(event_type=RPC_REQUESTED)):
         if not rpc_request_has_terminal_response(runtime.events, event):
@@ -459,8 +459,8 @@ async def run_eventlog_rpc_request(
     runtime: WorkerServices,
     request: Event,
 ) -> Event | None:
-    from zeta.rpc.jsonrpc import JsonRpcRouter
-    from zeta.rpc.routes import (
+    from zetad.rpc.jsonrpc import JsonRpcRouter
+    from zetad.rpc.routes import (
         RpcClient,
         RunState,
         events_list,

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from zeta.records.events import Event
 
 if TYPE_CHECKING:
-    from zeta.orchestration.agents import AgentRoute
+    from zetad.agents import AgentRoute
 
 QueueItemId = str
 

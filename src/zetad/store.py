@@ -12,9 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from zeta.events import Event
-from zeta.orchestration.projections import runtime_event_projection
 from zeta.records.events import AppendOutcome, DraftEvent
 from zeta.records.stores import Filter, SqliteEventStore
+from zetad.projections import runtime_event_projection
 
 
 @dataclass(frozen=True)
