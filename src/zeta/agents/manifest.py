@@ -35,59 +35,48 @@ class SkillResolver(Protocol):
 
 @dataclass(frozen=True)
 class IngressBinding:
-    """External source binding parsed from a plugin-owned manifest section."""
+    """External event binding parsed from an ingress manifest section."""
 
-    source: str
-    event: str | None = None
+    event: str
     filter: Mapping[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
 class EgressBinding:
-    """External sink binding parsed from a plugin-owned manifest section."""
+    """External event binding parsed from an egress manifest section."""
 
-    sink: str
-    event: str | None = None
+    event: str
     filter: Mapping[str, Any] = field(default_factory=dict)
     idempotency_key: str | None = None
 
 
-PluginIngressPoller = Callable[
+IngressPoller = Callable[
     [IngressBinding],
     Iterable[DraftEvent] | Awaitable[Iterable[DraftEvent]],
 ]
-PluginEgressHandler = Callable[
+EgressHandler = Callable[
     [Event, EgressBinding, str],
     Mapping[str, Any] | None | Awaitable[Mapping[str, Any] | None],
 ]
 
 
 @dataclass(frozen=True)
-class PluginManifestSection:
-    """Plugin-owned frontmatter section metadata."""
+class EventConnector:
+    """Event ingress and egress contributed by an installed connector."""
 
-    key: str
-    schema: Mapping[str, Any] | None = None
+    id: str
     events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class AgentPlugin:
-    """Static plugin metadata used by Zeta project validation."""
-
-    name: str
-    events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
-    manifest_sections: Mapping[str, PluginManifestSection] = field(default_factory=dict)
-    ingress_pollers: Mapping[str, PluginIngressPoller] = field(default_factory=dict)
-    egress_handlers: Mapping[str, PluginEgressHandler] = field(default_factory=dict)
+    ingress: Mapping[str, IngressPoller] = field(default_factory=dict)
+    egress: Mapping[str, EgressHandler] = field(default_factory=dict)
+    filters: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
 
 
 @runtime_checkable
-class PluginResolver(Protocol):
-    """Anything that can resolve installed plugin metadata."""
+class EventConnectorResolver(Protocol):
+    """Anything that can resolve installed event connectors."""
 
-    def resolve(self, name: str) -> AgentPlugin | None: ...
+    def resolve(self, connector_id: str) -> EventConnector | None: ...
 
     def names_for_section(self, key: str, value: Any) -> Iterable[str]: ...
 
@@ -99,14 +88,14 @@ class Manifest:
     tools: ToolResolver | None = None
     skills: SkillResolver | Mapping[str, Any] | None = None
     events: EventRegistry | None = None
-    plugins: PluginResolver | Mapping[str, AgentPlugin] | None = None
+    connectors: EventConnectorResolver | Mapping[str, EventConnector] | None = None
 
     def validate(self, spec: AgentSpec) -> None:
         validate_prompt(spec)
         validate_tools(spec, self.tools)
         validate_skills(spec, self.skills)
-        validate_plugin_sections(spec, self.plugins)
-        validate_plugin_bindings(spec, self.plugins)
+        validate_manifest_sections(spec)
+        validate_connector_bindings(spec, self.connectors)
         validate_events(spec, self.events)
 
 
@@ -148,168 +137,97 @@ def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:
             )
 
 
-def validate_plugin_bindings(
+def validate_connector_bindings(
     spec: AgentSpec,
-    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+    connectors: EventConnectorResolver | Mapping[str, EventConnector] | None,
 ) -> None:
+    connector_map = resolved_connectors_for_spec(spec, connectors)
     for binding in ingress_bindings(spec):
-        validate_ingress_binding(spec, binding, plugins)
+        validate_ingress_binding(spec, binding, connector_map)
     for binding in egress_bindings(spec):
-        validate_egress_binding(spec, binding, plugins)
+        validate_egress_binding(spec, binding, connector_map)
 
 
-def validate_plugin_sections(
-    spec: AgentSpec,
-    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
-) -> None:
-    plugin_map = resolved_plugins_for_spec(spec, plugins)
-    for key, value in spec.manifest.items():
+def validate_manifest_sections(spec: AgentSpec) -> None:
+    for key in spec.manifest:
         if key in {"ingress", "egress"}:
             continue
-        claimants = [
-            plugin for plugin in plugin_map.values() if key in plugin.manifest_sections
-        ]
-        if not claimants:
-            raise ManifestError(
-                f"agent {spec.slug!r} uses unknown manifest section {key!r}"
-            )
-        if len(claimants) > 1:
-            names = "', '".join(plugin.name for plugin in claimants)
-            raise ManifestError(
-                f"agent {spec.slug!r} manifest section {key!r} is claimed by "
-                f"multiple plugins: '{names}'"
-            )
-        section = claimants[0].manifest_sections[key]
-        validate_section_schema(
-            value,
-            section.schema,
-            f"agent {spec.slug!r} has invalid manifest section {key!r}",
+        raise ManifestError(
+            f"agent {spec.slug!r} uses unknown manifest section {key!r}"
         )
 
 
 def validate_ingress_binding(
     spec: AgentSpec,
     binding: IngressBinding,
-    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+    connectors: Mapping[str, EventConnector],
 ) -> None:
-    plugin = resolve_plugin(plugins, binding.source)
-    if plugin is None:
+    connector = connector_for_event(connectors, binding.event)
+    if connector is None:
         raise ManifestError(
-            f"agent {spec.slug!r} references unknown ingress source {binding.source!r}"
+            f"agent {spec.slug!r} references unknown ingress event {binding.event!r}"
         )
-    section = plugin_manifest_section(plugin, "ingress")
-    validate_section_schema(
-        ingress_binding_record(binding),
-        section.schema,
-        f"agent {spec.slug!r} has invalid ingress binding for {binding.source!r}",
-    )
-    event_type = selected_plugin_event(
-        binding.event,
-        section.events,
-        "ingress source",
-        binding.source,
-    )
-    if event_type not in spec.accepts:
+    if binding.event not in spec.accepts:
         raise ManifestError(
-            f"agent {spec.slug!r} ingress event {event_type!r} is not listed in accepts"
+            f"agent {spec.slug!r} ingress event {binding.event!r} is not listed in accepts"
         )
     if binding.idempotency_key is None:
         raise ManifestError(
-            f"agent {spec.slug!r} ingress source {binding.source!r} requires idempotency_key"
+            f"agent {spec.slug!r} ingress event {binding.event!r} requires idempotency_key"
         )
     validate_binding_filter(
         binding.filter,
-        section.events[event_type],
-        f"agent {spec.slug!r} has invalid ingress filter for {binding.source!r}",
+        connector.filters.get(binding.event),
+        f"agent {spec.slug!r} has invalid ingress filter for {binding.event!r}",
     )
 
 
 def validate_egress_binding(
     spec: AgentSpec,
     binding: EgressBinding,
-    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
+    connectors: Mapping[str, EventConnector],
 ) -> None:
-    plugin = resolve_plugin(plugins, binding.sink)
-    if plugin is None:
+    connector = connector_for_event(connectors, binding.event)
+    if connector is None:
         raise ManifestError(
-            f"agent {spec.slug!r} references unknown egress sink {binding.sink!r}"
+            f"agent {spec.slug!r} references unknown egress event {binding.event!r}"
         )
-    section = plugin_manifest_section(plugin, "egress")
-    validate_section_schema(
-        egress_binding_record(binding),
-        section.schema,
-        f"agent {spec.slug!r} has invalid egress binding for {binding.sink!r}",
-    )
-    event_type = selected_plugin_event(
-        binding.event,
-        section.events,
-        "egress sink",
-        binding.sink,
-    )
-    if event_type not in spec.returns:
+    if binding.event not in spec.returns:
         raise ManifestError(
-            f"agent {spec.slug!r} egress event {event_type!r} is not listed in returns"
+            f"agent {spec.slug!r} egress event {binding.event!r} is not listed in returns"
         )
     validate_binding_filter(
         binding.filter,
-        section.events[event_type],
-        f"agent {spec.slug!r} has invalid egress filter for {binding.sink!r}",
+        connector.filters.get(binding.event),
+        f"agent {spec.slug!r} has invalid egress filter for {binding.event!r}",
     )
 
 
-def resolve_plugin(
-    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
-    name: str,
-) -> AgentPlugin | None:
-    if plugins is None:
-        return None
-    if isinstance(plugins, Mapping):
-        return cast(Mapping[str, AgentPlugin], plugins).get(name)
-    return plugins.resolve(name)
-
-
-def resolved_plugins_for_spec(
+def resolved_connectors_for_spec(
     spec: AgentSpec,
-    plugins: PluginResolver | Mapping[str, AgentPlugin] | None,
-) -> Mapping[str, AgentPlugin]:
-    if isinstance(plugins, Mapping):
-        return cast(Mapping[str, AgentPlugin], plugins)
-    if plugins is None:
+    connectors: EventConnectorResolver | Mapping[str, EventConnector] | None,
+) -> Mapping[str, EventConnector]:
+    if isinstance(connectors, Mapping):
+        return cast(Mapping[str, EventConnector], connectors)
+    if connectors is None:
         return {}
-    resolved: dict[str, AgentPlugin] = {}
+    resolved: dict[str, EventConnector] = {}
     for key, value in spec.manifest.items():
-        for name in plugins.names_for_section(key, value):
-            plugin = plugins.resolve(name)
-            if plugin is not None:
-                resolved[name] = plugin
+        for connector_id in connectors.names_for_section(key, value):
+            connector = connectors.resolve(connector_id)
+            if connector is not None:
+                resolved[connector_id] = connector
     return resolved
 
 
-def plugin_manifest_section(plugin: AgentPlugin, key: str) -> PluginManifestSection:
-    section = plugin.manifest_sections.get(key)
-    if section is None:
-        raise ManifestError(f"plugin {plugin.name!r} does not support {key!r}")
-    return section
-
-
-def selected_plugin_event(
-    event_type: str | None,
-    available: Mapping[str, Mapping[str, Any] | None],
-    binding_kind: str,
-    plugin_name: str,
-) -> str:
-    if event_type is not None:
-        if event_type not in available:
-            raise ManifestError(
-                f"{binding_kind} {plugin_name!r} does not support event {event_type!r}"
-            )
-        return event_type
-    if len(available) != 1:
-        raise ManifestError(
-            f"{binding_kind} {plugin_name!r} requires an event type because it has "
-            f"{len(available)} event types"
-        )
-    return next(iter(available))
+def connector_for_event(
+    connectors: Mapping[str, EventConnector],
+    event_type: str,
+) -> EventConnector | None:
+    for connector in connectors.values():
+        if event_type in connector.events:
+            return connector
+    return None
 
 
 def validate_binding_filter(
@@ -326,25 +244,7 @@ def validate_binding_filter(
         Draft202012Validator(schema).validate(dict(value))
     except SchemaError as exc:
         raise ManifestError(
-            f"{message}: plugin filter schema is invalid: {exc.message}"
-        ) from exc
-    except ValidationError as exc:
-        raise ManifestError(f"{message}: {exc.message}") from exc
-
-
-def validate_section_schema(
-    value: Any,
-    schema: Mapping[str, Any] | None,
-    message: str,
-) -> None:
-    if schema is None:
-        return
-    try:
-        Draft202012Validator.check_schema(schema)
-        Draft202012Validator(schema).validate(value)
-    except SchemaError as exc:
-        raise ManifestError(
-            f"{message}: plugin section schema is invalid: {exc.message}"
+            f"{message}: connector filter schema is invalid: {exc.message}"
         ) from exc
     except ValidationError as exc:
         raise ManifestError(f"{message}: {exc.message}") from exc
@@ -354,8 +254,7 @@ def ingress_bindings(spec: AgentSpec) -> tuple[IngressBinding, ...]:
     section = spec.manifest.get("ingress", ())
     return tuple(
         IngressBinding(
-            source=required_binding_string(item, "ingress", "source", spec),
-            event=optional_binding_string(item.get("event"), "ingress", "event", spec),
+            event=required_binding_string(item, "ingress", "event", spec),
             filter=binding_filter(item.get("filter", {}), "ingress", spec),
             idempotency_key=optional_binding_string(
                 item.get("idempotency_key"),
@@ -372,8 +271,7 @@ def egress_bindings(spec: AgentSpec) -> tuple[EgressBinding, ...]:
     section = spec.manifest.get("egress", ())
     return tuple(
         EgressBinding(
-            sink=required_binding_string(item, "egress", "sink", spec),
-            event=optional_binding_string(item.get("event"), "egress", "event", spec),
+            event=required_binding_string(item, "egress", "event", spec),
             filter=binding_filter(item.get("filter", {}), "egress", spec),
             idempotency_key=optional_binding_string(
                 item.get("idempotency_key"),
@@ -405,16 +303,7 @@ def binding_item(value: Any, key: str, spec: AgentSpec) -> Mapping[str, Any]:
         raise ManifestError(
             f"agent {spec.slug!r} has invalid {key!r} section: expected object"
         )
-    supported = (
-        {"source", "event", "filter", "idempotency_key"}
-        if key == "ingress"
-        else {
-            "sink",
-            "event",
-            "filter",
-            "idempotency_key",
-        }
-    )
+    supported = {"event", "filter", "idempotency_key"}
     unknown = sorted(set(value) - supported)
     if unknown:
         raise ManifestError(
@@ -459,27 +348,3 @@ def binding_filter(value: Any, key: str, spec: AgentSpec) -> Mapping[str, Any]:
             f"agent {spec.slug!r} has invalid {key!r} section: filter must be an object"
         )
     return dict(value)
-
-
-def ingress_binding_record(binding: IngressBinding) -> dict[str, Any]:
-    record: dict[str, Any] = {
-        "source": binding.source,
-        "filter": dict(binding.filter),
-    }
-    if binding.event is not None:
-        record["event"] = binding.event
-    if binding.idempotency_key is not None:
-        record["idempotency_key"] = binding.idempotency_key
-    return record
-
-
-def egress_binding_record(binding: EgressBinding) -> dict[str, Any]:
-    record: dict[str, Any] = {
-        "sink": binding.sink,
-        "filter": dict(binding.filter),
-    }
-    if binding.event is not None:
-        record["event"] = binding.event
-    if binding.idempotency_key is not None:
-        record["idempotency_key"] = binding.idempotency_key
-    return record

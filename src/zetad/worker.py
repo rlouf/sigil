@@ -15,12 +15,11 @@ from jsonschema import Draft202012Validator
 
 from zeta.agents.manifest import (
     EgressBinding,
+    EventConnectorResolver,
     IngressBinding,
-    PluginResolver,
+    connector_for_event,
     egress_bindings,
     ingress_bindings,
-    plugin_manifest_section,
-    selected_plugin_event,
 )
 from zeta.agents.resources import (
     AgentProject,
@@ -65,7 +64,7 @@ class WorkerServices:
     state_dir: Path
     events: RuntimeEventStore
     tool_registry: CapabilityRegistry = field(default_factory=CapabilityRegistry)
-    plugin_resolver: PluginResolver | None = None
+    connector_resolver: EventConnectorResolver | None = None
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
 
@@ -78,7 +77,7 @@ def build_worker_services(
     project_root: Path,
     state_dir: Path | None = None,
     tool_registry: CapabilityRegistry | None = None,
-    plugin_resolver: PluginResolver | None = None,
+    connector_resolver: EventConnectorResolver | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = (
@@ -91,7 +90,7 @@ def build_worker_services(
         state_dir=resolved_state_dir,
         events=RuntimeEventStore.open(event_store_path(resolved_state_dir)),
         tool_registry=tool_registry or CapabilityRegistry(),
-        plugin_resolver=plugin_resolver,
+        connector_resolver=connector_resolver,
     )
 
 
@@ -114,7 +113,7 @@ async def run_once(runtime: WorkerServices) -> str:
 def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
     project = load_agent_project(
         runtime.project_root / "agents",
-        plugin_resolver=runtime.plugin_resolver,
+        connector_resolver=runtime.connector_resolver,
     )
     validate_agent_project(project)
     return tuple(
@@ -139,43 +138,36 @@ def project_egress_executors(
     executors: list[ExecutableAgent] = []
     for spec in project.specs:
         for index, binding in enumerate(egress_bindings(spec)):
-            plugin = project.plugins.get(binding.sink)
-            if plugin is None:
+            connector = connector_for_event(project.connectors, binding.event)
+            if connector is None:
                 continue
-            section = plugin_manifest_section(plugin, "egress")
-            event_type = selected_plugin_event(
-                binding.event,
-                section.events,
-                "egress sink",
-                binding.sink,
-            )
-            handler = plugin.egress_handlers.get(event_type)
+            handler = connector.egress.get(binding.event)
             if handler is None:
                 continue
-            agent_id = f"egress:{spec.slug}:{index}:{binding.sink}:{event_type}"
+            agent_id = f"egress:{spec.slug}:{index}:{connector.id}:{binding.event}"
             executors.append(
                 ExecutableAgent(
                     AgentDefinition(
                         agent_id,
-                        (EventPattern(event_type),),
+                        (EventPattern(binding.event),),
                         dispatch_mode="one_shot",
                     ),
-                    run=egress_runner(binding, handler),
+                    run=egress_runner(binding, handler, connector.id),
                 )
             )
     return tuple(executors)
 
 
-def egress_runner(binding: EgressBinding, handler):
+def egress_runner(binding: EgressBinding, handler, connector_id: str):
     async def run(invocation: AgentInvocation) -> dict[str, Any]:
         event = invocation.triggering_event
-        idempotency_key = egress_idempotency_key(binding, event)
+        idempotency_key = egress_idempotency_key(binding, event, connector_id)
         await invocation.publish(
             DraftEvent(
                 "runtime.egress.started",
-                f"egress:{binding.sink}",
+                f"egress:{connector_id}",
                 {
-                    "sink": binding.sink,
+                    "connector": connector_id,
                     "event_id": event.id,
                     "event_type": event.event_type,
                     "idempotency_key": idempotency_key,
@@ -192,9 +184,9 @@ def egress_runner(binding: EgressBinding, handler):
             await invocation.publish(
                 DraftEvent(
                     "runtime.egress.failed",
-                    f"egress:{binding.sink}",
+                    f"egress:{connector_id}",
                     {
-                        "sink": binding.sink,
+                        "connector": connector_id,
                         "event_id": event.id,
                         "event_type": event.event_type,
                         "idempotency_key": idempotency_key,
@@ -203,10 +195,10 @@ def egress_runner(binding: EgressBinding, handler):
                     idempotency_key=f"runtime.egress.failed:{idempotency_key}",
                 )
             )
-            logger.exception("egress sink %r failed", binding.sink)
+            logger.exception("egress connector %r failed", connector_id)
             return {
                 "egress": {
-                    "sink": binding.sink,
+                    "connector": connector_id,
                     "event_id": event.id,
                     "failed": True,
                     "error": str(exc),
@@ -215,9 +207,9 @@ def egress_runner(binding: EgressBinding, handler):
         await invocation.publish(
             DraftEvent(
                 "runtime.egress.completed",
-                f"egress:{binding.sink}",
+                f"egress:{connector_id}",
                 {
-                    "sink": binding.sink,
+                    "connector": connector_id,
                     "event_id": event.id,
                     "event_type": event.event_type,
                     "idempotency_key": idempotency_key,
@@ -228,7 +220,7 @@ def egress_runner(binding: EgressBinding, handler):
         )
         return {
             "egress": {
-                "sink": binding.sink,
+                "connector": connector_id,
                 "event_id": event.id,
                 "result": result_payload,
             }
@@ -240,33 +232,25 @@ def egress_runner(binding: EgressBinding, handler):
 async def run_ingress_once(runtime: WorkerServices) -> int:
     project = load_agent_project(
         runtime.project_root / "agents",
-        plugin_resolver=runtime.plugin_resolver,
+        connector_resolver=runtime.connector_resolver,
     )
     validate_agent_project(project)
     inserted = 0
     for spec in project.specs:
         for binding in ingress_bindings(spec):
-            plugin = project.plugins.get(binding.source)
-            if plugin is None:
+            connector = connector_for_event(project.connectors, binding.event)
+            if connector is None:
                 continue
-            section = plugin_manifest_section(plugin, "ingress")
-            event_type = selected_plugin_event(
-                binding.event,
-                section.events,
-                "ingress source",
-                binding.source,
-            )
-            poller = plugin.ingress_pollers.get(event_type)
+            poller = connector.ingress.get(binding.event)
             if poller is None:
                 continue
             drafts = poller(binding)
             if inspect.isawaitable(drafts):
                 drafts = await drafts
             for draft in cast(Iterable[DraftEvent], drafts):
-                if draft.event_type != event_type:
+                if draft.event_type != binding.event:
                     raise RuntimeError(
-                        f"ingress source {binding.source!r} produced {draft.event_type!r}, "
-                        f"expected {event_type!r}"
+                        f"ingress event {binding.event!r} produced {draft.event_type!r}"
                     )
                 validate_event_payload(project.events, draft)
                 outcome = runtime.events.accept(
@@ -308,15 +292,17 @@ def validate_event_payload(events, draft: DraftEvent) -> None:
 
 def ingress_idempotency_key(binding: IngressBinding, draft: DraftEvent) -> str:
     if binding.idempotency_key is None:
-        raise RuntimeError(
-            f"ingress source {binding.source!r} requires idempotency_key"
-        )
+        raise RuntimeError(f"ingress event {binding.event!r} requires idempotency_key")
     return render_template(binding.idempotency_key, draft)
 
 
-def egress_idempotency_key(binding: EgressBinding, event: Event) -> str:
+def egress_idempotency_key(
+    binding: EgressBinding,
+    event: Event,
+    connector_id: str,
+) -> str:
     if binding.idempotency_key is None:
-        return f"{binding.sink}:{event.id}"
+        return f"{connector_id}:{event.id}"
     return render_template(binding.idempotency_key, event)
 
 
@@ -626,7 +612,7 @@ def start_ingress_task(
     poll_interval_seconds: float,
     stop_event: asyncio.Event | None,
 ) -> asyncio.Task[None] | None:
-    if runtime.plugin_resolver is None:
+    if runtime.connector_resolver is None:
         return None
     return asyncio.create_task(
         run_ingress_forever(

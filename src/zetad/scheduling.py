@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
-from zeta.agents.manifest import PluginResolver
+from zeta.agents.manifest import EventConnectorResolver
 from zeta.agents.resources import load_agent_project, validate_agent_project
 from zeta.agents.spec import AgentSpec, ScheduleEntry, scheduled_event_type
 from zeta.events import DraftEvent, Event
@@ -28,7 +28,7 @@ class SchedulerServices:
     project_root: Path
     state_dir: Path
     events: RuntimeEventStore
-    plugin_resolver: PluginResolver | None = None
+    connector_resolver: EventConnectorResolver | None = None
 
     def close(self) -> None:
         self.events.close()
@@ -60,7 +60,7 @@ def build_scheduler_services(
     *,
     project_root: Path,
     state_dir: Path | None = None,
-    plugin_resolver: PluginResolver | None = None,
+    connector_resolver: EventConnectorResolver | None = None,
 ) -> SchedulerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = (
@@ -72,7 +72,7 @@ def build_scheduler_services(
         project_root=resolved_project_root,
         state_dir=resolved_state_dir,
         events=RuntimeEventStore.open(event_store_path(resolved_state_dir)),
-        plugin_resolver=plugin_resolver,
+        connector_resolver=connector_resolver,
     )
 
 
@@ -87,7 +87,7 @@ def request_due_project_schedules(
 ) -> list[Event]:
     project = load_agent_project(
         runtime.project_root / "agents",
-        plugin_resolver=runtime.plugin_resolver,
+        connector_resolver=runtime.connector_resolver,
     )
     validate_agent_project(project)
     return request_due_schedules(runtime.events, project.specs, now=now)
@@ -100,7 +100,7 @@ def project_schedule_status(
 ) -> list[ScheduleStatus]:
     project = load_agent_project(
         runtime.project_root / "agents",
-        plugin_resolver=runtime.plugin_resolver,
+        connector_resolver=runtime.connector_resolver,
     )
     validate_agent_project(project)
     return schedule_status(runtime.events, project.specs, now=now)

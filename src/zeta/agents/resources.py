@@ -10,9 +10,9 @@ from typing import Any, cast
 
 from zeta.agents.events import EventRegistry, EventRegistryError
 from zeta.agents.manifest import (
-    AgentPlugin,
+    EventConnector,
+    EventConnectorResolver,
     Manifest,
-    PluginResolver,
 )
 from zeta.agents.spec import AgentSpec, load_specs, scheduled_event_type
 
@@ -41,7 +41,7 @@ class AgentProject:
     specs: tuple[AgentSpec, ...]
     events: EventRegistry
     skills: SkillRegistry
-    plugins: dict[str, AgentPlugin] = field(default_factory=dict)
+    connectors: dict[str, EventConnector] = field(default_factory=dict)
 
 
 def resource_extensions(spec: AgentSpec) -> dict[str, object]:
@@ -52,18 +52,18 @@ def resource_extensions(spec: AgentSpec) -> dict[str, object]:
 def load_agent_project(
     agents_dir: Path,
     *,
-    plugin_resolver: PluginResolver | None = None,
+    connector_resolver: EventConnectorResolver | None = None,
 ) -> AgentProject:
     """Load flat authored agents and their shared validation resources."""
     specs = load_specs(agents_dir)
-    plugins = resolve_agent_plugins(specs, plugin_resolver)
-    events = load_event_registry(agents_dir, plugins=plugins.values())
+    connectors = resolve_event_connectors(specs, connector_resolver)
+    events = load_event_registry(agents_dir, connectors=connectors.values())
     register_scheduled_events(events, specs)
     return AgentProject(
         specs=specs,
         events=events,
         skills=load_skill_registry(agents_dir),
-        plugins=plugins,
+        connectors=connectors,
     )
 
 
@@ -71,7 +71,7 @@ def validate_agent_project(project: AgentProject) -> None:
     manifest = Manifest(
         events=project.events,
         skills=project.skills,
-        plugins=project.plugins,
+        connectors=project.connectors,
     )
     for spec in project.specs:
         manifest.validate(spec)
@@ -114,80 +114,77 @@ def load_skill_registry(agents_dir: Path) -> SkillRegistry:
     return SkillRegistry(skills)
 
 
-def resolve_agent_plugins(
+def resolve_event_connectors(
     specs: tuple[AgentSpec, ...],
-    plugin_resolver: PluginResolver | None,
-) -> dict[str, AgentPlugin]:
-    if plugin_resolver is None:
+    connector_resolver: EventConnectorResolver | None,
+) -> dict[str, EventConnector]:
+    if connector_resolver is None:
         return {}
-    names = sorted(plugin_names_for_specs(specs, plugin_resolver))
-    plugins: dict[str, AgentPlugin] = {}
+    names = sorted(connector_names_for_specs(specs, connector_resolver))
+    connectors: dict[str, EventConnector] = {}
     for name in names:
-        plugin = plugin_resolver.resolve(name)
-        if plugin is not None:
-            plugins[name] = plugin
-    return plugins
+        connector = connector_resolver.resolve(name)
+        if connector is not None:
+            connectors[name] = connector
+    return connectors
 
 
-def plugin_names_for_specs(
+def connector_names_for_specs(
     specs: tuple[AgentSpec, ...],
-    plugin_resolver: PluginResolver,
+    connector_resolver: EventConnectorResolver,
 ) -> set[str]:
     names: set[str] = set()
     for spec in specs:
         for key, value in spec.manifest.items():
-            names.update(plugin_names_for_section(plugin_resolver, key, value))
+            names.update(connector_names_for_section(connector_resolver, key, value))
     return names
 
 
-def plugin_names_for_section(
-    plugin_resolver: PluginResolver,
+def connector_names_for_section(
+    connector_resolver: EventConnectorResolver,
     key: str,
     value: object,
 ) -> set[str]:
     try:
-        return set(plugin_resolver.names_for_section(key, value))
+        return set(connector_resolver.names_for_section(key, value))
     except AttributeError:
-        return plugin_names_from_builtin_sections(key, value)
+        return connector_names_from_builtin_sections(key, value)
 
 
-def plugin_names_from_builtin_sections(key: str, value: object) -> set[str]:
+def connector_names_from_builtin_sections(key: str, value: object) -> set[str]:
     if not isinstance(value, list | tuple):
         return set()
-    if key == "ingress":
-        return binding_plugin_names(value, "source")
-    if key == "egress":
-        return binding_plugin_names(value, "sink")
-    return set()
+    if key not in {"ingress", "egress"}:
+        return set()
+    return binding_event_names(value)
 
 
-def binding_plugin_names(items: Iterable[object], field: str) -> set[str]:
-    names: set[str] = set()
+def binding_event_names(items: Iterable[object]) -> set[str]:
+    events: set[str] = set()
     for item in items:
-        if not isinstance(item, Mapping):
-            continue
-        mapping = cast(Mapping[str, object], item)
-        name = mapping.get(field)
-        if isinstance(name, str):
-            names.add(name)
-    return names
+        if isinstance(item, Mapping):
+            mapping = cast(Mapping[str, object], item)
+            event = mapping.get("event")
+            if isinstance(event, str):
+                events.add(event)
+    return events
 
 
 def load_event_registry(
     agents_dir: Path,
     *,
-    plugins: Iterable[AgentPlugin] = (),
+    connectors: Iterable[EventConnector] = (),
 ) -> EventRegistry:
     """Load flat event payload JSON Schemas from ``agents/events``."""
     events_dir = agents_dir / "events"
     registry = EventRegistry()
-    for plugin in plugins:
-        for event_type, schema in plugin.events.items():
+    for connector in connectors:
+        for event_type, schema in connector.events.items():
             register_event_schema(
                 registry,
                 event_type,
                 schema,
-                source=f"plugin {plugin.name!r}",
+                source=f"connector {connector.id!r}",
             )
     if not events_dir.exists():
         return registry
