@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, cast
+
+import yaml
 
 from zeta.agents.events import EventRegistry, EventRegistryError
 from zeta.agents.manifest import (
@@ -19,6 +22,10 @@ from zeta.agents.spec import AgentSpec, load_specs, scheduled_event_type
 
 class ResourceError(ValueError):
     """Raised when a flat authored-agent resource is invalid."""
+
+
+EVENT_CONNECTOR_ENTRY_POINT_GROUP = "zeta.event_connectors"
+EVENT_CONNECTOR_CONFIG_FILE = "connectors.yaml"
 
 
 @dataclass(frozen=True)
@@ -44,6 +51,40 @@ class AgentProject:
     connectors: dict[str, EventConnector] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class EntryPointEventConnectorResolver:
+    enabled: tuple[str, ...]
+    entry_points: Iterable[Any] | None = None
+
+    def resolve(self, connector_id: str) -> EventConnector | None:
+        return self._connectors().get(connector_id)
+
+    def names_for_section(self, key: str, value: Any) -> tuple[str, ...]:
+        if key not in {"ingress", "egress"} or not isinstance(value, list | tuple):
+            return ()
+        event_names = binding_event_names(value)
+        return tuple(
+            connector_id
+            for connector_id, connector in self._connectors().items()
+            if any(event_type in connector.events for event_type in event_names)
+        )
+
+    def _connectors(self) -> dict[str, EventConnector]:
+        connectors: dict[str, EventConnector] = {}
+        entry_points = event_connector_entry_points(self.entry_points)
+        for entry_point in entry_points:
+            if entry_point.name not in self.enabled:
+                continue
+            connector = load_entry_point_event_connector(entry_point)
+            if connector.id != entry_point.name:
+                raise ResourceError(
+                    f"event connector entry point {entry_point.name!r} returned "
+                    f"connector id {connector.id!r}"
+                )
+            connectors[connector.id] = connector
+        return connectors
+
+
 def resource_extensions(spec: AgentSpec) -> dict[str, object]:
     """Return non-core frontmatter extensions for resource-aware hosts."""
     return dict(spec.manifest)
@@ -56,6 +97,9 @@ def load_agent_project(
 ) -> AgentProject:
     """Load flat authored agents and their shared validation resources."""
     specs = load_specs(agents_dir)
+    connector_resolver = connector_resolver or event_connector_resolver_from_project(
+        agents_dir
+    )
     connectors = resolve_event_connectors(specs, connector_resolver)
     events = load_event_registry(agents_dir, connectors=connectors.values())
     register_scheduled_events(events, specs)
@@ -92,6 +136,80 @@ def register_scheduled_events(
 
 def empty_payload_schema() -> dict[str, object]:
     return {"type": "object", "additionalProperties": False}
+
+
+def event_connector_resolver_from_project(
+    agents_dir: Path,
+    *,
+    entry_points: Iterable[Any] | None = None,
+) -> EventConnectorResolver | None:
+    enabled = enabled_event_connector_ids(agents_dir)
+    if not enabled:
+        return None
+    return EntryPointEventConnectorResolver(
+        enabled=enabled,
+        entry_points=entry_points,
+    )
+
+
+def enabled_event_connector_ids(agents_dir: Path) -> tuple[str, ...]:
+    path = agents_dir / EVENT_CONNECTOR_CONFIG_FILE
+    if not path.exists():
+        return ()
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ResourceError(f"invalid event connector config {path}: {exc}") from exc
+    except OSError as exc:
+        raise ResourceError(f"I/O error reading {path}: {exc}") from exc
+    if not isinstance(raw, Mapping):
+        raise ResourceError(f"invalid event connector config {path}: expected object")
+    unknown = sorted(set(raw) - {"event_connectors"})
+    if unknown:
+        raise ResourceError(
+            f"invalid event connector config {path}: unsupported field {unknown[0]!r}"
+        )
+    connectors = raw.get("event_connectors")
+    if connectors is None:
+        raise ResourceError(
+            f"invalid event connector config {path}: event_connectors is required"
+        )
+    if not isinstance(connectors, list | tuple) or not all(
+        isinstance(connector, str) and connector for connector in connectors
+    ):
+        raise ResourceError(
+            f"invalid event connector config {path}: event_connectors must be a list of strings"
+        )
+    return tuple(connectors)
+
+
+def event_connector_entry_points(
+    entry_points: Iterable[Any] | None = None,
+) -> tuple[Any, ...]:
+    discovered = (
+        importlib_metadata.entry_points() if entry_points is None else entry_points
+    )
+    select = getattr(discovered, "select", None)
+    if callable(select):
+        return tuple(select(group=EVENT_CONNECTOR_ENTRY_POINT_GROUP))
+    if isinstance(discovered, Mapping):
+        grouped = cast(Mapping[str, Iterable[Any]], discovered)
+        return tuple(grouped.get(EVENT_CONNECTOR_ENTRY_POINT_GROUP, ()))
+    return tuple(
+        entry_point
+        for entry_point in discovered
+        if getattr(entry_point, "group", None) == EVENT_CONNECTOR_ENTRY_POINT_GROUP
+    )
+
+
+def load_entry_point_event_connector(entry_point: Any) -> EventConnector:
+    loaded = entry_point.load()
+    connector = loaded() if callable(loaded) else loaded
+    if not isinstance(connector, EventConnector):
+        raise ResourceError(
+            f"event connector entry point {entry_point.name!r} did not return EventConnector"
+        )
+    return connector
 
 
 def load_skill_registry(agents_dir: Path) -> SkillRegistry:

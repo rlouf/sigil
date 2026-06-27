@@ -20,7 +20,10 @@ from zeta.agents.manifest import (
 )
 from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
 from zeta.agents.resources import (
+    EntryPointEventConnectorResolver,
     ResourceError,
+    enabled_event_connector_ids,
+    event_connector_resolver_from_project,
     load_agent_project,
     load_event_registry,
     load_skill_registry,
@@ -69,6 +72,7 @@ def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
 zeta_agents = SimpleNamespace(
     EgressBinding=EgressBinding,
     EventConnector=EventConnector,
+    EntryPointEventConnectorResolver=EntryPointEventConnectorResolver,
     EventRegistry=EventRegistry,
     IngressBinding=IngressBinding,
     Manifest=Manifest,
@@ -80,6 +84,8 @@ zeta_agents = SimpleNamespace(
     compile_agent_definition=compile_agent_definition,
     compile_agent_definitions=compile_agent_definitions,
     derive_returns_schema=derive_returns_schema,
+    enabled_event_connector_ids=enabled_event_connector_ids,
+    event_connector_resolver_from_project=event_connector_resolver_from_project,
     load_agent_project=load_agent_project,
     load_event_registry=load_event_registry,
     load_spec=load_spec,
@@ -195,6 +201,16 @@ class ConnectorMap:
                 if event_type in connector.events
             )
         return tuple(names)
+
+
+class FakeEntryPoint:
+    def __init__(self, name: str, connector: EventConnector) -> None:
+        self.name = name
+        self.group = "zeta.event_connectors"
+        self.connector = connector
+
+    def load(self) -> Callable[[], EventConnector]:
+        return lambda: self.connector
 
 
 def _slack_return_agent_spec(tmp_path: Path) -> AgentSpec:
@@ -736,6 +752,96 @@ def test_zeta_agent_resource_loaders_read_flat_skills_and_events(
         "type": "object",
         "properties": {"version": {"type": "string"}},
     }
+
+
+def test_zeta_agent_project_reads_enabled_event_connector_ids(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "connectors.yaml").write_text(
+        "event_connectors:\n  - slack\n  - github\n",
+        encoding="utf-8",
+    )
+
+    assert zeta_agents.enabled_event_connector_ids(agents_dir) == ("slack", "github")
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [
+        ("event_connectors: slack\n", "event_connectors"),
+        ("event_connectors:\n  - slack\n  - 1\n", "event_connectors"),
+        ("connectors:\n  - slack\n", "unsupported field 'connectors'"),
+    ],
+)
+def test_zeta_agent_project_rejects_invalid_event_connector_config(
+    tmp_path: Path,
+    content: str,
+    message: str,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "connectors.yaml").write_text(content, encoding="utf-8")
+
+    with pytest.raises(zeta_agents.ResourceError, match=message):
+        zeta_agents.enabled_event_connector_ids(agents_dir)
+
+
+def test_zeta_event_connector_resolver_loads_only_enabled_entry_points() -> None:
+    slack = _slack_connector()
+    github = zeta_agents.EventConnector(
+        id="github",
+        events={"github.issue.opened": None},
+    )
+    resolver = zeta_agents.EntryPointEventConnectorResolver(
+        enabled=("slack",),
+        entry_points=(FakeEntryPoint("slack", slack), FakeEntryPoint("github", github)),
+    )
+
+    assert resolver.resolve("slack") == slack
+    assert resolver.resolve("github") is None
+    assert resolver.names_for_section(
+        "ingress",
+        [{"event": "slack.message.received"}, {"event": "github.issue.opened"}],
+    ) == ("slack",)
+
+
+def test_zeta_agent_project_uses_enabled_event_connector_entry_points(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "connectors.yaml").write_text(
+        "event_connectors:\n  - slack\n",
+        encoding="utf-8",
+    )
+    _write_spec(
+        agents_dir / "support.md",
+        """---
+name: Support
+description: Replies to Slack support messages.
+accepts:
+  - slack.message.received
+ingress:
+  - event: slack.message.received
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+---
+Reply.
+""",
+    )
+
+    resolver = zeta_agents.event_connector_resolver_from_project(
+        agents_dir,
+        entry_points=(FakeEntryPoint("slack", _slack_connector()),),
+    )
+    project = zeta_agents.load_agent_project(
+        agents_dir,
+        connector_resolver=resolver,
+    )
+
+    zeta_agents.validate_agent_project(project)
+    assert project.events.knows("slack.message.received")
 
 
 def test_zeta_agent_project_merges_connector_event_schemas(
