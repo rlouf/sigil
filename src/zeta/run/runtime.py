@@ -335,15 +335,19 @@ async def run_agent(
         tool_registry=runtime_context.tool_registry,
     )
     prior_timeline = current_timeline(runtime_context=runtime_context)
+    user_message: dict[str, Any] = {
+        "type": "user_message",
+        "content": request.objective,
+        "workflow": request.workflow,
+        "runtime": request.runtime,
+        "available_tools": list(enabled_capabilities),
+        "run_id": run_id,
+    }
+    model = run_model_metadata(request.config)
+    if model:
+        user_message["model"] = model
     user_event = _record_user_message(
-        {
-            "type": "user_message",
-            "content": request.objective,
-            "workflow": request.workflow,
-            "runtime": request.runtime,
-            "available_tools": list(enabled_capabilities),
-            "run_id": run_id,
-        },
+        user_message,
         runtime_context=runtime_context,
         run_id=run_id,
     )
@@ -375,6 +379,16 @@ async def run_agent(
         caused_by=caused_by,
         cancellation_event=cancellation_event,
     )
+
+
+def run_model_metadata(config: AgentConfig) -> dict[str, str]:
+    metadata = {
+        "profile": config.model_profile,
+        "model": config.model_name,
+        "url": config.model_url,
+        "api": config.model_api,
+    }
+    return {key: value for key, value in metadata.items() if value}
 
 
 async def run_agent_loop(

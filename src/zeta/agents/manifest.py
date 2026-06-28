@@ -2,7 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError, ValidationError
@@ -10,7 +10,7 @@ from jsonschema.exceptions import SchemaError, ValidationError
 from connectors import (
     EgressBinding,
     EventConnector,
-    EventConnectorResolver,
+    EventConnectorRegistry,
     IngressBinding,
 )
 from zeta.agents.events import EventRegistry
@@ -45,7 +45,7 @@ class Manifest:
     tools: ToolResolver | None = None
     skills: SkillResolver | Mapping[str, Any] | None = None
     events: EventRegistry | None = None
-    connectors: EventConnectorResolver | Mapping[str, EventConnector] | None = None
+    connectors: EventConnectorRegistry | None = None
 
     def validate(self, spec: AgentSpec) -> None:
         validate_prompt(spec)
@@ -96,13 +96,12 @@ def validate_events(spec: AgentSpec, registry: EventRegistry | None) -> None:
 
 def validate_connector_bindings(
     spec: AgentSpec,
-    connectors: EventConnectorResolver | Mapping[str, EventConnector] | None,
+    connectors: EventConnectorRegistry | None,
 ) -> None:
-    connector_map = resolved_connectors_for_spec(spec, connectors)
     for binding in ingress_bindings(spec):
-        validate_ingress_binding(spec, binding, connector_map)
+        validate_ingress_binding(spec, binding, connectors)
     for binding in egress_bindings(spec):
-        validate_egress_binding(spec, binding, connector_map)
+        validate_egress_binding(spec, binding, connectors)
 
 
 def validate_manifest_sections(spec: AgentSpec) -> None:
@@ -117,7 +116,7 @@ def validate_manifest_sections(spec: AgentSpec) -> None:
 def validate_ingress_binding(
     spec: AgentSpec,
     binding: IngressBinding,
-    connectors: Mapping[str, EventConnector],
+    connectors: EventConnectorRegistry | None,
 ) -> None:
     connector = connector_for_event(connectors, binding.event)
     if connector is None:
@@ -142,7 +141,7 @@ def validate_ingress_binding(
 def validate_egress_binding(
     spec: AgentSpec,
     binding: EgressBinding,
-    connectors: Mapping[str, EventConnector],
+    connectors: EventConnectorRegistry | None,
 ) -> None:
     connector = connector_for_event(connectors, binding.event)
     if connector is None:
@@ -160,31 +159,13 @@ def validate_egress_binding(
     )
 
 
-def resolved_connectors_for_spec(
-    spec: AgentSpec,
-    connectors: EventConnectorResolver | Mapping[str, EventConnector] | None,
-) -> Mapping[str, EventConnector]:
-    if isinstance(connectors, Mapping):
-        return cast(Mapping[str, EventConnector], connectors)
-    if connectors is None:
-        return {}
-    resolved: dict[str, EventConnector] = {}
-    for key, value in spec.manifest.items():
-        for connector_id in connectors.names_for_section(key, value):
-            connector = connectors.resolve(connector_id)
-            if connector is not None:
-                resolved[connector_id] = connector
-    return resolved
-
-
 def connector_for_event(
-    connectors: Mapping[str, EventConnector],
+    connectors: EventConnectorRegistry | None,
     event_type: str,
 ) -> EventConnector | None:
-    for connector in connectors.values():
-        if event_type in connector.events:
-            return connector
-    return None
+    if connectors is None:
+        return None
+    return connectors.connector_for_event(event_type)
 
 
 def validate_binding_filter(

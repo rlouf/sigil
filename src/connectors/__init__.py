@@ -2,7 +2,8 @@
 
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from types import MappingProxyType
+from typing import Any
 
 from zeta.events import DraftEvent, Event
 
@@ -37,20 +38,75 @@ EgressHandler = Callable[
 
 
 @dataclass(frozen=True)
+class InboundRequest:
+    method: str
+    path: str
+    headers: Mapping[str, str]
+    query: Mapping[str, str]
+    body: bytes
+
+
+@dataclass(frozen=True)
+class InboundResponse:
+    status_code: int
+    body: bytes = b""
+    headers: Mapping[str, str] = field(default_factory=dict)
+
+
+PushIngressHandler = Callable[
+    [InboundRequest],
+    tuple[InboundResponse, Iterable[DraftEvent]]
+    | Awaitable[tuple[InboundResponse, Iterable[DraftEvent]]],
+]
+
+
+@dataclass(frozen=True)
 class EventConnector:
     """Event ingress and egress contributed by an installed connector."""
 
     id: str
     events: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
     ingress: Mapping[str, IngressHandler] = field(default_factory=dict)
+    push_ingress: PushIngressHandler | None = None
     egress: Mapping[str, EgressHandler] = field(default_factory=dict)
     filters: Mapping[str, Mapping[str, Any] | None] = field(default_factory=dict)
 
 
-@runtime_checkable
-class EventConnectorResolver(Protocol):
-    """Anything that can resolve installed event connectors."""
+class EventConnectorRegistry:
+    """Mutable registration boundary for installed event connectors."""
 
-    def resolve(self, connector_id: str) -> EventConnector | None: ...
+    def __init__(self) -> None:
+        self._connectors: dict[str, EventConnector] = {}
 
-    def names_for_section(self, key: str, value: Any) -> Iterable[str]: ...
+    @property
+    def connectors(self) -> Mapping[str, EventConnector]:
+        return MappingProxyType(self._connectors)
+
+    def register(self, connector: EventConnector) -> None:
+        if connector.id in self._connectors:
+            raise ValueError(f"duplicate event connector {connector.id!r}")
+        self._connectors[connector.id] = connector
+
+    def resolve(self, connector_id: str) -> EventConnector | None:
+        return self._connectors.get(connector_id)
+
+    def connector_for_event(self, event_type: str) -> EventConnector | None:
+        for connector in self._connectors.values():
+            if event_type in connector.events:
+                return connector
+        return None
+
+    def event_connectors(self) -> tuple[EventConnector, ...]:
+        return tuple(self._connectors.values())
+
+    def has_ingress_connectors(self) -> bool:
+        return any(connector.ingress for connector in self._connectors.values())
+
+    def push_ingress_connectors(self) -> Mapping[str, EventConnector]:
+        return MappingProxyType(
+            {
+                connector_id: connector
+                for connector_id, connector in self._connectors.items()
+                if connector.push_ingress is not None
+            }
+        )

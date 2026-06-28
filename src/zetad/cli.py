@@ -441,12 +441,30 @@ def runs(project_root: Path, state_dir: Path | None, json_output: bool) -> int:
     type=click.Path(file_okay=False, path_type=Path),
     help="Override the runtime state directory.",
 )
+@click.option(
+    "--connectors",
+    help="Comma-separated connector allowlist for this runtime process.",
+)
+@click.option(
+    "--host", default="127.0.0.1", show_default=True, help="Push ingress host."
+)
+@click.option("--port", default=8080, show_default=True, help="Push ingress port.")
+@click.option(
+    "--route-prefix",
+    default="/connectors",
+    show_default=True,
+    help="Push ingress route prefix.",
+)
 @click.option("--once", is_flag=True, help="Process at most one unit of work.")
 @click.pass_context
 def run(
     ctx: click.Context,
     project_root: Path,
     state_dir: Path | None,
+    connectors: str | None,
+    host: str,
+    port: int,
+    route_prefix: str,
     once: bool,
 ) -> int:
     """Run the local runtime worker."""
@@ -457,16 +475,31 @@ def run(
         project_root=project_root,
         state_dir=state_dir,
         tool_registry=cli_tool_registry(),
+        connector_names=connector_names_from_option(connectors),
     )
     try:
         if once:
             message = asyncio.run(worker.run_once(runtime))
             click.echo(message)
         else:
-            asyncio.run(worker.run_forever(runtime))
+            asyncio.run(
+                worker.run_forever(
+                    runtime,
+                    push_host=host,
+                    push_port=port,
+                    push_route_prefix=route_prefix,
+                )
+            )
     finally:
         runtime.close()
     return 0
+
+
+def connector_names_from_option(value: str | None) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    names = tuple(name.strip() for name in value.split(",") if name.strip())
+    return names
 
 
 @run.command("show")

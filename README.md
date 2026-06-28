@@ -141,6 +141,9 @@ Jinja prompt body rendered with one root variable, `event`:
 ---
 name: Slack Support
 description: Replies to Slack support messages.
+model:
+  name: qwen3.6-27b-q8-local
+  url: http://127.0.0.1:8080/v1/chat/completions
 accepts:
   - slack.message.received
 returns:
@@ -168,10 +171,12 @@ Reply to the Slack message: {{ event.payload.text }}
 ```
 
 Core frontmatter fields are `name`, `description`, `enabled`, `resumable`,
-`accepts`, `returns`, `tools`, `skills`, and `schedules`. `ingress` and
-`egress` are event connector sections. Project validation rejects unknown
-sections and validates connector filters with the owning connector's JSON
-Schema.
+`model`, `accepts`, `returns`, `tools`, `skills`, and `schedules`. `model` is
+an optional object with `name` and `url`; omit it to use the worker's active or
+default model profile. Background authored agents execute granted tools
+directly. `ingress` and `egress` are event connector sections. Project
+validation rejects unknown sections and validates connector filters with the
+owning connector's JSON Schema.
 
 Files under `agents/events/` define optional event payload JSON Schemas. The
 file stem is the event type, so `github.pr.opened.json` registers

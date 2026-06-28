@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from connectors import EgressBinding, EventConnector, IngressBinding, IngressInput
+from connectors import (
+    EgressBinding,
+    EventConnector,
+    InboundRequest,
+    InboundResponse,
+    IngressBinding,
+    IngressInput,
+)
 from zeta.events import DraftEvent, Event
 
 SLACK_MESSAGE_RECEIVED = "slack.message.received"
@@ -52,8 +62,13 @@ class HttpSlackClient:
         return data
 
 
-def slack_event_connector(client: Any | None = None) -> EventConnector:
+def slack_event_connector(
+    client: Any | None = None,
+    *,
+    signing_secret: str | None = None,
+) -> EventConnector:
     client = client or slack_client_from_env()
+    signing_secret = signing_secret or os.environ.get("SLACK_SIGNING_SECRET")
     return EventConnector(
         id="slack",
         events={
@@ -61,6 +76,10 @@ def slack_event_connector(client: Any | None = None) -> EventConnector:
             SLACK_MESSAGE_POST: slack_message_post_schema(),
         },
         ingress={SLACK_MESSAGE_RECEIVED: slack_ingress},
+        push_ingress=lambda request: handle_slack_push_ingress(
+            request,
+            signing_secret=signing_secret,
+        ),
         egress={
             SLACK_MESSAGE_POST: lambda event, binding, key: post_slack_message(
                 client,
@@ -74,6 +93,61 @@ def slack_event_connector(client: Any | None = None) -> EventConnector:
             SLACK_MESSAGE_POST: slack_egress_filter_schema(),
         },
     )
+
+
+async def handle_slack_push_ingress(
+    request: InboundRequest,
+    *,
+    signing_secret: str | None,
+) -> tuple[InboundResponse, tuple[DraftEvent, ...]]:
+    if request.method != "POST":
+        return InboundResponse(status_code=405, body=b"method not allowed"), ()
+    if not valid_slack_signature(request, signing_secret=signing_secret):
+        return InboundResponse(status_code=401, body=b"invalid signature"), ()
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return InboundResponse(status_code=400, body=b"invalid payload"), ()
+    if not isinstance(payload, dict):
+        return InboundResponse(status_code=400, body=b"invalid payload"), ()
+
+    payload_type = payload.get("type")
+    if payload_type == "url_verification":
+        challenge = payload.get("challenge")
+        if not isinstance(challenge, str):
+            return InboundResponse(status_code=400, body=b"invalid payload"), ()
+        return (
+            InboundResponse(
+                status_code=200,
+                body=challenge.encode("utf-8"),
+                headers={"Content-Type": "text/plain; charset=utf-8"},
+            ),
+            (),
+        )
+    if payload_type != "event_callback":
+        return InboundResponse(status_code=202, body=b"ignored"), ()
+
+    drafts = slack_ingress(IngressBinding(SLACK_MESSAGE_RECEIVED), payload)
+    if not drafts:
+        return InboundResponse(status_code=202, body=b"ignored"), ()
+    return InboundResponse(status_code=202, body=b"accepted"), drafts
+
+
+def valid_slack_signature(
+    request: InboundRequest,
+    *,
+    signing_secret: str | None,
+) -> bool:
+    timestamp = request.headers.get("x-slack-request-timestamp")
+    signature = request.headers.get("x-slack-signature")
+    if not signing_secret or not timestamp or not signature:
+        return False
+    expected = hmac.new(
+        signing_secret.encode("utf-8"),
+        f"v0:{timestamp}:".encode() + request.body,
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(signature, f"v0={expected}")
 
 
 def slack_client_from_env() -> HttpSlackClient:

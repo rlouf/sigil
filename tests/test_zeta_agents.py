@@ -1,6 +1,9 @@
 """Authored agent spec tests."""
 
 import asyncio
+import hashlib
+import hmac
+import json
 import tomllib
 from collections.abc import Callable
 from pathlib import Path
@@ -9,7 +12,14 @@ from typing import Any
 
 import pytest
 
-from connectors import EgressBinding, EventConnector, IngressBinding
+from connectors import (
+    EgressBinding,
+    EventConnector,
+    EventConnectorRegistry,
+    InboundRequest,
+    InboundResponse,
+    IngressBinding,
+)
 from connectors.slack import (
     SLACK_MESSAGE_POST,
     SLACK_MESSAGE_RECEIVED,
@@ -24,12 +34,11 @@ from zeta.agents.manifest import (
 )
 from zeta.agents.prompts import TemplateError, render_prompt, validate_prompt
 from zeta.agents.resources import (
-    EntryPointEventConnectorResolver,
     ResourceError,
     enabled_event_connector_ids,
     event_connector_entry_points,
-    event_connector_resolver_from_project,
     load_agent_project,
+    load_connector_registry,
     load_event_registry,
     load_skill_registry,
     validate_agent_project,
@@ -37,6 +46,7 @@ from zeta.agents.resources import (
 from zeta.agents.returns import derive_returns_schema
 from zeta.agents.spec import (
     AgentSpec,
+    ModelSpec,
     ScheduleEntry,
     SpecError,
     load_spec,
@@ -66,6 +76,7 @@ from zetad.agents import (
     agent_session_id,
     compile_agent_definition,
     compile_agent_definitions,
+    config_for_spec,
 )
 from zetad.store import RuntimeEventStore
 
@@ -77,11 +88,14 @@ def runtime_sqlite_event_store(path: Path) -> RuntimeEventStore:
 zeta_agents = SimpleNamespace(
     EgressBinding=EgressBinding,
     EventConnector=EventConnector,
-    EntryPointEventConnectorResolver=EntryPointEventConnectorResolver,
+    EventConnectorRegistry=EventConnectorRegistry,
     EventRegistry=EventRegistry,
+    InboundRequest=InboundRequest,
+    InboundResponse=InboundResponse,
     IngressBinding=IngressBinding,
     Manifest=Manifest,
     ManifestError=ManifestError,
+    ModelSpec=ModelSpec,
     ResourceError=ResourceError,
     SLACK_MESSAGE_POST=SLACK_MESSAGE_POST,
     SLACK_MESSAGE_RECEIVED=SLACK_MESSAGE_RECEIVED,
@@ -90,10 +104,11 @@ zeta_agents = SimpleNamespace(
     TemplateError=TemplateError,
     compile_agent_definition=compile_agent_definition,
     compile_agent_definitions=compile_agent_definitions,
+    config_for_spec=config_for_spec,
     derive_returns_schema=derive_returns_schema,
     enabled_event_connector_ids=enabled_event_connector_ids,
     event_connector_entry_points=event_connector_entry_points,
-    event_connector_resolver_from_project=event_connector_resolver_from_project,
+    load_connector_registry=load_connector_registry,
     load_agent_project=load_agent_project,
     load_event_registry=load_event_registry,
     load_spec=load_spec,
@@ -135,6 +150,7 @@ def _slack_connector(
     *,
     message_schema: dict[str, Any] | None = None,
     ingress_poller: Callable[..., Any] | None = None,
+    push_ingress: Callable[..., Any] | None = None,
     egress_handler: Callable[..., Any] | None = None,
 ) -> EventConnector:
     ingress = {"slack.message.received": ingress_poller} if ingress_poller else {}
@@ -185,31 +201,16 @@ def _slack_connector(
             "slack.message.post": egress_filter_schema,
         },
         ingress=ingress,
+        push_ingress=push_ingress,
         egress=egress,
     )
 
 
-class ConnectorMap:
-    def __init__(self, *connectors: EventConnector) -> None:
-        self.connectors = {connector.id: connector for connector in connectors}
-
-    def resolve(self, connector_id: str) -> EventConnector | None:
-        return self.connectors.get(connector_id)
-
-    def names_for_section(self, key: str, value: Any) -> tuple[str, ...]:
-        if key not in {"ingress", "egress"} or not isinstance(value, list | tuple):
-            return ()
-        names = []
-        for item in value:
-            if not isinstance(item, dict) or not isinstance(item.get("event"), str):
-                continue
-            event_type = item["event"]
-            names.extend(
-                connector.id
-                for connector in self.connectors.values()
-                if event_type in connector.events
-            )
-        return tuple(names)
+def connector_registry(*connectors: EventConnector) -> EventConnectorRegistry:
+    registry = EventConnectorRegistry()
+    for connector in connectors:
+        registry.register(connector)
+    return registry
 
 
 class FakeEntryPoint:
@@ -375,6 +376,9 @@ name: Slack Q&A
 description: Answers workspace questions in Slack.
 enabled: true
 resumable: true
+model:
+  name: qwen3.6-27b-q8-local
+  url: http://127.0.0.1:8080/v1/chat/completions
 accepts:
   - slack.message.received
 returns:
@@ -398,6 +402,10 @@ User asked: {{ event.payload.text }}
     assert spec.description == "Answers workspace questions in Slack."
     assert spec.enabled is True
     assert spec.resumable is True
+    assert spec.model == zeta_agents.ModelSpec(
+        name="qwen3.6-27b-q8-local",
+        url="http://127.0.0.1:8080/v1/chat/completions",
+    )
     assert spec.accepts == ("slack.message.received", "agent.slack-qa.scheduled")
     assert spec.returns == ("message.delivery.requested",)
     assert spec.tools == ("read",)
@@ -411,6 +419,33 @@ User asked: {{ event.payload.text }}
     assert spec.manifest == {"writes": {"paths": ["docs/**.md"]}}
     assert spec.instructions == "User asked: {{ event.payload.text }}\n"
     assert len(spec.sha256) == 64
+
+
+def test_zeta_authored_agent_config_executes_tools_directly(tmp_path: Path) -> None:
+    spec = zeta_agents.load_spec(
+        _write_spec(
+            tmp_path / "worker.md",
+            """---
+name: Worker
+description: Runs directly.
+model:
+  name: qwen3.6-27b-q8-local
+  url: http://127.0.0.1:8080/v1/chat/completions
+tools:
+  - bash
+---
+Run.
+""",
+        )
+    )
+
+    config = zeta_agents.config_for_spec(spec, None)
+
+    assert config.execution_mode == "direct"
+    assert config.model_name == "qwen3.6-27b-q8-local"
+    assert config.model_url == "http://127.0.0.1:8080/v1/chat/completions"
+    assert config.system_prompt == "Runs directly."
+    assert config.allowed_capabilities == ("bash",)
 
 
 def test_zeta_agent_spec_keeps_ingress_and_egress_as_event_sections(
@@ -827,23 +862,94 @@ def test_zeta_agent_project_rejects_invalid_event_connector_config(
         zeta_agents.enabled_event_connector_ids(agents_dir)
 
 
-def test_zeta_event_connector_resolver_loads_only_enabled_entry_points() -> None:
+def test_zeta_event_connector_registry_registers_and_resolves_connectors() -> None:
     slack = _slack_connector()
     github = zeta_agents.EventConnector(
         id="github",
         events={"github.issue.opened": None},
     )
-    resolver = zeta_agents.EntryPointEventConnectorResolver(
-        enabled=("slack",),
+    registry = zeta_agents.EventConnectorRegistry()
+    registry.register(slack)
+    registry.register(github)
+
+    assert registry.resolve("slack") == slack
+    assert registry.resolve("github") == github
+    assert registry.connector_for_event("slack.message.received") == slack
+    assert registry.connector_for_event("github.issue.opened") == github
+    assert registry.connector_for_event("missing.event") is None
+
+
+def test_zeta_event_connector_registry_rejects_duplicate_ids() -> None:
+    registry = zeta_agents.EventConnectorRegistry()
+    registry.register(_slack_connector())
+
+    with pytest.raises(ValueError, match="duplicate"):
+        registry.register(_slack_connector())
+
+
+def test_zeta_event_connector_registry_lists_push_ingress_connectors() -> None:
+    async def push(
+        _request: InboundRequest,
+    ) -> tuple[InboundResponse, tuple[DraftEvent, ...]]:
+        return InboundResponse(status_code=202), ()
+
+    slack = _slack_connector(push_ingress=push)
+    github = zeta_agents.EventConnector(
+        id="github",
+        events={"github.issue.opened": None},
+    )
+    registry = connector_registry(slack, github)
+
+    assert registry.push_ingress_connectors() == {"slack": slack}
+
+
+def test_zeta_load_connector_registry_loads_only_enabled_entry_points(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "connectors.yaml").write_text(
+        "event_connectors:\n  - slack\n",
+        encoding="utf-8",
+    )
+    slack = _slack_connector()
+    github = zeta_agents.EventConnector(
+        id="github",
+        events={"github.issue.opened": None},
+    )
+
+    registry = zeta_agents.load_connector_registry(
+        agents_dir,
         entry_points=(FakeEntryPoint("slack", slack), FakeEntryPoint("github", github)),
     )
 
-    assert resolver.resolve("slack") == slack
-    assert resolver.resolve("github") is None
-    assert resolver.names_for_section(
-        "ingress",
-        [{"event": "slack.message.received"}, {"event": "github.issue.opened"}],
-    ) == ("slack",)
+    assert registry.resolve("slack") == slack
+    assert registry.resolve("github") is None
+
+
+def test_zeta_load_connector_registry_honors_process_allowlist(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    (agents_dir / "connectors.yaml").write_text(
+        "event_connectors:\n  - slack\n  - github\n",
+        encoding="utf-8",
+    )
+    slack = _slack_connector()
+    github = zeta_agents.EventConnector(
+        id="github",
+        events={"github.issue.opened": None},
+    )
+
+    registry = zeta_agents.load_connector_registry(
+        agents_dir,
+        entry_points=(FakeEntryPoint("slack", slack), FakeEntryPoint("github", github)),
+        connector_names=("github",),
+    )
+
+    assert registry.resolve("slack") is None
+    assert registry.resolve("github") == github
 
 
 def test_zeta_slack_connector_is_discoverable_as_entry_point() -> None:
@@ -974,6 +1080,132 @@ def test_zeta_slack_connector_filters_channels() -> None:
         )
 
 
+def signed_slack_request(
+    payload: dict[str, Any],
+    *,
+    secret: str = "secret",
+    signature: str | None = None,
+) -> InboundRequest:
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    timestamp = "1712345678"
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        f"v0:{timestamp}:".encode() + body,
+        hashlib.sha256,
+    ).hexdigest()
+    return InboundRequest(
+        method="POST",
+        path="/connectors/slack",
+        headers={
+            "content-type": "application/json",
+            "x-slack-request-timestamp": timestamp,
+            "x-slack-signature": signature or f"v0={digest}",
+        },
+        query={},
+        body=body,
+    )
+
+
+def test_zeta_slack_push_ingress_answers_url_verification() -> None:
+    connector = zeta_agents.slack_event_connector(
+        FakeSlackClient(),
+        signing_secret="secret",
+    )
+
+    response, drafts = asyncio.run(
+        connector.push_ingress(
+            signed_slack_request(
+                {
+                    "type": "url_verification",
+                    "challenge": "challenge-token",
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.body == b"challenge-token"
+    assert tuple(drafts) == ()
+
+
+def test_zeta_slack_push_ingress_rejects_invalid_signature() -> None:
+    connector = zeta_agents.slack_event_connector(
+        FakeSlackClient(),
+        signing_secret="secret",
+    )
+
+    response, drafts = asyncio.run(
+        connector.push_ingress(
+            signed_slack_request(
+                {"type": "event_callback"},
+                signature="v0=bad",
+            )
+        )
+    )
+
+    assert response.status_code == 401
+    assert response.body == b"invalid signature"
+    assert tuple(drafts) == ()
+
+
+def test_zeta_slack_push_ingress_maps_callback_to_received_event() -> None:
+    connector = zeta_agents.slack_event_connector(
+        FakeSlackClient(),
+        signing_secret="secret",
+    )
+
+    response, drafts = asyncio.run(
+        connector.push_ingress(
+            signed_slack_request(
+                {
+                    "type": "event_callback",
+                    "event_id": "Ev1",
+                    "team_id": "T1",
+                    "event": {
+                        "type": "app_mention",
+                        "channel": "C123",
+                        "ts": "42.000",
+                        "thread_ts": "40.000",
+                        "user": "U1",
+                        "text": "hello",
+                    },
+                }
+            )
+        )
+    )
+
+    drafts = tuple(drafts)
+    assert response.status_code == 202
+    assert len(drafts) == 1
+    assert drafts[0].event_type == zeta_agents.SLACK_MESSAGE_RECEIVED
+    assert drafts[0].idempotency_key == "slack:event:Ev1"
+    assert drafts[0].session_id == "slack:T1:C123:40.000"
+
+
+def test_zeta_slack_push_ingress_ignores_unsupported_callbacks() -> None:
+    connector = zeta_agents.slack_event_connector(
+        FakeSlackClient(),
+        signing_secret="secret",
+    )
+
+    response, drafts = asyncio.run(
+        connector.push_ingress(
+            signed_slack_request(
+                {
+                    "type": "event_callback",
+                    "event_id": "Ev1",
+                    "team_id": "T1",
+                    "event": {"type": "reaction_added"},
+                }
+            )
+        )
+    )
+
+    assert response.status_code == 202
+    assert response.body == b"ignored"
+    assert tuple(drafts) == ()
+
+
 def test_zeta_agent_project_uses_enabled_event_connector_entry_points(
     tmp_path: Path,
 ) -> None:
@@ -1000,13 +1232,13 @@ Reply.
 """,
     )
 
-    resolver = zeta_agents.event_connector_resolver_from_project(
+    registry = zeta_agents.load_connector_registry(
         agents_dir,
         entry_points=(FakeEntryPoint("slack", _slack_connector()),),
     )
     project = zeta_agents.load_agent_project(
         agents_dir,
-        connector_resolver=resolver,
+        registry=registry,
     )
 
     zeta_agents.validate_agent_project(project)
@@ -1043,7 +1275,7 @@ Reply.
 
     project = zeta_agents.load_agent_project(
         agents_dir,
-        connector_resolver=ConnectorMap(_slack_connector()),
+        registry=connector_registry(_slack_connector()),
     )
     zeta_agents.validate_agent_project(project)
 
@@ -1087,7 +1319,7 @@ Reply.
     with pytest.raises(zeta_agents.ResourceError, match="conflicts"):
         zeta_agents.load_agent_project(
             agents_dir,
-            connector_resolver=ConnectorMap(_slack_connector()),
+            registry=connector_registry(_slack_connector()),
         )
 
 
@@ -1126,7 +1358,7 @@ Reply.
 
     project = zeta_agents.load_agent_project(
         agents_dir,
-        connector_resolver=ConnectorMap(_slack_connector(message_schema=schema)),
+        registry=connector_registry(_slack_connector(message_schema=schema)),
     )
 
     assert project.events.schema("slack.message.received") == schema
@@ -1246,7 +1478,7 @@ Reply.
     )
     project = zeta_agents.load_agent_project(
         agents_dir,
-        connector_resolver=ConnectorMap(_slack_connector()),
+        registry=connector_registry(_slack_connector()),
     )
 
     with pytest.raises(zeta_agents.ManifestError, match=message):
@@ -1311,7 +1543,7 @@ Reply.
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        connector_resolver=ConnectorMap(connector),
+        registry=connector_registry(connector),
     )
 
     try:
@@ -1393,7 +1625,7 @@ Reply.
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        connector_resolver=ConnectorMap(connector),
+        registry=connector_registry(connector),
     )
 
     try:
@@ -1412,6 +1644,197 @@ Reply.
 
     assert calls == 2
     assert [event.payload["text"] for event in events] == ["hello"]
+
+
+def test_zeta_push_ingress_returns_404_for_unknown_connector(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        registry=connector_registry(),
+    )
+
+    try:
+        response = asyncio.run(
+            zetad_worker.handle_push_ingress_request(
+                runtime,
+                "missing",
+                InboundRequest("POST", "/connectors/missing", {}, {}, b"{}"),
+            )
+        )
+        events = runtime.events.list_events(zeta_events.Filter())
+    finally:
+        runtime.close()
+
+    assert response.status_code == 404
+    assert events == []
+
+
+def test_zeta_push_ingress_returns_405_for_connector_without_push(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        registry=connector_registry(_slack_connector()),
+    )
+
+    try:
+        response = asyncio.run(
+            zetad_worker.handle_push_ingress_request(
+                runtime,
+                "slack",
+                InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+            )
+        )
+        events = runtime.events.list_events(zeta_events.Filter())
+    finally:
+        runtime.close()
+
+    assert response.status_code == 405
+    assert events == []
+
+
+def test_zeta_push_ingress_appends_returned_events(tmp_path: Path) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+
+    async def push(
+        request: InboundRequest,
+    ) -> tuple[InboundResponse, tuple[DraftEvent, ...]]:
+        return (
+            InboundResponse(status_code=202, body=b"accepted"),
+            (
+                zeta_events.DraftEvent(
+                    "slack.message.received",
+                    "slack",
+                    {"text": request.path},
+                    idempotency_key="push-1",
+                ),
+            ),
+        )
+
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        registry=connector_registry(_slack_connector(push_ingress=push)),
+    )
+
+    try:
+        response = asyncio.run(
+            zetad_worker.handle_push_ingress_request(
+                runtime,
+                "slack",
+                InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+            )
+        )
+        events = runtime.events.list_events(
+            zeta_events.Filter(event_type="slack.message.received")
+        )
+    finally:
+        runtime.close()
+
+    assert response.status_code == 202
+    assert response.body == b"accepted"
+    assert len(events) == 1
+    assert events[0].payload == {"text": "/connectors/slack"}
+
+
+def test_zeta_push_ingress_is_idempotent_for_duplicate_events(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+
+    async def push(
+        _request: InboundRequest,
+    ) -> tuple[InboundResponse, tuple[DraftEvent, ...]]:
+        return (
+            InboundResponse(status_code=202),
+            (
+                zeta_events.DraftEvent(
+                    "slack.message.received",
+                    "slack",
+                    {"text": "hello"},
+                    idempotency_key="push-1",
+                ),
+            ),
+        )
+
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        registry=connector_registry(_slack_connector(push_ingress=push)),
+    )
+
+    try:
+        request = InboundRequest("POST", "/connectors/slack", {}, {}, b"{}")
+        first = asyncio.run(
+            zetad_worker.handle_push_ingress_request(runtime, "slack", request)
+        )
+        second = asyncio.run(
+            zetad_worker.handle_push_ingress_request(runtime, "slack", request)
+        )
+        events = runtime.events.list_events(
+            zeta_events.Filter(event_type="slack.message.received")
+        )
+    finally:
+        runtime.close()
+
+    assert first.status_code == 202
+    assert second.status_code == 202
+    assert len(events) == 1
+
+
+def test_zeta_push_ingress_validates_returned_event_payload(
+    tmp_path: Path,
+) -> None:
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+
+    async def push(
+        _request: InboundRequest,
+    ) -> tuple[InboundResponse, tuple[DraftEvent, ...]]:
+        return (
+            InboundResponse(status_code=202),
+            (
+                zeta_events.DraftEvent(
+                    "slack.message.received",
+                    "slack",
+                    {"wrong": "shape"},
+                    idempotency_key="push-1",
+                ),
+            ),
+        )
+
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path / ".zeta",
+        events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
+        registry=connector_registry(_slack_connector(push_ingress=push)),
+    )
+
+    try:
+        with pytest.raises(Exception, match="required"):
+            asyncio.run(
+                zetad_worker.handle_push_ingress_request(
+                    runtime,
+                    "slack",
+                    InboundRequest("POST", "/connectors/slack", {}, {}, b"{}"),
+                )
+            )
+        events = runtime.events.list_events(zeta_events.Filter())
+    finally:
+        runtime.close()
+
+    assert events == []
 
 
 def test_zeta_egress_binding_handles_returned_event(
@@ -1449,7 +1872,7 @@ Send.
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        connector_resolver=ConnectorMap(_slack_connector(egress_handler=send_slack)),
+        registry=connector_registry(_slack_connector(egress_handler=send_slack)),
     )
     runtime.events.accept(
         zeta_events.DraftEvent(
@@ -1512,7 +1935,7 @@ Send.
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        connector_resolver=ConnectorMap(_slack_connector(egress_handler=send_slack)),
+        registry=connector_registry(_slack_connector(egress_handler=send_slack)),
     )
     runtime.events.accept(
         zeta_events.DraftEvent(
@@ -1569,7 +1992,7 @@ Send.
         project_root=tmp_path,
         state_dir=tmp_path / ".zeta",
         events=zeta_events.SqliteEventStore(tmp_path / "events.sqlite3"),
-        connector_resolver=ConnectorMap(connector),
+        registry=connector_registry(connector),
     )
     runtime.events.accept(
         zeta_events.DraftEvent(
@@ -1616,7 +2039,7 @@ Send a scheduled update.
     )
     runtime = zetad_scheduling.build_scheduler_services(
         project_root=tmp_path,
-        connector_resolver=ConnectorMap(_slack_connector()),
+        registry=connector_registry(_slack_connector()),
     )
 
     try:

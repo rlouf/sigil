@@ -16,6 +16,7 @@ BUILT_IN_FRONTMATTER_KEYS = frozenset(
         "description",
         "enabled",
         "resumable",
+        "model",
         "accepts",
         "returns",
         "skills",
@@ -34,6 +35,14 @@ class ScheduleEntry:
 
 
 @dataclass(frozen=True)
+class ModelSpec:
+    """Concrete model endpoint for one authored agent."""
+
+    name: str
+    url: str
+
+
+@dataclass(frozen=True)
 class AgentSpec:
     """Parsed authored agent specification."""
 
@@ -45,6 +54,7 @@ class AgentSpec:
     sha256: str
     enabled: bool = True
     resumable: bool = False
+    model: ModelSpec | None = None
     accepts: tuple[str, ...] = ()
     returns: tuple[str, ...] = ()
     skills: tuple[str, ...] = ()
@@ -85,6 +95,7 @@ def load_spec(path: str | Path) -> AgentSpec:
             resumable=bool_field(
                 frontmatter.get("resumable", False), "resumable", path
             ),
+            model=model_spec(frontmatter.get("model"), path),
             accepts=accepts,
             returns=string_tuple(frontmatter.get("returns", ()), "returns", path),
             skills=string_tuple(frontmatter.get("skills", ()), "skills", path),
@@ -153,6 +164,31 @@ def required_string(frontmatter: Mapping[str, Any], field: str, path: Path) -> s
     if not isinstance(value, str) or value == "":
         raise SpecError(f"missing required field {field!r} in {path}")
     return value
+
+
+def model_spec(value: Any, path: Path) -> ModelSpec | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise SpecError(f"invalid value for 'model' in {path}: expected object")
+    unknown = sorted(set(value) - {"name", "url"})
+    if unknown:
+        raise SpecError(
+            f"invalid value for 'model' in {path}: unsupported field {unknown[0]!r}"
+        )
+    return ModelSpec(
+        name=required_model_string(value, "name", path),
+        url=required_model_string(value, "url", path),
+    )
+
+
+def required_model_string(value: Mapping[str, Any], field: str, path: Path) -> str:
+    item = value.get(field)
+    if not isinstance(item, str) or item == "":
+        raise SpecError(
+            f"invalid value for 'model' in {path}: {field} must be a non-empty string"
+        )
+    return item
 
 
 def bool_field(value: Any, field: str, path: Path) -> bool:

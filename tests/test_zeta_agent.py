@@ -7,7 +7,7 @@ import sqlite3
 import threading
 import tomllib
 from collections.abc import Callable, Coroutine, Iterable
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,6 +47,7 @@ from zeta.capabilities.types import (
 )
 from zeta.context import builder as zeta_context
 from zeta.events import DraftEvent, Event
+from zeta.models.profiles import ModelSelection
 from zeta.records import events as zeta_event_model
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.memory import InMemoryStore, MemoryEventStore
@@ -2455,7 +2456,13 @@ def test_zeta_run_agent_records_user_message_and_returns_result(
                 runtime="zeta-rpc",
                 tools=(),
                 context="",
-                config=zeta_agent.AgentConfig(execution_mode="stage"),
+                config=zeta_agent.AgentConfig(
+                    execution_mode="stage",
+                    model_profile="qwen",
+                    model_name="qwen3.6-27b-q8-local",
+                    model_url="http://127.0.0.1:8080/v1/chat/completions",
+                    model_api="chat-completions",
+                ),
             ),
             run_id="run_direct",
             caused_by="evt_request",
@@ -2472,6 +2479,12 @@ def test_zeta_run_agent_records_user_message_and_returns_result(
     assert captured["kwargs"]["caused_by"] == "evt_request"
     assert [event.event_type for event in published] == ["zeta.user_message"]
     assert published[0].payload["content"] == "answer"
+    assert published[0].payload["model"] == {
+        "profile": "qwen",
+        "model": "qwen3.6-27b-q8-local",
+        "url": "http://127.0.0.1:8080/v1/chat/completions",
+        "api": "chat-completions",
+    }
     assert published[0].run_id == "run_direct"
 
 
@@ -4683,6 +4696,40 @@ def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
         runtime.close()
 
 
+def test_zeta_local_runtime_resolves_default_model_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    selected = ModelSelection(
+        profile="qwen",
+        model="qwen3-coder",
+        url="http://127.0.0.1:8081/v1/chat/completions",
+        thinking="high",
+    )
+    captured: dict[str, Path] = {}
+
+    def active_model_selection(*, session_dir: Path | None = None) -> ModelSelection:
+        assert session_dir is not None
+        captured["session_dir"] = session_dir
+        return selected
+
+    monkeypatch.setattr(
+        zetad_worker,
+        "active_model_selection",
+        active_model_selection,
+    )
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
+
+    try:
+        assert runtime.model_selection == selected
+        assert (
+            captured["session_dir"]
+            == tmp_path.resolve() / ".zeta" / "sessions" / "default"
+        )
+    finally:
+        runtime.close()
+
+
 def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> None:
     registry = CapabilityRegistry()
     runtime = zetad_worker.build_worker_services(
@@ -4712,8 +4759,9 @@ def test_zeta_cli_run_registers_builtin_tools(
         project_root: Path,
         state_dir: Path | None,
         tool_registry: CapabilityRegistry,
+        connector_names: tuple[str, ...] | None,
     ) -> Runtime:
-        del project_root, state_dir
+        del project_root, state_dir, connector_names
         captured["tool_registry"] = tool_registry
         return Runtime()
 
@@ -5005,6 +5053,159 @@ Triage the issue.
     assert captured["runtime_context"].session_id == "agent/triage/evt_issue"
     assert captured["run_id"] == "run_att_qi_evt_issue_triage_1"
     assert captured["request"].objective == "Triage the issue."
+
+
+def test_zeta_worker_agent_runner_uses_runtime_model_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent(
+        request: Any,
+        **kwargs: Any,
+    ) -> AgentRunResult:
+        captured["request"] = request
+        captured.update(kwargs)
+        return AgentRunResult(final_answer="done")
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "agent.ping")
+    (agents_dir / "ping.md").write_text(
+        """---
+name: Ping
+description: Reacts to pings.
+accepts:
+  - agent.ping
+---
+Ping.
+""",
+        encoding="utf-8",
+    )
+    selection = ModelSelection(
+        profile="qwen",
+        model="qwen3-coder",
+        url="http://127.0.0.1:8081/v1/chat/completions",
+        thinking="high",
+    )
+    monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
+    runtime = replace(runtime, model_selection=selection)
+
+    try:
+        agent = zetad_worker.project_executors(runtime)[0]
+        event = zeta_events.Event(
+            id="evt_ping",
+            event_type="agent.ping",
+            source="manual",
+            payload={},
+            idempotency_key=None,
+            caused_by=None,
+            session_id=None,
+            run_id=None,
+            turn_id=None,
+            timestamp_ms=1,
+            cursor=1,
+        )
+        asyncio.run(
+            cast(
+                Coroutine[Any, Any, dict[str, Any]],
+                agent.run(
+                    zetad_dispatch.AgentInvocation(
+                        agent.definition,
+                        event,
+                        attempt_id="att_qi_evt_ping_1",
+                    )
+                ),
+            )
+        )
+    finally:
+        runtime.close()
+
+    config = captured["request"].config
+    assert config.model_profile == "qwen"
+    assert config.model_name == "qwen3-coder"
+    assert config.model_url == "http://127.0.0.1:8081/v1/chat/completions"
+    assert config.thinking == "high"
+
+
+def test_zeta_worker_agent_runner_uses_agent_model_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run_agent(
+        request: Any,
+        **kwargs: Any,
+    ) -> AgentRunResult:
+        captured["request"] = request
+        captured.update(kwargs)
+        return AgentRunResult(final_answer="done")
+
+    agents_dir = tmp_path / "agents"
+    agents_dir.mkdir()
+    write_project_event_schema(tmp_path, "agent.ping")
+    (agents_dir / "ping.md").write_text(
+        """---
+name: Ping
+description: Reacts to pings.
+model:
+  name: qwen3.6-27b-q8-local
+  url: http://127.0.0.1:8080/v1/chat/completions
+accepts:
+  - agent.ping
+---
+Ping.
+""",
+        encoding="utf-8",
+    )
+    runtime_selection = ModelSelection(
+        profile="codex",
+        model="gpt-5.5",
+        url="https://chatgpt.com/backend-api",
+        api="codex-responses",
+    )
+    monkeypatch.setattr(zetad_worker, "run_agent", fake_run_agent)
+    runtime = zetad_worker.build_worker_services(project_root=tmp_path)
+    runtime = replace(runtime, model_selection=runtime_selection)
+
+    try:
+        agent = zetad_worker.project_executors(runtime)[0]
+        event = zeta_events.Event(
+            id="evt_ping",
+            event_type="agent.ping",
+            source="manual",
+            payload={},
+            idempotency_key=None,
+            caused_by=None,
+            session_id=None,
+            run_id=None,
+            turn_id=None,
+            timestamp_ms=1,
+            cursor=1,
+        )
+        asyncio.run(
+            cast(
+                Coroutine[Any, Any, dict[str, Any]],
+                agent.run(
+                    zetad_dispatch.AgentInvocation(
+                        agent.definition,
+                        event,
+                        attempt_id="att_qi_evt_ping_1",
+                    )
+                ),
+            )
+        )
+    finally:
+        runtime.close()
+
+    config = captured["request"].config
+    assert config.model_profile is None
+    assert config.model_name == "qwen3.6-27b-q8-local"
+    assert config.model_url == "http://127.0.0.1:8080/v1/chat/completions"
+    assert config.model_api is None
 
 
 def test_zeta_local_runtime_heartbeats_running_attempt(
@@ -6099,10 +6300,19 @@ def test_zeta_cli_run_forever_invokes_runtime_loop(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, Path] = {}
+    captured: dict[str, object] = {}
 
-    async def run_forever(runtime: zetad_worker.WorkerServices) -> None:
+    async def run_forever(
+        runtime: zetad_worker.WorkerServices,
+        *,
+        push_host: str,
+        push_port: int,
+        push_route_prefix: str,
+    ) -> None:
         captured["project_root"] = runtime.project_root
+        captured["push_host"] = push_host
+        captured["push_port"] = push_port
+        captured["push_route_prefix"] = push_route_prefix
 
     monkeypatch.setattr(zetad_worker, "run_forever", run_forever)
 
@@ -6112,7 +6322,12 @@ def test_zeta_cli_run_forever_invokes_runtime_loop(
     )
 
     assert result.exit_code == 0
-    assert captured == {"project_root": tmp_path.resolve()}
+    assert captured == {
+        "project_root": tmp_path.resolve(),
+        "push_host": "127.0.0.1",
+        "push_port": 8080,
+        "push_route_prefix": "/connectors",
+    }
 
 
 def test_zeta_cli_run_once_executes_one_available_queue_item(

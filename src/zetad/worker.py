@@ -7,25 +7,32 @@ import inspect
 import logging
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
 from jsonschema import Draft202012Validator
 
-from connectors import EgressBinding, EventConnectorResolver, IngressBinding
+from connectors import (
+    EgressBinding,
+    EventConnectorRegistry,
+    InboundRequest,
+    InboundResponse,
+    IngressBinding,
+)
 from zeta.agents.manifest import (
-    connector_for_event,
     egress_bindings,
     ingress_bindings,
 )
 from zeta.agents.resources import (
     AgentProject,
     load_agent_project,
+    load_connector_registry,
     validate_agent_project,
 )
 from zeta.capabilities.registry import CapabilityRegistry
 from zeta.events import DraftEvent, Event
+from zeta.models.profiles import ModelSelection, active_model_selection
 from zeta.records.stores.event_store import Filter
 from zeta.records.stores.sqlite import (
     SqliteObjectStore,
@@ -44,6 +51,7 @@ from zetad.agents import (
     compile_agent_definitions,
 )
 from zetad.dispatch import EventDispatcher
+from zetad.ingress import run_push_ingress_forever
 from zetad.session_turn import session_turn_agent
 from zetad.store import QueueClaim, RuntimeEventStore
 
@@ -62,7 +70,8 @@ class WorkerServices:
     state_dir: Path
     events: RuntimeEventStore
     tool_registry: CapabilityRegistry = field(default_factory=CapabilityRegistry)
-    connector_resolver: EventConnectorResolver | None = None
+    registry: EventConnectorRegistry | None = None
+    model_selection: ModelSelection | None = None
     worker_name: str = LOCAL_WORKER_NAME
     max_concurrent: int = 1
 
@@ -75,7 +84,8 @@ def build_worker_services(
     project_root: Path,
     state_dir: Path | None = None,
     tool_registry: CapabilityRegistry | None = None,
-    connector_resolver: EventConnectorResolver | None = None,
+    registry: EventConnectorRegistry | None = None,
+    connector_names: Iterable[str] | None = None,
 ) -> WorkerServices:
     resolved_project_root = project_root.expanduser().resolve()
     resolved_state_dir = (
@@ -83,12 +93,19 @@ def build_worker_services(
         if state_dir is not None
         else resolved_project_root / ".zeta"
     )
+    resolved_registry = registry or load_connector_registry(
+        resolved_project_root / "agents",
+        connector_names=connector_names,
+    )
     return WorkerServices(
         project_root=resolved_project_root,
         state_dir=resolved_state_dir,
         events=RuntimeEventStore.open(event_store_path(resolved_state_dir)),
         tool_registry=tool_registry or CapabilityRegistry(),
-        connector_resolver=connector_resolver,
+        registry=resolved_registry,
+        model_selection=active_model_selection(
+            session_dir=resolved_state_dir / "sessions" / "default"
+        ),
     )
 
 
@@ -111,7 +128,7 @@ async def run_once(runtime: WorkerServices) -> str:
 def project_executors(runtime: WorkerServices) -> tuple[ExecutableAgent, ...]:
     project = load_agent_project(
         runtime.project_root / "agents",
-        connector_resolver=runtime.connector_resolver,
+        registry=runtime.registry,
     )
     validate_agent_project(project)
     return tuple(
@@ -136,7 +153,7 @@ def project_egress_executors(
     executors: list[ExecutableAgent] = []
     for spec in project.specs:
         for index, binding in enumerate(egress_bindings(spec)):
-            connector = connector_for_event(project.connectors, binding.event)
+            connector = project.connectors.connector_for_event(binding.event)
             if connector is None:
                 continue
             handler = connector.egress.get(binding.event)
@@ -230,13 +247,13 @@ def egress_runner(binding: EgressBinding, handler, connector_id: str):
 async def run_ingress_once(runtime: WorkerServices) -> int:
     project = load_agent_project(
         runtime.project_root / "agents",
-        connector_resolver=runtime.connector_resolver,
+        registry=runtime.registry,
     )
     validate_agent_project(project)
     inserted = 0
     for spec in project.specs:
         for binding in ingress_bindings(spec):
-            connector = connector_for_event(project.connectors, binding.event)
+            connector = project.connectors.connector_for_event(binding.event)
             if connector is None:
                 continue
             handler = connector.ingress.get(binding.event)
@@ -280,6 +297,35 @@ async def run_ingress_forever(
         except Exception:
             logger.exception("ingress polling failed")
         await asyncio.sleep(poll_interval_seconds)
+
+
+async def handle_push_ingress_request(
+    runtime: WorkerServices,
+    connector_id: str,
+    request: InboundRequest,
+) -> InboundResponse:
+    project = load_agent_project(
+        runtime.project_root / "agents",
+        registry=runtime.registry,
+    )
+    validate_agent_project(project)
+    connector = project.connectors.resolve(connector_id)
+    if connector is None:
+        return InboundResponse(status_code=404, body=b"unknown connector")
+    if connector.push_ingress is None:
+        return InboundResponse(status_code=405, body=b"push ingress not supported")
+
+    result = connector.push_ingress(request)
+    if inspect.isawaitable(result):
+        result = await result
+    response, drafts = cast(
+        tuple[InboundResponse, Iterable[DraftEvent]],
+        result,
+    )
+    for draft in drafts:
+        validate_event_payload(project.events, draft)
+        runtime.events.accept(draft)
+    return response
 
 
 def validate_event_payload(events, draft: DraftEvent) -> None:
@@ -345,7 +391,10 @@ def project_agent_run_turn(runtime: WorkerServices):
                     runtime="zeta-agent",
                     tools=tuple(config.allowed_capabilities or ()),
                     context=kwargs.get("context", ""),
-                    config=config,
+                    config=config_with_model_selection(
+                        config,
+                        runtime.model_selection,
+                    ),
                 ),
                 run_id=run_id,
                 caused_by=kwargs.get("caused_by") or invocation.triggering_event.id,
@@ -357,6 +406,24 @@ def project_agent_run_turn(runtime: WorkerServices):
             trace_store.close()
 
     return run_turn
+
+
+def config_with_model_selection(
+    config: AgentConfig,
+    selection: ModelSelection | None,
+) -> AgentConfig:
+    if config.model_name is not None or config.model_url is not None:
+        return config
+    if selection is None:
+        return config
+    return replace(
+        config,
+        model_profile=selection.profile,
+        model_name=selection.model,
+        model_url=selection.url,
+        thinking=selection.thinking,
+        model_api=selection.api,
+    )
 
 
 async def run_available_queue_item(
@@ -584,12 +651,22 @@ async def run_forever(
     runtime: WorkerServices,
     *,
     poll_interval_seconds: float = 1.0,
+    push_host: str = "127.0.0.1",
+    push_port: int = 8080,
+    push_route_prefix: str = "/connectors",
     stop_event: asyncio.Event | None = None,
 ) -> None:
     running: set[asyncio.Task[str]] = set()
     ingress_task = start_ingress_task(
         runtime,
         poll_interval_seconds=poll_interval_seconds,
+        stop_event=stop_event,
+    )
+    push_ingress_task = start_push_ingress_task(
+        runtime,
+        host=push_host,
+        port=push_port,
+        route_prefix=push_route_prefix,
         stop_event=stop_event,
     )
     try:
@@ -601,6 +678,7 @@ async def run_forever(
         )
     finally:
         await stop_ingress_task(ingress_task)
+        await stop_ingress_task(push_ingress_task)
         await log_worker_results(running)
 
 
@@ -610,12 +688,37 @@ def start_ingress_task(
     poll_interval_seconds: float,
     stop_event: asyncio.Event | None,
 ) -> asyncio.Task[None] | None:
-    if runtime.connector_resolver is None:
+    if runtime.registry is None or not runtime.registry.has_ingress_connectors():
         return None
     return asyncio.create_task(
         run_ingress_forever(
             runtime,
             poll_interval_seconds=poll_interval_seconds,
+            stop_event=stop_event,
+        )
+    )
+
+
+def start_push_ingress_task(
+    runtime: WorkerServices,
+    *,
+    host: str,
+    port: int,
+    route_prefix: str,
+    stop_event: asyncio.Event | None,
+) -> asyncio.Task[None] | None:
+    if runtime.registry is None or not runtime.registry.push_ingress_connectors():
+        return None
+    return asyncio.create_task(
+        run_push_ingress_forever(
+            lambda connector_id, request: handle_push_ingress_request(
+                runtime,
+                connector_id,
+                request,
+            ),
+            host=host,
+            port=port,
+            route_prefix=route_prefix,
             stop_event=stop_event,
         )
     )

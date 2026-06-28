@@ -356,11 +356,18 @@ def config_for_spec(spec: AgentSpec, config: AgentConfig | None) -> AgentConfig:
         return AgentConfig(
             system_prompt=spec.description,
             allowed_capabilities=spec.tools,
+            execution_mode="direct",
+            model_name=spec.model.name if spec.model is not None else None,
+            model_url=spec.model.url if spec.model is not None else None,
         )
     return replace(
         config,
         system_prompt=config.system_prompt or spec.description,
         allowed_capabilities=config.allowed_capabilities or spec.tools,
+        model_name=config.model_name
+        or (spec.model.name if spec.model is not None else None),
+        model_url=config.model_url
+        or (spec.model.url if spec.model is not None else None),
     )
 
 
