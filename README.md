@@ -1,148 +1,136 @@
-# Sigil
+# Zeta
 
 [![CI](https://github.com/rlouf/sigil/actions/workflows/ci.yml/badge.svg)](https://github.com/rlouf/sigil/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/sigil-sh.svg)](https://pypi.org/project/sigil-sh/)
 [![Python](https://img.shields.io/pypi/pyversions/sigil-sh.svg)](https://pypi.org/project/sigil-sh/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Natural-language shell assistant.
+Zeta is a local, event-driven runtime for authored agents.
 
-Sigil turns short terminal intents into explicit, inspectable shell interactions.
-Ask from local context, propose one reviewed agent step, do one routine step, or
-run one command with captured output without leaving your prompt.
-Sigil is inspired by IRC-style bot commands: lightweight punctuation prefixes
-that let you address an assistant inline without leaving the conversation.
+An authored agent is a Markdown file that declares which durable events it
+accepts, which tools it can use, what events it may return, and the prompt that
+should run when it is triggered. The runtime stores events, queue state, run
+attempts, tool calls, model calls, and prompt traces in project-local SQLite
+databases so agent behavior can be replayed and inspected.
 
-```sh
-, "what changed in this repo?"
-,, "run the relevant tests"
-,,, "update the docs and run checks"
-+ cargo test
-?
-```
-
-Sigil is alpha software. It is ready for early shell users who are comfortable
-with local LLM tooling, editable command handoffs, and occasional interface
-changes.
-
-## Why Sigil?
-
-Most shell assistants blur together three very different operations:
-suggesting, executing, and explaining. Sigil keeps those workflows separate.
-
-| Verb | Glyph | What happens |
-| --- | --- | --- |
-| ask | `,` | Answer from local context. No shell is exposed. |
-| propose | `,,` | Run the agent until it can stage reviewed shell work or return an answer. |
-| do | `,,,` | Run one auto-approved agent step; exact replacements are applied directly. |
-| run | `+` | Run one explicit command, stream output, and record stdout/stderr snippets. |
-| status | `?` | Show the current session status without calling a model. |
-
-The result is a shell workflow with small blast radius, durable state, and a
-plain CLI underneath the punctuation.
+Zeta is alpha software. The repository also contains Sigil, a shell frontend
+that uses the same runtime for interactive `ask`, `propose`, `do`, trace, and
+history workflows.
 
 ## Install
 
-Sigil targets zsh. Install the Python command, then install the shell binding:
+The Python package is published as `sigil-sh`; it installs both `zeta` and
+`sigil` commands:
 
 ```sh
 uv tool install sigil-sh
-sigil install
-sigil doctor
+zeta --help
 ```
 
-You can also install with `pipx`:
+For local development:
 
 ```sh
-pipx install sigil-sh
+uv sync --group dev
+uv run zeta --help
+uv run sigil --help
 ```
 
-To try the current main branch before a tagged release:
+Zeta needs Python 3.11+ and a model endpoint. By default, local runs use an
+OpenAI-compatible chat completions endpoint at:
+
+```text
+http://127.0.0.1:8080/v1/chat/completions
+```
+
+## Model Profiles
+
+Model profiles live in `~/.zeta/models.toml`:
+
+```toml
+[[models]]
+name = "fast"
+model = "qwen2.5-coder"
+url = "http://127.0.0.1:8080/v1/chat/completions"
+thinking = "none"
+default = true
+
+[[models]]
+name = "deep"
+model = "qwen3-coder"
+url = "http://127.0.0.1:8081/v1/chat/completions"
+thinking = "high"
+```
+
+At most one profile may set `default = true`. If no default exists, Zeta falls
+back to `local-model` at the default local URL. `thinking` may be `"none"`,
+`"minimal"`, `"low"`, `"medium"`, or `"high"`.
+
+A profile can also use the Codex Responses backend through local Codex CLI
+credentials:
+
+```toml
+[[models]]
+name = "codex"
+model = "gpt-5.5"
+api = "codex-responses"
+thinking = "high"
+```
+
+That sends prompts and any tool-read file contents to OpenAI's backend. Run
+`codex login` first so `~/.codex/auth.json` exists.
+
+The `zeta run` worker resolves its model from the project runtime session
+stored under `.zeta/sessions/default`. For authored agents, the usual choices
+are to set a `default = true` profile in `models.toml` or to set a per-agent
+`model:` override in the agent frontmatter.
+
+The Sigil shell frontend also uses these profiles, but its `sigil model use`
+command selects a profile for the current shell session, not for a project
+worker:
 
 ```sh
-uv tool install git+https://github.com/rlouf/sigil
+sigil model list
+sigil model use fast
+sigil model show
+sigil model clear
 ```
 
-The Python package is named `sigil-sh` because `sigil` was not available as a
-distribution name. The installed command is still `sigil`.
+## Project Layout
 
-`sigil install` copies the bundled binding to `~/.sigil/shell/zsh/` and adds an
-idempotent source block to `.zshrc`. Running it again updates the binding
-without duplicating the rc block.
-
-## Requirements
-
-- Python 3.11+
-- zsh for shell bindings
-- A local OpenAI-compatible chat completions endpoint for command generation
-  and Zeta-backed ask/agent workflows (default
-  `http://127.0.0.1:8080/v1/chat/completions`)
-
-Useful environment variables:
-
-```sh
-ZETA_MODEL_PATH=/path/to/model.gguf
-# Client-side stream idle timeout in seconds (default 120); <=0 disables it.
-ZETA_MODEL_IDLE_TIMEOUT_SECONDS=120
-# Limit on connect plus time to first chunk (default 600); <=0 disables it.
-ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS=600
-SIGIL_STATE_DIR=$HOME/.sigil
-SIGIL_RUN_CAPTURE_BYTES=6000
-```
-
-Model endpoints are configured through profiles in `~/.zeta/models.toml`
-(below), not environment variables. Without any configuration sigil talks
-to `local-model` at the default local endpoint.
-
-Sigil sends Zeta model requests with OpenAI-compatible streaming enabled
-internally, even though it still renders the final assistant message as one
-response. For local `llama-server`, this gives the server a direct client
-disconnect signal if Sigil aborts a request. The two timeouts are client-side
-stream read timeouts: `ZETA_MODEL_FIRST_OUTPUT_TIMEOUT_SECONDS` covers connect
-plus prompt processing (a long prefill sends nothing), and
-`ZETA_MODEL_IDLE_TIMEOUT_SECONDS` bounds silence between chunks once output
-flows; `llama-server --timeout` is a read/write timeout, not a generation
-cancellation guarantee.
-
-## Zeta Agent Runtime
-
-Zeta is the event-driven runtime underneath Sigil's agent workflows. It runs
-assistant/tool loops against an OpenAI-compatible model endpoint, records each
-model call and tool result as durable events, and projects those events into a
-trace graph for replay, inspection, and debugging.
-
-The runtime has two layers:
-
-- session turns, used by Sigil's `ask`, `propose`, and `do` workflows;
-- authored agents, which react to durable events, schedules, and eventually
-  project-specific integrations.
-
-Authored agents live in a flat `agents/` directory. Each top-level Markdown
-file is one agent. Shared resource directories sit beside those files and are
-not recursively interpreted as agents:
+Zeta reads authored agents from a flat `agents/` directory in the project root:
 
 ```text
 agents/
   release-manager.md
   support-triage.md
-  skills/
-    code-review.md
-    release-notes.md
+  connectors.yaml
   events/
     github.pr.opened.json
     release.summary.ready.json
+  skills/
+    code-review.md
+    release-notes.md
   tools/
 ```
 
-An agent file uses YAML frontmatter for routing and grants, followed by a
-Jinja prompt body rendered with one root variable, `event`:
+Only top-level `agents/*.md` files are interpreted as agents. Directories such
+as `agents/events/`, `agents/skills/`, and `agents/tools/` are resources, not
+nested agents.
+
+The filename stem is the agent slug. It must match `[a-z0-9_-]+`.
+
+## Defining Agents
+
+Each agent file is Markdown with YAML frontmatter and a Jinja prompt body. The
+prompt body may reference one root variable, `event`; validation rejects other
+undeclared roots.
 
 ```markdown
 ---
 name: Slack Support
 description: Replies to Slack support messages.
 model:
-  name: qwen3.6-27b-q8-local
+  name: qwen3-coder
   url: http://127.0.0.1:8080/v1/chat/completions
 accepts:
   - slack.message.received
@@ -167,68 +155,87 @@ egress:
       channel_ids: ["C123"]
 resumable: true
 ---
-Reply to the Slack message: {{ event.payload.text }}
+Reply to the Slack message:
+
+{{ event.payload.text }}
 ```
 
-Core frontmatter fields are `name`, `description`, `enabled`, `resumable`,
-`model`, `accepts`, `returns`, `tools`, `skills`, and `schedules`. `model` is
-an optional object with `name` and `url`; omit it to use the worker's active or
-default model profile. Background authored agents execute granted tools
-directly. `ingress` and `egress` are event connector sections. Project
-validation rejects unknown sections and validates connector filters with the
-owning connector's JSON Schema.
+Core frontmatter fields:
 
-Files under `agents/events/` define optional event payload JSON Schemas. The
-file stem is the event type, so `github.pr.opened.json` registers
-`github.pr.opened`. The file may either be a JSON Schema object directly or an
-object with a `schema:` field whose value is the JSON Schema. Files under
-`agents/skills/` define shared Markdown skills that agents may explicitly list
-in `skills:`.
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `name` | yes | Human-readable name. |
+| `description` | yes | Used as the agent system prompt. |
+| `enabled` | no | Defaults to `true`; disabled agents are ignored. |
+| `resumable` | no | Reuse `agent/<slug>` session state across events. |
+| `model` | no | Per-agent `{name, url}` override. |
+| `accepts` | no | Event types that can trigger the agent. |
+| `returns` | no | Event types the agent may publish after it finishes. |
+| `tools` | no | Capability names granted to the model. |
+| `skills` | no | Shared Markdown skills from `agents/skills/`. |
+| `schedules` | no | Cron triggers that publish synthetic events. |
+| `ingress` | no | Connector bindings that ingest external events. |
+| `egress` | no | Connector bindings that deliver returned events. |
 
-Ingress and egress are conventional event connector manifest sections. Zeta
-core stores them as manifest data; the worker interprets them through enabled
-event connectors. Each binding names the event type directly. `filter` is
-connector-defined deterministic configuration, such as Slack channel ids, and
-is validated against the connector-provided filter schema. `idempotency_key` is
-rendered from the event payload and `event` object so connectors can avoid
-duplicate ingests or sends.
+Schedules automatically add `agent.<slug>.scheduled` to `accepts`. For example,
+`agents/release-manager.md` with a schedule accepts
+`agent.release-manager.scheduled`.
 
-EventConnector event schemas are JSON Schemas too. During project loading,
-Zeta merges connector-provided event schemas with files under `agents/events/`;
-duplicate schemas must be identical. This keeps ingress/egress provider code
-outside the core library while still making `accepts:`, `returns:`, and
-connector manifest sections such as `ingress:` and `egress:` checkable before
-the worker or scheduler runs. Installed connector packages are discovered
-through the `zeta.event_connectors` entry point group, but they only run when
-listed in `agents/connectors.yaml`:
+When `resumable: true`, every event for the agent uses session
+`agent/<slug>`. Otherwise each event uses `agent/<slug>/<event_id>` so unrelated
+events do not share timeline.
 
-```yaml
-event_connectors:
-  - slack
+## Events
+
+Events are durable records with:
+
+- `type`
+- `source`
+- object `payload`
+- optional `idempotency_key`
+- optional causality and runtime metadata
+
+Project event schemas live under `agents/events/`. The JSON filename stem is
+the event type:
+
+```text
+agents/events/github.pr.opened.json
 ```
 
-Worker and scheduler project loading validates authored agents before running
-them. External events listed in `accepts:` and all events listed in `returns:`
-must have a matching schema from `agents/events/` or from a selected connector.
-Synthetic scheduled events such as `agent.release-manager.scheduled` are
-registered internally with an empty payload schema.
+The file may be a JSON Schema object directly:
 
-Authored agents run in the same durable agent loop as `session.run`. Resumable
-agents share one runtime session, `agent/<slug>`, while one-shot invocations use
-`agent/<slug>/<event_id>` so separate events do not inherit each other's
-timeline. These sessions are inspectable through the same event and trace
-surfaces as interactive runs:
-
-```sh
-zeta events --project-root . --session agent/release-manager
-ZETA_STATE_DIR=.zeta sigil trace --session agent/release-manager log
+```json
+{
+  "type": "object",
+  "required": ["number", "title"],
+  "properties": {
+    "number": { "type": "integer" },
+    "title": { "type": "string" }
+  },
+  "additionalProperties": false
+}
 ```
 
-When an agent declares `returns:`, Zeta treats the normal agent/tool loop as
-working context. After the loop finishes, Zeta performs one final structured
-generation step with no tools available and a JSON Schema derived from the
-declared return events. The validated JSON is published as a durable event
-from `agent:<slug>`:
+or an object with a `schema` field:
+
+```json
+{
+  "schema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
+```
+
+External events listed in `accepts` and all events listed in `returns` must have
+a schema from `agents/events/` or from an enabled connector. Scheduled events
+are registered internally with an empty object payload schema.
+
+## Returned Events
+
+When an agent declares `returns`, Zeta runs the normal assistant/tool loop first.
+After the loop finishes, it performs one final structured generation with no
+tools available. The schema is derived from the declared return event schemas:
 
 ```json
 {
@@ -239,570 +246,309 @@ from `agent:<slug>`:
 }
 ```
 
-`agents/tools/` is reserved for project-local tool definitions. Runtime tool
-execution still goes through Zeta's capability registry and Sigil's built-in
-tools.
+The validated result is published as a durable event from `agent:<slug>`.
+Connector egress handlers can then deliver those events to external systems.
 
-## Zeta JSON-RPC Protocol
+## Tools And Skills
 
-`zeta rpc --stdio` serves a newline-delimited JSON-RPC 2.0 protocol. Each line
-is one JSON object. Requests include
-`jsonrpc: "2.0"`, an `id`, a `method`, and optional object `params`.
-Notifications omit `id`. Responses contain either `result` or `error`.
+The `zeta run` CLI registers the built-in Sigil capabilities with the local
+runtime. Agent `tools:` entries can use either the bare model name or the
+canonical capability id when it is unambiguous:
 
-`initialize` returns the server name and protocol version:
+| Tool | Capability id | Purpose |
+| --- | --- | --- |
+| `read` | `sigil.read` | Read file contents. |
+| `ls` | `sigil.ls` | List files. |
+| `grep` | `sigil.grep` | Text search. |
+| `ast_grep` | `sigil.ast_grep` | Structural code search. |
+| `web_search` | `sigil.web_search` | Web search. |
+| `query_log` | `sigil.query_log` | Query Sigil history. |
+| `bash` | `sigil.bash` | Run shell commands. |
+| `edit` | `sigil.edit` | Edit files. |
+| `write` | `sigil.write` | Write files. |
 
-```json
-{"server":"zeta","protocol":"0.1"}
+Capability execution goes through the registry and each capability's policy. In
+the local worker, mutating tools use the current staged execution contract unless
+the host supplies a different runtime configuration.
+
+Shared agent skills are Markdown files under `agents/skills/`. The filename stem
+is the skill name, and agents opt in with `skills:`.
+
+## Connectors
+
+Connectors contribute event schemas, ingress, push ingress, egress, and filter
+schemas. Installed connector packages are discovered through the
+`zeta.event_connectors` entry point group, but a project must enable them in
+`agents/connectors.yaml`:
+
+```yaml
+event_connectors:
+  - slack
 ```
 
-Protocol `0.1` is additive while Zeta is alpha software: clients should ignore
-unknown result fields and unknown notification params. Existing `session.run`
-callers that pass only `objective`, `tools`, and `context` still receive
-`outcome` and `final_answer`.
+Connector-provided event schemas are merged with `agents/events/`. Duplicate
+schemas must be identical.
 
-### Methods
+Ingress and egress sections bind an agent to connector-owned events:
 
-`session.run` starts a run and returns:
-
-- `run_id`: stable `run_*` id for cancellation, events, and trace refs.
-- `outcome`: `answered`, `staged`, `aborted`, or `failed`.
-- `final_answer`: final assistant text when available.
-- `final_event_cursor`: durable event cursor for the last event in the run.
-- `trace`: prompt, assistant message, model event, tool event, tool call, and
-  tool result object ids recorded for the run.
-
-Params are:
-
-- `objective` string, required.
-- `workflow` string: `ask`, `propose`, or `do`; defaults to `propose`.
-- `tools` array of model-visible capability names.
-- `context`, `system`, `max_steps`, `max_wall_seconds`, and model override
-  fields.
-
-`session.cancel` cancels an active run by `run_id`. The result is
-`cancelled: true` for active runs, or `cancelled: false` with `status:
-"unknown"`, `completed`, `cancelled`, or `failed`.
-
-`events.list` returns durable events in append order. Params are optional
-`after_cursor`, `limit`, `session_id`, and `turn_id`. Results contain `events`
-and `next_cursor`.
-
-`events.publish` appends a client-authored durable event and returns
-immediately with `inserted`, `event`, and an empty `lifecycle_events` list.
-Routing happens in the background; clients observe routed runtime events with
-`events.notify` or by resuming from `events.list`.
-
-`tools.register` registers client-hosted capabilities. Params contain a `tools`
-array. Each tool item contains:
-
-- `name`, `description`, and required JSON Schema `schema`.
-- optional `provider`, which must be `rpc` when present. The server assigns
-  the `rpc` provider by default.
-- `timeout_sec`: optional positive timeout for client calls.
-
-Schemas are validated with JSON Schema Draft 2020-12. The result contains
-normalized registered tool declarations: `id`, `provider`, `name`,
-`description`, `schema`, and `timeout_sec`. Duplicate capability ids are
-rejected.
-
-`tools.respond` answers a server `tools.call` notification. Params include
-`id` and `result`. `result` must be an object with a boolean `ok` field.
-
-### Notifications And Errors
-
-`events.notify` carries a persisted event. Runtime events include `run_id`,
-`turn_id`, `session_id`, and `cursor` when backed by the durable event store.
-
-`tools.call` asks the client to execute a registered capability. Params include
-`id`, `name`, `arguments`, `status: "requested"`, and optional `timeout_sec`.
-
-Expected protocol failures use JSON-RPC standard codes with stable Zeta error
-codes in `error.data.code`: `method_not_found`, `missing_objective`,
-`invalid_workflow`, `duplicate_tool`, `missing_tool_schema`,
-`invalid_tool_schema`, `invalid_tool_provider`, `invalid_tool_capability`,
-`invalid_cursor`, `invalid_limit`, `invalid_run_id`, `session_run_unavailable`,
-and `events_unavailable`. Unexpected exceptions are returned as `-32603` with
-`internal_error`.
-
-## Changing Models Mid-Session
-
-Sigil can switch Zeta model profiles for the current terminal session without
-changing global environment variables. Define profiles in `~/.zeta/models.toml`:
-
-```toml
-[[models]]
-name = "fast"
-model = "qwen2.5-coder"
-url = "http://127.0.0.1:8080/v1/chat/completions"
-thinking = "none"
-default = true
-
-[[models]]
-name = "deep"
-model = "qwen3-coder"
-url = "http://127.0.0.1:8081/v1/chat/completions"
-thinking = "high"
+```yaml
+accepts:
+  - slack.message.received
+returns:
+  - slack.message.post
+ingress:
+  - event: slack.message.received
+    filter:
+      channel_ids: ["C123"]
+    idempotency_key: "slack:message:{team_id}:{channel_id}:{message_ts}"
+egress:
+  - event: slack.message.post
+    filter:
+      channel_ids: ["C123"]
 ```
 
-At most one profile may set `default = true`: it is the model every new
-session starts on. Omit the flag everywhere and sessions start on the
-builtin local default (`local-model` @
-`http://127.0.0.1:8080/v1/chat/completions`).
+`filter` is validated against the connector's filter schema. Ingress bindings
+require `idempotency_key` so connectors can avoid duplicate ingests. Egress
+defaults to a connector/event idempotency key when one is not supplied.
 
-`thinking` controls model reasoning per profile, using the reasoning-effort
-values of OpenAI's Responses API: `"none"` disables thinking, and
-`"minimal"`, `"low"`, `"medium"`, or `"high"` request that effort
-(sent as `reasoning_effort`). Omit it to leave the model's own default in
-place — thinking models think. While the model thinks, the last few lines
-of its reasoning stream as a muted tail under the thinking timer; the tail
-is erased the moment the answer or a tool call arrives, leaving a single
-muted `thought for 12s` line in scrollback. Set `SIGIL_THINKING_TRACE=0`
-to keep only the timer. Reasoning is recorded in the trace and shown in
-full by `sigil session transcript`; it is never resent to the model in
-later turns, and never written to redirected or piped output.
+The bundled Slack connector uses:
 
-### Codex profiles
+- `SLACK_BOT_TOKEN` for `chat.postMessage`
+- `SLACK_SIGNING_SECRET` for push ingress request verification
 
-A profile with `api = "codex-responses"` talks to the OpenAI Codex backend
-on a ChatGPT subscription instead of a local chat-completions server:
+## Running Agents
 
-```toml
-[[models]]
-name = "codex"
-model = "gpt-5.5"
-api = "codex-responses"
-thinking = "high"
-```
+Zeta stores project runtime state under `.zeta/` by default. Override it with
+`--state-dir` when needed.
 
-Authentication reuses the Codex CLI credentials at `~/.codex/auth.json`:
-run `codex login` once, and sigil refreshes the access token in place when
-it expires. `sigil doctor` reports credential state whenever a codex
-profile is configured. Requests carry `originator: zeta`.
-
-This is an explicit departure from the local-first default: while a codex
-profile is active, prompts — including file contents read by tools — leave
-the machine for OpenAI's backend. Reasoning summaries stream like local
-thinking traces; the full chain of thought stays encrypted with OpenAI.
-
-Then select a profile for the active shell session:
+Publish an event manually:
 
 ```sh
-sigil model list
-sigil model use fast
-, "why did the last command fail?"
-
-sigil model use deep
-,, "refactor the failing path and run the focused tests"
-
-sigil model show
-sigil model clear
+zeta events publish github.pr.opened \
+  --payload-json '{"number":17,"title":"Fix release notes"}'
 ```
 
-The selected profile is scoped to the current `SIGIL_SESSION_ID`, so another
-terminal keeps its own model selection. Clearing the profile returns the
-session to the `default = true` profile, or to the builtin local default
-when no profile claims the flag.
+Route or execute one unit of work:
 
-`?` always shows the model the next request will use and where the selection
-comes from — `(session)` for a profile selected with `sigil model use`,
-`(config)` for the `default = true` profile, `(builtin)` for the
-no-configuration fallback:
+```sh
+zeta run --once
+```
+
+Run the worker continuously:
+
+```sh
+zeta run
+```
+
+If enabled connectors expose push ingress, the worker also listens for HTTP
+requests at:
 
 ```text
-clean
-model: fast -> qwen2.5-coder @ http://127.0.0.1:8080/v1/chat/completions (session)
+http://127.0.0.1:8080/connectors/<connector-id>
 ```
 
-If the selected profile has since been removed from `models.toml`, the line
-says so — `(builtin; profile 'fast' missing from models.toml)` — instead of
-pretending no selection was made.
-
-## Quick Start
-
-Once the shell binding is installed, use the glyphs directly:
+Change the host, port, route prefix, or connector allowlist:
 
 ```sh
-# Ask from local context.
-, "why did the last command fail?"
-
-# Propose one reviewed agent step.
-,, "run the relevant tests"
-
-# Run one command through Sigil's explicit capture path.
-+ cargo test
-
-# Check current Sigil status.
-?
-
+zeta run --host 0.0.0.0 --port 8090 --route-prefix /webhooks
+zeta run --connectors slack
 ```
 
-Use stdin as context:
+Run the scheduler once:
 
 ```sh
-git diff | , "review risky changes"
-git diff --name-only | , "what should I test?"
+zeta schedule --once
 ```
 
-Read-only comma uses piped input directly because it has no execute path.
-Agent-step workflows are driven by the prompt text and the current shell session.
-
-## A Typical Flow
+Run the scheduler continuously:
 
 ```sh
-# 1. Ask what changed.
-, "summarize this repo state"
-
-# 2. Ask Zeta to pick the next shell step. The staged command lands in
-#    your prompt as an editable `+ …` line.
-,, "run the focused tests for this change"
-
-# 3. Press Enter on the staged line (edit it first if you like).
-#    Executing the staged command resumes the Zeta turn with the
-#    recorded result — no follow-up keystroke needed.
-+ uv run pytest tests/test_shell_bindings.py
-
-# 4. Any other command stays plain capture: explore as long as you
-#    want. A bare `,,` opens $EDITOR to compose the next objective;
-#    Zeta sees everything you ran in between.
-,,
+zeta schedule
 ```
 
-Only the staged command (whitespace changes and appended arguments
-included) triggers the automatic resume, and a Ctrl-C'd run never does.
-Set `SIGIL_AUTO_CONTINUE=0` to keep `+` as plain capture and resume by
-hand with `sigil step --workflow propose --continue`.
+In continuous mode, the scheduler checks once per minute and publishes due
+synthetic events such as `agent.release-manager.scheduled`.
 
-Sigil keeps session state under `~/.sigil/` so Zeta can resume from recent
-ask turns, handoff timeline events, and command results recorded through `+`.
-`sigil session transcript` renders that conversation back as a transcript —
-questions, answers, and compact tool traces, with each answer tagged by the
-id of the exact prompt the model saw. When the model streams reasoning, the
-transcript shows it in full as italic markdown above the answer it led to; the
-live loop shows only the ephemeral tail and the `thought for 12s` line.
+## Observability And Debugging
 
-The zsh binding also records every interactive command: the command line,
-exit status, working directory, and timestamp — never its output. Output is
-only captured when you ask for it explicitly with `+`. Recording costs
-nothing at the prompt: the binding appends to a per-session spool without
-starting any process, and the CLI folds the spool in the next time any
-`sigil` command runs. As with zsh history, a command typed with a leading
-space is not recorded, and `SIGIL_RECORD=0` turns recording off; secrets
-typed into command arguments are exposed exactly as they are in
-`~/.zsh_history`, and the same escape hatches apply. Recording feeds the
-session log and turn history; prompts sent to the model only ever include a
-bounded window of recent commands.
+The `zeta` CLI reads the project runtime journal and queue:
 
-## Glyph Reference
+```text
+zeta status
+zeta queue [--json]
+zeta attempts [--json]
+zeta runs [--json]
+zeta run show RUN_ID [--json]
+zeta events [--type-prefix PREFIX] [--session ID] [--limit N] [--json]
+zeta events publish EVENT_TYPE [--payload-json JSON] [--idempotency-key KEY]
+zeta schedule status [--json]
+```
 
-Installed zsh bindings expose these shortcuts:
+Common flows:
 
-| Glyph | Name | Behavior |
+```sh
+# Is there work waiting, claimed, failed, or unhandled?
+zeta status
+
+# Inspect queued items.
+zeta queue
+zeta queue --json
+
+# List run summaries newest in storage order.
+zeta runs
+
+# Inspect one run, including trigger event, queue item, attempt result,
+# returned events, tool calls, and usage.
+zeta run show run_att_qi_evt_123_issue-triage_1 --json
+
+# Read raw durable events.
+zeta events --limit 100
+zeta events --type-prefix runtime.
+zeta events --session agent/issue-triage
+
+# Publish a test event idempotently.
+zeta events publish laptop.resumed \
+  --payload-json '{"path":"heartbeat.txt"}' \
+  --idempotency-key resume-1
+
+# Check schedule backfill and next fire time.
+zeta schedule status
+```
+
+Plain output is tab-separated for easy shell use. JSON output exposes the
+underlying records, including queue item ids, attempt ids, run ids, event
+payloads, token usage, final summaries, and errors.
+
+Queue statuses are shown in this order when present:
+
+```text
+pending
+available
+claimed
+completed
+failed
+cancelled
+retry_scheduled
+unhandled
+```
+
+Runtime events use the following prefixes:
+
+- `runtime.queue_item.*` for routing and queue lifecycle
+- `runtime.attempt.*` for worker attempts
+- `runtime.egress.*` for connector delivery
+- `zeta.*` for model, prompt, tool, and turn records
+- `rpc.*` for event-log JSON-RPC work
+
+## Prompt And Tool Traces
+
+Runtime events answer "what happened?" Prompt traces answer "what exactly did
+the model see?" They are stored in `.zeta/zeta.sqlite3`, scoped by session id.
+The trace inspector currently lives under the Sigil CLI. By default, Sigil trace
+commands read `~/.zeta`; point them at a project runtime by setting
+`ZETA_STATE_DIR` to the same state directory used by `zeta run`.
+
+```sh
+export ZETA_STATE_DIR=.zeta
+
+# List recent prompts and assistant messages across agent sessions.
+sigil trace log --all-sessions
+
+# List failed or successful tool calls.
+sigil trace tools --failed --all-sessions
+sigil trace tools --successful --json --all-sessions
+
+# Inspect one agent session.
+sigil trace --session agent/issue-triage log
+sigil trace --session agent/issue-triage show 4f9d01c2
+sigil trace --session agent/issue-triage tree 4f9d01c2 --down
+
+# Compare two prompts component by component.
+sigil trace --session agent/issue-triage diff A B --stat
+
+# Rebuild and resend a stored prompt.
+sigil trace --session agent/issue-triage replay PROMPT_ID --model fast --diff
+```
+
+Every trace id argument accepts a full id, a unique prefix, or a ref such as
+`turn/<turn_id>`. `trace replay` verifies the rebuilt prompt payload against the
+recorded hash before sending it to the selected model.
+
+A worked walkthrough lives in
+[docs/demos/trace-replay.md](docs/demos/trace-replay.md).
+
+## JSON-RPC
+
+`zeta rpc --stdio` serves newline-delimited JSON-RPC 2.0. Each line is one JSON
+object. Requests include `jsonrpc: "2.0"`, an `id`, a `method`, and optional
+object `params`; notifications omit `id`.
+
+Supported methods:
+
+| Method | Purpose |
+| --- | --- |
+| `initialize` | Return server and protocol metadata. |
+| `session.run` | Start a session run. |
+| `session.cancel` | Cancel an active run by `run_id`. |
+| `events.list` | List durable events by cursor, session, turn, and limit. |
+| `events.publish` | Append a client-authored durable event. |
+| `tools.register` | Register client-hosted capabilities. |
+| `tools.respond` | Respond to a `tools.call` notification. |
+
+Server notifications:
+
+| Notification | Purpose |
+| --- | --- |
+| `events.notify` | Carries a persisted runtime event. |
+| `tools.call` | Asks the client to execute a registered capability. |
+
+Protocol `0.1` is additive while Zeta is alpha software. Clients should ignore
+unknown result fields and unknown notification params.
+
+## Sigil Shell Frontend
+
+Sigil is the shell frontend that ships in this repository. It targets zsh and
+wraps Zeta session turns in punctuation shortcuts:
+
+```sh
+sigil install
+sigil doctor
+```
+
+| Glyph | Workflow | Behavior |
 | --- | --- | --- |
 | `,` | ask | Answer from local context. |
-| `,,` | propose | Run until Sigil can stage reviewed shell work or return an answer. |
-| `,,,` | do | Run auto-approved tool calls until no more are needed. |
-| `+` | run | Run one explicit command and capture stdout/stderr snippets. |
-| `?` | status | Session status: last failure, last delegation, staged work, today's cost, active model. |
-
-Glyph lines are ordinary shell commands; quote your prompts and compose
-freely.
+| `,,` | propose | Run until reviewed shell work is staged or an answer is returned. |
+| `,,,` | do | Run the tool loop directly. |
+| `+` | run | Execute one explicit command and capture bounded output. |
+| `?` | status | Show the current shell session status. |
 
 Examples:
 
 ```sh
-, "summarize this repo state"
+, "what changed in this repo?"
 ,, "run the relevant tests"
-,,, "fix the failing parser test"
-+ cargo test
+,,, "update docs and run checks"
++ uv run pytest
 ?
 ```
 
-`,` prints a read-only answer. It does not stage commands. A bare glyph —
-`,`, `,,`, or `,,,` with no text — composes the prompt in
-`$VISUAL`/`$EDITOR` instead of the command line; lines starting with `#`
-are ignored, and saving an empty file aborts.
-
-`,,` proposes the next reviewed step. The loop may call local
-tools such as `read`, `ls`, `grep`, `bash`, `edit`, and `write` until the model
-returns a final answer. Tool calls are shown as muted trace lines, and tool
-results are summarized compactly. The full JSON result stays in the Zeta run
-timeline for the model.
-
-`,,,` does the same tool loop without the confirmation step. This is YOLO
-mode; see the trust note under Workflow Model.
-
-Read-only workflows do not expose Bash. If an answer recommends a command, it is
-plain answer text, not a tool call or terminal handoff.
-
-`+` runs the command you provide, streams stdout/stderr live,
-preserves the exit status, and records bounded stdout/stderr snippets for later
-failure context. In interactive zsh, the binding captures the raw `+ ...`
-prompt line before zsh parses it, so pipelines, redirection, and shell grammar
-can be written naturally:
-
-```sh
-+ cargo test --all | tee test.log
-+ git status --short > status.txt
-```
-
-`,`, `,,`, `,,,`, and `?` are ordinary commands: zsh parses the line, so
-quoting, expansion, redirects, and pipes are exactly the shell you already
-know. Quote your prompts — it reads better and sidesteps surprises with
-apostrophes and globs — and reach for the shell deliberately when you want
-it. Double quotes interpolate, which is what staying in the shell buys you:
-
-```sh
-, "explain this error: $(tail -1 err.log)"
-,, "free space on $HOST, largest caches first"
-, "summarize the failing tests" > summary.txt
-, "one-line answer: which port does the dev server use" | pbcopy
-```
-
-Single quotes keep a prompt fully literal: `, 'what does $PATH contain?'`
-asks about the name, not your path. One zsh quirk worth knowing: `!`
-immediately before a closing double quote (`, "fix it!"`) trips history
-expansion — use single quotes for prompts with exclamation marks.
-
-A `+` command runs as an ordinary foreground job: Ctrl-Z suspends it, it
-shows up in `jobs`, `fg` resumes it, and `$?` carries its exit status. The
-accepted `+` line keeps showing exactly what you typed, with a dim marker
-showing where the handed-off dispatch ran. In scripts and non-interactive
-shells the named glyph functions dispatch; `+` is interactive-only.
-
-To install the CLI without punctuation shortcuts:
-
-```sh
-sigil install --no-glyphs
-```
-
-## Workflow Model
-
-Each workflow has a fixed effect on your system:
-
-| Workflow | Effect | Rule |
-| --- | --- | --- |
-| `,` ask | read-only | Local ask workflow with no Bash tool. |
-| `,,` propose | read/write/execute | Read-only tools run directly; Bash/edit/write are staged for review. |
-| `,,,` do | read/write/execute | Read-only tools, Bash, edit, and write run directly. |
-| `+` run | execute | Explicit local command execution with stdout/stderr capture. |
-| `?` status | read-only | Current session status without calling a model. |
-
-`,,,` is YOLO mode: nothing is staged and there is no filesystem boundary.
-Tools run with your user's permissions and can read or write anywhere your
-user can — the trust model is local user, local trust. When you want to
-review every effect before it happens, use `,,`, which stages all writes and
-commands at your prompt. For an OS-enforced boundary, launch the CLI inside
-a sandbox: [bubblewrap](https://github.com/containers/bubblewrap) on Linux,
-or the built-in `sandbox-exec(1)` on macOS.
-
-Sigil stores audit/debug events and per-shell continuity under `~/.sigil/`.
-Inspect the global event journal with:
-
-```sh
-sigil events
-```
-
-## CLI
-
-The glyphs are thin shell functions over a regular CLI:
+The regular CLI remains available without glyphs:
 
 ```text
 sigil ask [QUESTION]
 sigil status [--json]
 sigil log [--touched PATH] [--workflow W] [--since T] [--failed] [--session ID] [--cost] [--json]
-sigil log [show|export|import]
-sigil blame FILE
 sigil events [--limit N] [--json] [--raw]
 sigil session [show|path|list|clear|transcript] [--json]
 sigil model [list|use|show|clear]
-sigil trace [--session ID] [log|grep|show|tree|closure|refs|prompts|diff|replay]
+sigil trace [--session ID] [log|tools|grep|show|tree|closure|refs|prompts|diff|replay]
 sigil install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 sigil doctor [--json]
 ```
 
-Every command documents itself: `sigil COMMAND --help` states what it reads
-and writes and ends with copy-pasteable examples.
-
-The bundled Zeta agent runtime is an internal Python package; Sigil workflows run
-it in-process. There is no separate `zeta` command.
-
-From shells without the zsh binding, agent steps can be scripted through the
-same command the binding uses: `sigil step --workflow propose "OBJECTIVE"`
-stages reviewed shell work and `sigil step --workflow propose --continue` resumes a pending
-handoff (hidden from `--help` because the binding is the primary surface).
-
-### Exit Codes
-
-- `+` mirrors the exit status of the command it ran: 127 when the command is
-  missing, 128+N when it died from signal N (so 130 after Ctrl-C).
-- `sigil status` (`?`) exits 1 when the session needs attention — the last
-  recorded command failed — and 0 when clean.
-- `sigil ask` and `sigil step` (`,`, `,,`, `,,,`) exit 69 when the
-  model endpoint is down or fails mid-answer (sysexits `EX_UNAVAILABLE`);
-  `sigil doctor` diagnoses the endpoint.
-- `sigil model list` exits 1 when the profile config has diagnostics, and
-  `sigil doctor` exits 1 when a check fails, even though both still print
-  their report.
-- Any command exits 127 when an executable it needs is missing and 1 on
-  filesystem permission errors.
-
-## State
-
-Sigil writes event-sourced state under `~/.sigil/` by default. Set
-`SIGIL_STATE_DIR` to move it.
-
-Every delegation leaves durable events in `events.sqlite3`: a
-`zeta.prompt.submitted` event for the prompt, `zeta.model_call.completed`
-events for model calls, `zeta.tool_call.*` events for runtime tool calls, and
-one `zeta.turn.completed` or `zeta.turn.failed` event for the final turn
-outcome. Aborted turns are recorded as failed turns with `reason: "aborted"`.
-The turn event records which workflow ran, the objective, the enforced tool
-contract, model cost, the outcome, and the ids of the exact prompts the model
-saw. Tool-call events carry effect records for files written or edited (with
-before/after content hashes), commands executed (with exit status), and staged
-handoffs with how they resolved.
-Plain shell commands and `+` runs are recorded as `run` turns with a
-command effect.
-
-History queries are derived from those durable events. Agent turns are also
-bridged into the session's trace graph as `turn` objects linking the prompts
-the model saw and the tool results behind each effect; the `turn/<turn_id>`
-ref makes them addressable through `sigil trace show`. Clearing a session
-removes its continuity files and trace store; the event store is global and
-survives `sigil session clear`.
-
-Installed zsh bindings set `SIGIL_SESSION_ID` once when the shell starts
-and tie it to the terminal's pty, so separate terminal windows — including
-tmux panes, which inherit the server's environment — keep separate
-continuity, while subshells on the same terminal share it. Override the
-boundary with `SIGIL_SESSION_ID` or `SIGIL_SESSION_DIR`; an id you set
-yourself is respected as given. `sigil doctor` flags a session id that was
-created on a different terminal than the one it is used from.
-
-Inspect state without calling a model:
-
-```sh
-sigil session show
-sigil session list
-sigil session clear
-sigil events
-sigil events trace EVENT_ID
-sigil events descendants EVENT_ID
-sigil events turn TURN_ID
-```
-
-The history view is the query surface over that record. `sigil log` lists
-your turns across every session newest first, each line carrying its
-session id (`--session ID` narrows to one shell and drops the column;
-`--touched PATH`, `--workflow`, `--since 2d`, `--failed`, and `--cost`
-narrow or enrich);
-`sigil log show TURN` renders one turn in full — objective, contract,
-model, cost, effects with content hashes, and the prompt ids that feed
-`sigil trace show`. `sigil blame FILE` lists every turn that wrote
-or edited a file through the write/edit tools, with its objective and
-prompt ids; bash commands record what ran rather than which files they
-touched, so they appear in `sigil log`, not in blame. `?` reads the same
-history: it shows the last delegation outcome, a pending staged command,
-and today's session cost next to the active model.
-
-```sh
-sigil log --touched src/app.py --since 2d
-sigil blame src/app.py
-sigil log show 4f9d01c2
-```
-
-`sigil events` stays the raw event view underneath all of this. Its `trace`,
-`root`, `descendants`, and `turn` subcommands inspect event causality directly.
-
-Turn history is also the unit of exchange. `sigil log export` writes a
-self-contained JSON bundle — the matching turn and effect records plus
-each turn's full trace closure (prompts, components, tool results,
-with their derivations and `turn/<id>` refs) — and `sigil log import`
-restores it on another machine: records join the global event journal,
-objects land in per-session trace stores, and every query above answers there
-too. Re-importing is a no-op.
-
-```sh
-sigil log export --since 2026-06-01 -o week.json
-sigil log import week.json
-```
-
-The ask workflow can read history too: `,` carries a read-only
-`query_log` tool, so `, what did I delegate yesterday?` answers from
-your real delegation history and cites turn ids you can check with
-`sigil log show`. The tool searches every session by default and never
-writes anything.
-
-The trace store underneath is explorable the same way. `sigil trace
-log` lists recent prompts and assistant messages, one line per object
-(`--kind`/`--all` widen it to tool calls, results, and run events);
-`trace show ID` renders one object with its body and its derivations in
-both directions; `trace tree ID` walks what produced an object
-(`--down` for what came of it). Every ID argument accepts a ref name, a
-full id, or a unique prefix — three commands take you from "what
-happened" to the exact bytes the model saw:
-
-```sh
-sigil trace log
-sigil trace show 4f9d01c2
-sigil trace tree 4f9d01c2 --down
-```
-
-Because prompts are content-addressed component graphs, two more
-questions are one command each. `trace diff A B` compares two prompts
-component by component — identical ids are unchanged, changed
-components get a text diff (`--stat` for the one-line view). `trace
-replay ID` rebuilds the exact request from the stored components,
-verifies it against the recorded payload hash, and resends it through
-the model boundary — against the session's active model or `--model
-PROFILE` — recording the new answer in the trace so replays are
-themselves inspectable (`--diff` to diff old and new answers):
-
-```sh
-sigil trace diff 4f9d01c2 81be33aa --stat
-sigil trace replay 4f9d01c2 --model fast --diff
-```
-
-A worked walkthrough with real output lives in
-[docs/demos/trace-replay.md](docs/demos/trace-replay.md).
-
-None of this is locked to the current shell. `sigil trace --session ID
-…` reads another session's store (read-only — nothing you inspect can
-mutate it), `trace log --all-sessions` lists every recorded session's
-objects with the session id as a line prefix, and `trace grep PATTERN`
-searches object data — so "which session was I in when I asked about
-X last week" is one command:
-
-```sh
-sigil trace --session ttys004-8812 show 4f9d01c2
-sigil trace log --all-sessions
-sigil trace grep "rollback" --all-sessions
-```
-
-## Project Scope
-
-Sigil is:
-
-- A command-line tool and optional shell binding.
-- A shell-owned Zeta loop for one-step read/search/edit/write workflows.
-- An evented state layer for shell continuity and audit history.
-
-Sigil is not:
-
-- A public Python library. The Python package does not expose a supported API.
-- A background autonomous agent.
-- A replacement for reviewing commands and model output.
-
-## Roadmap
-
-`sigil sh` is the likely next shell-shaped surface once explicit command
-execution proves itself. The shell hooks are intentionally lightweight: they can
-record command metadata, but they should not invisibly interpose on every
-program's terminal output. A future shell frontend would own the prompt and
-timeline boundary, delegate command semantics to the user's real shell, and
-decide deliberately when a command runs as structured captured output versus an
-interactive terminal session.
+Sigil writes shell frontend state under `~/.sigil/` by default. Zeta authored
+agents write project runtime state under `.zeta/` by default.
 
 ## Development
 
