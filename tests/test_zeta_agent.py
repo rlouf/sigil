@@ -2029,6 +2029,86 @@ def test_zeta_rpc_session_run_returns_started_event_from_shared_draft(
     assert client.pending_runs["run_test"].task is not None
 
 
+def test_zeta_session_agent_request_uses_active_model_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context = zeta_runtime_context.RuntimeContext(
+        session_id="ctx-session",
+        event_sink=zeta_events.MemoryEventStore(),
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+    selection = ModelSelection(
+        profile="codex",
+        model="gpt-5.5",
+        url="https://chatgpt.com/backend-api",
+        thinking="low",
+        api="codex-responses",
+    )
+    captured: dict[str, Path] = {}
+
+    def active_model_selection(*, session_dir: Path | None = None) -> ModelSelection:
+        assert session_dir is not None
+        captured["session_dir"] = session_dir
+        return selection
+
+    monkeypatch.setattr(
+        zeta_requests,
+        "active_model_selection",
+        active_model_selection,
+    )
+
+    request = zeta_requests.session_agent_request_for_context(
+        {"objective": "answer"},
+        runtime_context=context,
+    )
+
+    assert captured["session_dir"] == context.session_dir
+    assert request.config.model_profile == "codex"
+    assert request.config.model_name == "gpt-5.5"
+    assert request.config.model_url == "https://chatgpt.com/backend-api"
+    assert request.config.thinking == "low"
+    assert request.config.model_api == "codex-responses"
+
+
+def test_zeta_session_agent_request_preserves_explicit_model_override(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    context = zeta_runtime_context.RuntimeContext(
+        session_id="ctx-session",
+        event_sink=zeta_events.MemoryEventStore(),
+        trace_store=zeta_trace.InMemoryStore(),
+        tool_registry=CapabilityRegistry(),
+        state_dir=tmp_path,
+        session_dir=tmp_path / "sessions" / "ctx-session",
+    )
+
+    def fail_active_model_selection(*, session_dir: Path | None = None) -> None:
+        raise AssertionError("active model selection should not be resolved")
+
+    monkeypatch.setattr(
+        zeta_requests,
+        "active_model_selection",
+        fail_active_model_selection,
+    )
+
+    request = zeta_requests.session_agent_request_for_context(
+        {
+            "objective": "answer",
+            "model": "explicit-model",
+            "url": "http://127.0.0.1:9999/v1/chat/completions",
+        },
+        runtime_context=context,
+    )
+
+    assert request.config.model_name == "explicit-model"
+    assert request.config.model_url == "http://127.0.0.1:9999/v1/chat/completions"
+
+
 def test_zeta_rpc_session_cancel_updates_run_state() -> None:
     _, client, router = rpc_client()
     cancellation_event = asyncio.Event()

@@ -381,7 +381,14 @@ def model_stream_timeout(
 
 def http_error_detail(error: Any) -> str:
     """Return an HTTP failure message including the server's error body."""
-    body = error.response.text[:2048].strip()
+    try:
+        body = error.response.text[:2048].strip()
+    except RuntimeError:
+        try:
+            error.response.read()
+            body = error.response.text[:2048].strip()
+        except RuntimeError:
+            body = ""
     if not body:
         return str(error)
     try:

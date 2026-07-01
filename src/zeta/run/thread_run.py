@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from zeta.capabilities.types import ExecutionMode
+from zeta.models.profiles import active_model_selection
 from zeta.records.events import (
     DraftEvent,
     Event,
@@ -52,6 +53,8 @@ SessionWorkflow = Literal["ask", "propose", "do"]
 class SessionRunParams:
     objective: str
     workflow: SessionWorkflow = "ask"
+    runtime: str | None = None
+    run_id: str | None = None
     tools: list[str] | None = None
     context: str = ""
     system: str | None = None
@@ -146,6 +149,40 @@ def session_agent_request(params: dict[str, Any]) -> AgentRunRequest:
     )
 
 
+def session_agent_request_for_context(
+    params: dict[str, Any],
+    *,
+    runtime_context: RuntimeContext,
+) -> AgentRunRequest:
+    """Return a session request with the context's active model defaults."""
+    request = session_agent_request(params)
+    config = request.config
+    if config.model_name is not None or config.model_url is not None:
+        return request
+    selection = active_model_selection(session_dir=runtime_context.session_dir)
+    if selection is None:
+        return request
+    return AgentRunRequest(
+        objective=request.objective,
+        workflow=request.workflow,
+        runtime=request.runtime,
+        tools=request.tools,
+        context=request.context,
+        config=AgentConfig(
+            system_prompt=config.system_prompt,
+            max_turns=config.max_turns,
+            stop_on_staged_effect=config.stop_on_staged_effect,
+            execution_mode=config.execution_mode,
+            model_profile=selection.profile,
+            model_name=selection.model,
+            model_url=selection.url,
+            thinking=selection.thinking,
+            model_api=selection.api,
+            max_wall_seconds=config.max_wall_seconds,
+        ),
+    )
+
+
 async def run_session_request(
     params: dict[str, Any],
     *,
@@ -157,7 +194,10 @@ async def run_session_request(
 ) -> dict[str, Any]:
     try:
         result = await run_agent(
-            session_agent_request(params),
+            session_agent_request_for_context(
+                params,
+                runtime_context=runtime_context,
+            ),
             run_id=run_id,
             caused_by=caused_by,
             publish_event=publish_event,

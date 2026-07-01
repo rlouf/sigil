@@ -13,6 +13,12 @@ asciinema casts with `agg`, then converted to browser-friendly MP4s with
 - `03-stale-edit-protection.mp4` shows stale edit protection: when the human
   changes the target text while Zeta is running, the exact-match edit is
   refused instead of overwriting the human change.
+- `04-real-question-llm.mp4` is a real terminal Emacs run using `zeta?`: the
+  agent can inspect the live buffer, returns a final answer, and Emacs inserts
+  it below the prompt while the buffer remains editable.
+- `05-real-action-llm.mp4` is a real terminal Emacs run using `zeta!`: the
+  agent reads the live buffer and applies a concrete typo fix through the
+  guarded `emacs_replace` tool.
 
 Each `.cast` file is the source terminal recording; each `.gif` and `.mp4` is a
 rendered derivative.

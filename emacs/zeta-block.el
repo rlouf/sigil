@@ -7,8 +7,8 @@
 ;; Enable `zeta-block-mode', write a paragraph or comment block beginning with
 ;; "?", and press C-c C-c.  For inline prompts, write a line beginning with
 ;; "zeta?" or "zeta!" and press RET.  The package submits the instruction to
-;; `zeta-block-rpc-command', registers live-buffer tools, and inserts Zeta's
-;; status below the trigger.
+;; `zeta-block-rpc-command', registers live-buffer tools, and either inserts an
+;; answer below the trigger or lets Zeta edit the live buffer.
 
 ;;; Code:
 
@@ -29,8 +29,10 @@ checkout."
   :group 'zeta-block)
 
 (defcustom zeta-block-read-only-tools
-  '("read" "grep" "ls" "query_log" "emacs_read")
-  "Read-only tools made available to `?' block submissions."
+  '("read" "grep" "ls" "query_log" "emacs_read" "emacs_replace")
+  "Tools made available to `?' submissions.
+The Emacs frontend still refuses `emacs_replace' while answering a question;
+`zeta?' answers are inserted below the prompt instead of mutating the buffer."
   :type '(repeat string)
   :group 'zeta-block)
 
@@ -41,7 +43,8 @@ checkout."
   :group 'zeta-block)
 
 (defcustom zeta-block-inline-question-triggers '("zeta?")
-  "Prefixes that mark inline read-only Zeta questions."
+  "Prefixes that mark inline Zeta questions.
+Question answers are inserted below the prompt instead of editing the buffer."
   :type '(repeat string)
   :group 'zeta-block)
 
@@ -60,6 +63,16 @@ checkout."
   "Face used for agent-authored Zeta text."
   :group 'zeta-block)
 
+(defface zeta-block-inline-question-face
+  '((t (:inherit font-lock-keyword-face :weight bold)))
+  "Face used for inline `zeta?' triggers."
+  :group 'zeta-block)
+
+(defface zeta-block-inline-action-face
+  '((t (:inherit font-lock-warning-face :weight bold)))
+  "Face used for inline `zeta!' triggers."
+  :group 'zeta-block)
+
 (defvar zeta-block--process nil)
 (defvar zeta-block--next-id 1)
 (defvar zeta-block--callbacks (make-hash-table :test 'eql))
@@ -71,6 +84,7 @@ checkout."
 (defvar zeta-block--active-task-buffer nil)
 (defvar zeta-block--active-buffer nil)
 (defvar zeta-block--active-agent-prompt nil)
+(defvar zeta-block--active-mutation-allowed nil)
 (defvar zeta-block--active-requests 0)
 (defvar zeta-block--status 'off)
 (defvar zeta-block--last-error nil)
@@ -78,6 +92,7 @@ checkout."
 (defvar-local zeta-block--task-queue nil)
 (defvar-local zeta-block--current-task nil)
 (defvar-local zeta-block-pairing-paused nil)
+(defvar-local zeta-block--font-lock-keywords nil)
 
 (defvar zeta-block-mode-map
   (let ((map (make-sparse-keymap)))
@@ -94,7 +109,10 @@ checkout."
 (define-minor-mode zeta-block-mode
   "Submit `?' blocks to Zeta with C-c C-c."
   :lighter (:eval (zeta-block-mode-line))
-  :keymap zeta-block-mode-map)
+  :keymap zeta-block-mode-map
+  (if zeta-block-mode
+      (zeta-block-enable-font-lock)
+    (zeta-block-disable-font-lock)))
 
 ;;;###autoload
 (define-globalized-minor-mode zeta-block-global-mode
@@ -157,6 +175,10 @@ When the current block is not a Zeta question, dispatch to the binding that
            (line-range (zeta-block-previous-line-range))
            (comment-prefix (zeta-block-comment-prefix line-raw))
            (placeholder (zeta-block-insert-placeholder (point) comment-prefix))
+           (trigger-overlay (zeta-block-add-inline-trigger-overlay
+                             (car line-range)
+                             (cdr line-range)
+                             kind))
            (overlay (zeta-block-add-overlay
                      (car line-range)
                      (cdr line-range)
@@ -170,11 +192,12 @@ When the current block is not a Zeta question, dispatch to the binding that
         :line-number line-number
         :comment-prefix comment-prefix
         :placeholder placeholder
+        :trigger-overlay trigger-overlay
         :overlay overlay)))))
 
 ;;;###autoload
 (defun zeta-block-ask-region (begin end question)
-  "Ask a read-only Zeta QUESTION about the active region from BEGIN to END."
+  "Ask Zeta QUESTION about the active region from BEGIN to END."
   (interactive
    (if (use-region-p)
        (list (region-beginning)
@@ -326,6 +349,69 @@ When the current block is not a Zeta question, dispatch to the binding that
     (zeta-block-pump-queues))
   (force-mode-line-update t)
   (message "Zeta pairing %s" (if zeta-block-pairing-paused "paused" "running")))
+
+(defun zeta-block-enable-font-lock ()
+  "Enable inline Zeta trigger highlighting in the current buffer."
+  (setq zeta-block--font-lock-keywords
+        (zeta-block-font-lock-keywords))
+  (font-lock-add-keywords nil zeta-block--font-lock-keywords 'append)
+  (when font-lock-mode
+    (font-lock-flush)))
+
+(defun zeta-block-disable-font-lock ()
+  "Disable inline Zeta trigger highlighting in the current buffer."
+  (when zeta-block--font-lock-keywords
+    (font-lock-remove-keywords nil zeta-block--font-lock-keywords)
+    (setq zeta-block--font-lock-keywords nil)
+    (when font-lock-mode
+      (font-lock-flush))))
+
+(defun zeta-block-font-lock-keywords ()
+  "Return font-lock keywords for inline Zeta triggers."
+  `((,(zeta-block-inline-trigger-regexp zeta-block-inline-question-triggers)
+     1 'zeta-block-inline-question-face prepend)
+    (,(zeta-block-inline-trigger-regexp zeta-block-inline-action-triggers)
+     1 'zeta-block-inline-action-face prepend)))
+
+(defun zeta-block-inline-trigger-regexp (triggers)
+  "Return a regexp that matches inline TRIGGERS after optional comments."
+  (concat
+   "^\\s-*"
+   "\\(?://\\|;;\\|#\\|;\\)?"
+   "\\s-*"
+   "\\("
+   (regexp-opt triggers)
+   "\\)"
+   "\\(?:\\s-\\|$\\)"))
+
+(defun zeta-block-inline-trigger-face (kind)
+  "Return the inline trigger face for request KIND."
+  (pcase kind
+    ('question 'zeta-block-inline-question-face)
+    ('action 'zeta-block-inline-action-face)
+    (_ nil)))
+
+(defun zeta-block-add-inline-trigger-overlay (start end kind)
+  "Emphasize the inline Zeta trigger between START and END for KIND."
+  (when-let ((face (zeta-block-inline-trigger-face kind)))
+    (save-excursion
+      (goto-char start)
+      (when (re-search-forward
+             (zeta-block-inline-trigger-regexp
+              (pcase kind
+                ('question zeta-block-inline-question-triggers)
+                ('action zeta-block-inline-action-triggers)
+                (_ nil)))
+             end
+             t)
+        (let ((overlay (make-overlay (match-beginning 1) (match-end 1) nil t nil)))
+          (overlay-put overlay 'zeta-origin 'human)
+          (overlay-put overlay 'zeta-trigger kind)
+          (overlay-put overlay 'face face)
+          (overlay-put overlay 'priority 20)
+          (overlay-put overlay 'help-echo (format "zeta trigger: %s" kind))
+          (push overlay zeta-block--overlays)
+          overlay)))))
 
 (defun zeta-block-inline-instruction-before-point ()
   "Return the cleaned inline instruction before point, or nil.
@@ -590,6 +676,8 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
 (defun zeta-block-ask-async (question callback)
   "Ask Zeta QUESTION and call CALLBACK with (RESULT ERROR)."
   (zeta-block-ensure-process)
+  (setq zeta-block--active-mutation-allowed nil)
+  (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
   (zeta-block-send-request
    "session.run"
    `(("workflow" . "ask")
@@ -639,7 +727,8 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
 (defun zeta-block-inline-async (instruction line-number callback)
   "Run inline Zeta INSTRUCTION from LINE-NUMBER and call CALLBACK."
   (zeta-block-ensure-process)
-  (setq zeta-block--active-agent-prompt instruction)
+  (setq zeta-block--active-agent-prompt instruction
+        zeta-block--active-mutation-allowed t)
   (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
   (zeta-block-send-request
    "session.run"
@@ -654,7 +743,8 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
 (defun zeta-block-region-async (instruction scope callback)
   "Run region-scoped Zeta INSTRUCTION over SCOPE and call CALLBACK."
   (zeta-block-ensure-process)
-  (setq zeta-block--active-agent-prompt instruction)
+  (setq zeta-block--active-agent-prompt instruction
+        zeta-block--active-mutation-allowed t)
   (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
   (zeta-block-send-request
    "session.run"
@@ -732,12 +822,12 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
           (puthash run-id callback zeta-block--pending-runs)))))))
 
 (defun zeta-block-ask-system-prompt ()
-  "Return the read-only system prompt used by `?' blocks."
+  "Return the system prompt used by `?' blocks."
   (string-join
-   '("Answer concisely from the available project and editor context."
-     "Use only read-only tools."
+   '("Answer from the available project and editor context."
      "Use emacs_read when the live current buffer is relevant, because it can include unsaved edits."
-     "Do not propose shell commands or mutations.")
+     "For zeta? requests, return a final answer; Emacs will insert that answer below the prompt."
+     "Do not call mutation tools for zeta? requests. Use zeta! when the user wants edits applied.")
    " "))
 
 (defun zeta-block-inline-system-prompt ()
@@ -815,6 +905,7 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
   (clrhash zeta-block--pending-runs)
   (clrhash zeta-block--completed-runs)
   (setq zeta-block--active-requests 0
+        zeta-block--active-mutation-allowed nil
         zeta-block--status 'off
         zeta-block--last-error nil)
   (zeta-block-ensure-process)
@@ -1094,6 +1185,10 @@ ARGUMENTS may contain start_line and end_line."
       '(("ok" . :json-false)
         ("error" . (("code" . "buffer-unavailable")
                     ("message" . "No active Emacs buffer is available.")))))
+     ((not zeta-block--active-mutation-allowed)
+      '(("ok" . :json-false)
+        ("error" . (("code" . "mutation-not-allowed")
+                    ("message" . "This zeta? request may only answer below the prompt; use zeta! to edit the buffer.")))))
      ((not (hash-table-p arguments))
       '(("ok" . :json-false)
         ("error" . (("code" . "invalid-arguments")

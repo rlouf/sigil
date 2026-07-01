@@ -25,10 +25,11 @@ In source buffers, comment blocks stay commented:
 ```
 
 The frontend starts the command in `zeta-block-rpc-command`, registers live
-buffer tools, and runs `session.run`. Question blocks and `zeta?` prompts use
-the read-only ask workflow. Inline `zeta!` instructions use the direct workflow
-with an `emacs_replace` tool that only replaces a line range when the current
-buffer text still matches what the agent read.
+buffer tools, and runs `session.run`. Question blocks and `zeta?` prompts ask
+for a final answer, which Emacs inserts below the prompt. Inline `zeta!`
+instructions are allowed to act on the document with an `emacs_replace` tool
+that only replaces a line range when the current buffer text still matches what
+the agent read.
 
 ## Install
 
@@ -119,11 +120,17 @@ For inline edits or actions, use `zeta!`:
 zeta! Correct typos in previous paragraph
 ```
 
+The `zeta?` and `zeta!` trigger words are highlighted in bold using faces
+derived from the active Emacs theme. Questions inherit from
+`font-lock-keyword-face`; actions inherit from `font-lock-warning-face`.
+
 The normal return command runs first, then Zeta starts in the background. The
 mode line switches to `Zeta:run`, a temporary response is inserted under the
-instruction, and you can keep working. For `zeta!`, if the buffer changes under
-the target line range before the agent edits it, the edit is rejected and the
-agent must read again instead of overwriting your new text.
+instruction, and you can keep working. For `zeta?`, the model can inspect the
+live buffer and other allowed context, but Emacs only inserts the final answer
+below the prompt. For `zeta!`, if the buffer changes under the target line range
+before the agent edits it, the edit is rejected and the agent must read again
+instead of overwriting your new text.
 
 Inline prompts and region commands are queued per buffer. Zeta runs one queued
 task at a time, so you can keep adding `zeta?` and `zeta!` prompts while the
@@ -141,9 +148,9 @@ C-c z ?   ask about the selected region
 C-c z !   edit or act on the selected region
 ```
 
-Both commands prompt in the minibuffer. Region questions are read-only. Region
-actions tell Zeta to edit only the selected line range, while still allowing
-surrounding context for style and meaning.
+Both commands prompt in the minibuffer. Region questions insert an answer below
+the selected region. Region actions tell Zeta to edit only the selected line
+range, while still allowing surrounding context for style and meaning.
 
 Submitted prompts and Zeta-authored responses/edits are tagged with Emacs
 overlays carrying `zeta-origin` and `zeta-prompt` properties. Hovering shows the
