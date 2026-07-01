@@ -97,6 +97,10 @@ instruction, and you can keep working. For `zeta!`, if the buffer changes under
 the target line range before the agent edits it, the edit is rejected and the
 agent must read again instead of overwriting your new text.
 
+Submitted prompts and Zeta-authored responses/edits are tagged with Emacs
+overlays carrying `zeta-origin` and `zeta-prompt` properties. Hovering shows the
+origin and prompt. Use `M-x zeta-block-clear-overlays` to remove the visual tags.
+
 The mode line shows the subprocess status:
 
 ```text

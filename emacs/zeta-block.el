@@ -50,13 +50,25 @@ checkout."
   :type '(repeat string)
   :group 'zeta-block)
 
+(defface zeta-block-human-face
+  '((t (:inherit shadow :underline t)))
+  "Face used for human-authored Zeta prompts."
+  :group 'zeta-block)
+
+(defface zeta-block-agent-face
+  '((t (:inherit highlight)))
+  "Face used for agent-authored Zeta text."
+  :group 'zeta-block)
+
 (defvar zeta-block--process nil)
 (defvar zeta-block--next-id 1)
 (defvar zeta-block--callbacks (make-hash-table :test 'eql))
 (defvar zeta-block--registered-tools (make-hash-table :test 'equal))
 (defvar zeta-block--pending-runs (make-hash-table :test 'equal))
 (defvar zeta-block--completed-runs (make-hash-table :test 'equal))
+(defvar zeta-block--overlays nil)
 (defvar zeta-block--active-buffer nil)
+(defvar zeta-block--active-agent-prompt nil)
 (defvar zeta-block--active-requests 0)
 (defvar zeta-block--status 'off)
 (defvar zeta-block--last-error nil)
@@ -85,12 +97,13 @@ checkout."
 When the current block is not a Zeta question, dispatch to the binding that
 `C-c C-c' would have used without `zeta-block-mode'."
   (interactive)
-  (pcase-let ((`(,_begin ,end ,raw) (zeta-block-current-block)))
+  (pcase-let ((`(,begin ,end ,raw) (zeta-block-current-block)))
     (let* ((comment-prefix (zeta-block-comment-prefix raw))
            (question (zeta-block-clean-question raw)))
       (if (not question)
           (zeta-block-dispatch-original-c-c-c)
         (let ((placeholder (zeta-block-insert-placeholder end comment-prefix)))
+          (zeta-block-add-overlay begin end 'human question)
           (setq zeta-block--active-buffer (current-buffer))
           (zeta-block-ask-async
            question
@@ -98,7 +111,8 @@ When the current block is not a Zeta question, dispatch to the binding that
              (zeta-block-replace-placeholder
               placeholder
               (zeta-block-response-text result error)
-              comment-prefix))))))))
+              comment-prefix
+              question))))))))
 
 (defun zeta-block-dispatch-original-c-c-c ()
   "Call the command normally bound to `C-c C-c'."
@@ -130,13 +144,16 @@ When the current block is not a Zeta question, dispatch to the binding that
            (instruction (cdr request))
            (line-raw (zeta-block-previous-line-raw))
            (line-number (zeta-block-previous-line-number))
+           (line-range (zeta-block-previous-line-range))
            (comment-prefix (zeta-block-comment-prefix line-raw))
            (placeholder (zeta-block-insert-placeholder (point) comment-prefix))
            (callback (lambda (result error)
                        (zeta-block-replace-placeholder
                         placeholder
                         (zeta-block-response-text result error)
-                        comment-prefix))))
+                        comment-prefix
+                        instruction))))
+      (zeta-block-add-overlay (car line-range) (cdr line-range) 'human instruction)
       (setq zeta-block--active-buffer (current-buffer))
       (pcase kind
         ('question
@@ -199,6 +216,12 @@ This preserves the old helper API by dropping the request kind."
   (save-excursion
     (forward-line -1)
     (line-number-at-pos)))
+
+(defun zeta-block-previous-line-range ()
+  "Return the buffer range for the line before point."
+  (save-excursion
+    (forward-line -1)
+    (cons (line-beginning-position) (line-end-position))))
 
 (defun zeta-block-current-block ()
   "Return the current paragraph as (BEGIN END RAW-TEXT)."
@@ -265,6 +288,42 @@ This preserves the old helper API by dropping the request kind."
        (mapconcat (lambda (line) (concat "  " line)) lines "\n")
        "\n"))))
 
+(defun zeta-block-add-overlay (start end origin prompt &optional run-id)
+  "Tag START..END with an overlay for ORIGIN and PROMPT.
+ORIGIN is the symbol `human' or `agent'."
+  (when (< start end)
+    (let ((overlay (make-overlay start end nil t nil)))
+      (overlay-put overlay 'zeta-origin origin)
+      (overlay-put overlay 'zeta-prompt prompt)
+      (when run-id
+        (overlay-put overlay 'zeta-run-id run-id))
+      (overlay-put overlay 'face
+                   (pcase origin
+                     ('human 'zeta-block-human-face)
+                     ('agent 'zeta-block-agent-face)
+                     (_ nil)))
+      (overlay-put overlay 'help-echo
+                   (zeta-block-overlay-help origin prompt run-id))
+      (push overlay zeta-block--overlays)
+      overlay)))
+
+(defun zeta-block-overlay-help (origin prompt run-id)
+  "Return tooltip text for an overlay with ORIGIN, PROMPT, and RUN-ID."
+  (string-join
+   (delq nil
+         (list
+          (format "zeta origin: %s" origin)
+          (and run-id (format "run: %s" run-id))
+          (and prompt (format "prompt: %s" prompt))))
+   "\n"))
+
+;;;###autoload
+(defun zeta-block-clear-overlays ()
+  "Delete all Zeta provenance overlays in live buffers."
+  (interactive)
+  (mapc #'delete-overlay zeta-block--overlays)
+  (setq zeta-block--overlays nil))
+
 (defun zeta-block-insert-placeholder (position comment-prefix)
   "Insert a thinking placeholder after POSITION and return replacement markers."
   (save-excursion
@@ -279,8 +338,9 @@ This preserves the old helper API by dropping the request kind."
         (set-marker-insertion-type end t)
         (cons start end)))))
 
-(defun zeta-block-replace-placeholder (markers text comment-prefix)
-  "Replace MARKERS with TEXT formatted using COMMENT-PREFIX."
+(defun zeta-block-replace-placeholder (markers text comment-prefix &optional prompt)
+  "Replace MARKERS with TEXT formatted using COMMENT-PREFIX.
+When PROMPT is non-nil, tag the inserted response as agent-authored."
   (let ((start (car markers))
         (end (cdr markers)))
     (when (and (markerp start)
@@ -299,7 +359,9 @@ This preserves the old helper API by dropping the request kind."
                 (save-excursion
                   (goto-char (marker-position start))
                   (delete-region start end)
-                  (insert (zeta-block-format-response text comment-prefix)))
+                  (let ((insert-start (point)))
+                    (insert (zeta-block-format-response text comment-prefix))
+                    (zeta-block-add-overlay insert-start (point) 'agent prompt)))
               (goto-char (min buffer-point (point-max)))
               (dolist (window windows)
                 (when (window-live-p window)
@@ -360,6 +422,7 @@ This preserves the old helper API by dropping the request kind."
 (defun zeta-block-inline-async (instruction line-number callback)
   "Run inline Zeta INSTRUCTION from LINE-NUMBER and call CALLBACK."
   (zeta-block-ensure-process)
+  (setq zeta-block--active-agent-prompt instruction)
   (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
   (zeta-block-send-request
    "session.run"
@@ -425,7 +488,7 @@ This preserves the old helper API by dropping the request kind."
    " "))
 
 (defun zeta-block-inline-system-prompt ()
-  "Return the system prompt used by inline `@zeta' instructions."
+  "Return the system prompt used by inline `zeta!' instructions."
   (string-join
    '("You are editing the user's current Emacs buffer."
      "Use emacs_read to inspect the live buffer, including unsaved edits."
@@ -803,7 +866,12 @@ ARGUMENTS may contain start_line and end_line."
         (save-excursion
           (goto-char start)
           (delete-region start end)
-          (insert new))
+          (insert new)
+          (zeta-block-add-overlay
+           start
+           (point)
+           'agent
+           zeta-block--active-agent-prompt))
         (let ((after-hash (secure-hash 'sha256 (buffer-substring-no-properties
                                                 (point-min)
                                                 (point-max)))))
