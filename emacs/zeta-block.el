@@ -5,9 +5,10 @@
 ;;; Commentary:
 
 ;; Enable `zeta-block-mode', write a paragraph or comment block beginning with
-;; "?", and press C-c C-c.  The package submits the question to
-;; `zeta-block-rpc-command', registers an `emacs_read' read-only tool for the
-;; current live buffer, and inserts Zeta's answer below the block.
+;; "?", and press C-c C-c.  For inline prompts, write a line beginning with
+;; "zeta?" or "zeta!" and press RET.  The package submits the instruction to
+;; `zeta-block-rpc-command', registers live-buffer tools, and inserts Zeta's
+;; status below the trigger.
 
 ;;; Code:
 
@@ -33,9 +34,28 @@ checkout."
   :type '(repeat string)
   :group 'zeta-block)
 
+(defcustom zeta-block-inline-tools
+  '("read" "grep" "ls" "query_log" "emacs_read" "emacs_replace")
+  "Tools made available to inline `zeta!' edit submissions."
+  :type '(repeat string)
+  :group 'zeta-block)
+
+(defcustom zeta-block-inline-question-triggers '("zeta?")
+  "Prefixes that mark inline read-only Zeta questions."
+  :type '(repeat string)
+  :group 'zeta-block)
+
+(defcustom zeta-block-inline-action-triggers '("zeta!")
+  "Prefixes that mark inline Zeta edit/action instructions."
+  :type '(repeat string)
+  :group 'zeta-block)
+
 (defvar zeta-block--process nil)
 (defvar zeta-block--next-id 1)
 (defvar zeta-block--callbacks (make-hash-table :test 'eql))
+(defvar zeta-block--registered-tools (make-hash-table :test 'equal))
+(defvar zeta-block--pending-runs (make-hash-table :test 'equal))
+(defvar zeta-block--completed-runs (make-hash-table :test 'equal))
 (defvar zeta-block--active-buffer nil)
 (defvar zeta-block--active-requests 0)
 (defvar zeta-block--status 'off)
@@ -44,6 +64,7 @@ checkout."
 (defvar zeta-block-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-c") #'zeta-block-submit)
+    (define-key map (kbd "RET") #'zeta-block-return)
     map)
   "Keymap for `zeta-block-mode'.")
 
@@ -86,6 +107,98 @@ When the current block is not a Zeta question, dispatch to the binding that
     (if (and command (not (eq command #'zeta-block-submit)))
         (call-interactively command)
       (user-error "Current block does not start with ?"))))
+
+;;;###autoload
+(defun zeta-block-return ()
+  "Run the original RET command, then submit an inline Zeta instruction."
+  (interactive)
+  (zeta-block-dispatch-original-ret)
+  (zeta-block-submit-inline-before-point))
+
+(defun zeta-block-dispatch-original-ret ()
+  "Call the command normally bound to RET."
+  (let* ((zeta-block-mode nil)
+         (command (key-binding (kbd "RET"))))
+    (if (and command (not (eq command #'zeta-block-return)))
+        (call-interactively command)
+      (newline))))
+
+(defun zeta-block-submit-inline-before-point ()
+  "Submit the line before point when it contains an inline instruction."
+  (when-let ((request (zeta-block-inline-request-before-point)))
+    (let* ((kind (car request))
+           (instruction (cdr request))
+           (line-raw (zeta-block-previous-line-raw))
+           (line-number (zeta-block-previous-line-number))
+           (comment-prefix (zeta-block-comment-prefix line-raw))
+           (placeholder (zeta-block-insert-placeholder (point) comment-prefix))
+           (callback (lambda (result error)
+                       (zeta-block-replace-placeholder
+                        placeholder
+                        (zeta-block-response-text result error)
+                        comment-prefix))))
+      (setq zeta-block--active-buffer (current-buffer))
+      (pcase kind
+        ('question
+         (zeta-block-ask-async
+          (zeta-block-inline-question-objective instruction line-number)
+          callback))
+        ('action
+         (zeta-block-inline-async instruction line-number callback))))))
+
+(defun zeta-block-inline-instruction-before-point ()
+  "Return the cleaned inline instruction before point, or nil.
+This preserves the old helper API by dropping the request kind."
+  (cdr-safe (zeta-block-inline-request-before-point)))
+
+(defun zeta-block-inline-request-before-point ()
+  "Return (KIND . INSTRUCTION) for the previous line, or nil."
+  (let* ((raw (zeta-block-previous-line-raw))
+         (text (zeta-block-clean-line raw)))
+    (or (zeta-block-inline-request-for-triggers
+         text
+         zeta-block-inline-question-triggers
+         'question)
+        (zeta-block-inline-request-for-triggers
+         text
+         zeta-block-inline-action-triggers
+         'action))))
+
+(defun zeta-block-inline-request-for-triggers (text triggers kind)
+  "Return a KIND request when TEXT starts with one of TRIGGERS."
+  (catch 'request
+    (dolist (trigger triggers)
+      (when-let ((instruction (zeta-block-inline-instruction-after-trigger
+                               text
+                               trigger)))
+        (throw 'request (cons kind instruction))))
+    nil))
+
+(defun zeta-block-inline-instruction-after-trigger (text trigger)
+  "Return instruction in TEXT after TRIGGER, or nil."
+  (when (and (stringp trigger)
+             (not (string-empty-p trigger))
+             (string-prefix-p trigger text))
+    (let ((rest (substring text (length trigger))))
+      (when (or (string-empty-p rest)
+                (member (substring rest 0 1) '(" " "\t")))
+        (let ((instruction (string-trim rest)))
+          (unless (string-empty-p instruction)
+            instruction))))))
+
+(defun zeta-block-previous-line-raw ()
+  "Return the raw text of the line before point."
+  (save-excursion
+    (forward-line -1)
+    (buffer-substring-no-properties
+     (line-beginning-position)
+     (line-end-position))))
+
+(defun zeta-block-previous-line-number ()
+  "Return the one-indexed line number before point."
+  (save-excursion
+    (forward-line -1)
+    (line-number-at-pos)))
 
 (defun zeta-block-current-block ()
   "Return the current paragraph as (BEGIN END RAW-TEXT)."
@@ -204,8 +317,12 @@ When the current block is not a Zeta question, dispatch to the binding that
   (cond
    (error
     (format "Error: %s" error))
+   ((and (hash-table-p result) (gethash "final_answer" result))
+    (gethash "final_answer" result))
    ((and (hash-table-p result) (gethash "final_text" result))
     (gethash "final_text" result))
+   ((and (listp result) (alist-get 'final_answer result))
+    (alist-get 'final_answer result))
    ((and (listp result) (alist-get 'final_text result))
     (alist-get 'final_text result))
    (t "No final answer.")))
@@ -214,17 +331,89 @@ When the current block is not a Zeta question, dispatch to the binding that
   "Ask Zeta QUESTION and call CALLBACK with (RESULT ERROR)."
   (zeta-block-ensure-process)
   (zeta-block-send-request
-   "tools.register"
-   `(("tools" . [,(zeta-block-emacs-read-tool)]))
-   nil)
-  (zeta-block-send-request
    "session.run"
    `(("workflow" . "ask")
      ("objective" . ,question)
      ("tools" . ,(vconcat zeta-block-read-only-tools))
      ("system" . ,(zeta-block-ask-system-prompt)))
-   callback
+   (lambda (result error)
+     (zeta-block-handle-session-start result error callback))
    t))
+
+(defun zeta-block-inline-question-objective (question line-number)
+  "Return the model objective for an inline QUESTION on LINE-NUMBER."
+  (format
+   (string-join
+    '("Inline editor question:"
+      "%s"
+      ""
+      "Question line: %s"
+      ""
+      "The current live Emacs buffer is the primary context."
+      "The zeta? line is a command, not document prose."
+      "Interpret relative references such as previous paragraph relative to the question line."
+      "Use emacs_read when the live buffer is relevant.")
+    "\n")
+   question
+   line-number))
+
+(defun zeta-block-inline-async (instruction line-number callback)
+  "Run inline Zeta INSTRUCTION from LINE-NUMBER and call CALLBACK."
+  (zeta-block-ensure-process)
+  (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
+  (zeta-block-send-request
+   "session.run"
+   `(("workflow" . "do")
+     ("objective" . ,(zeta-block-inline-objective instruction line-number))
+     ("tools" . ,(vconcat zeta-block-inline-tools))
+     ("system" . ,(zeta-block-inline-system-prompt)))
+   (lambda (result error)
+     (zeta-block-handle-session-start result error callback))
+   t))
+
+(defun zeta-block-inline-objective (instruction line-number)
+  "Return the model objective for an inline INSTRUCTION on LINE-NUMBER."
+  (format
+   (string-join
+    '("Inline editor instruction:"
+      "%s"
+      ""
+      "Instruction line: %s"
+      ""
+      "The current live Emacs buffer is the primary document."
+      "The zeta! instruction line is a command, not document prose."
+      "Interpret relative references such as previous paragraph relative to the instruction line."
+      "Read it with emacs_read before deciding what to change."
+      "If a document change is requested, apply it to the live buffer with emacs_replace."
+      "emacs_read includes line-number prefixes for reference; pass old/new text to emacs_replace without those prefixes.")
+    "\n")
+   instruction
+   line-number))
+
+(defun zeta-block-handle-session-start (result error callback)
+  "Track an async session RESULT or report ERROR to CALLBACK."
+  (cond
+   (error
+    (zeta-block-clear-running error)
+    (funcall callback nil error))
+   ((not (hash-table-p result))
+    (zeta-block-clear-running "session.run returned an invalid result")
+    (funcall callback nil "session.run returned an invalid result"))
+   ((not (string= (or (gethash "status" result) "") "started"))
+    (zeta-block-clear-running)
+    (funcall callback result nil))
+   (t
+    (let ((run-id (gethash "run_id" result)))
+      (if (not (and (stringp run-id) (not (string-empty-p run-id))))
+          (progn
+            (zeta-block-clear-running "session.run did not return a run_id")
+            (funcall callback nil "session.run did not return a run_id"))
+        (if-let ((completed (gethash run-id zeta-block--completed-runs)))
+            (progn
+              (remhash run-id zeta-block--completed-runs)
+              (zeta-block-clear-running (cdr completed))
+              (funcall callback (car completed) (cdr completed)))
+          (puthash run-id callback zeta-block--pending-runs)))))))
 
 (defun zeta-block-ask-system-prompt ()
   "Return the read-only system prompt used by `?' blocks."
@@ -233,6 +422,18 @@ When the current block is not a Zeta question, dispatch to the binding that
      "Use only read-only tools."
      "Use emacs_read when the live current buffer is relevant, because it can include unsaved edits."
      "Do not propose shell commands or mutations.")
+   " "))
+
+(defun zeta-block-inline-system-prompt ()
+  "Return the system prompt used by inline `@zeta' instructions."
+  (string-join
+   '("You are editing the user's current Emacs buffer."
+     "Use emacs_read to inspect the live buffer, including unsaved edits."
+     "Use emacs_replace for requested document changes."
+     "When using emacs_replace, old must exactly match the current unnumbered text in the requested line range."
+     "Keep edits scoped to the inline instruction."
+     "Do not use shell commands."
+     "When finished, return a brief summary of what changed.")
    " "))
 
 (defun zeta-block-ensure-process ()
@@ -253,10 +454,26 @@ When the current block is not a Zeta question, dispatch to the binding that
     (force-mode-line-update t)
     (process-put zeta-block--process 'zeta-block-partial "")
     (zeta-block-send-request "initialize" nil nil)
-    (zeta-block-send-request
-     "tools.register"
-     `(("tools" . [,(zeta-block-emacs-read-tool)]))
-     nil)))
+    (clrhash zeta-block--registered-tools)
+    (zeta-block-register-tools (list (zeta-block-emacs-read-tool)))))
+
+(defun zeta-block-register-tools (tools)
+  "Register RPC client TOOLS that have not already been registered."
+  (let ((new-tools nil))
+    (dolist (tool tools)
+      (let ((name (zeta-block-tool-name tool)))
+        (when (and name (not (gethash name zeta-block--registered-tools)))
+          (puthash name t zeta-block--registered-tools)
+          (push tool new-tools))))
+    (when new-tools
+      (zeta-block-send-request
+       "tools.register"
+       `(("tools" . ,(vconcat (nreverse new-tools))))
+       nil))))
+
+(defun zeta-block-tool-name (tool)
+  "Return TOOL's name from a JSON alist."
+  (cdr (assoc "name" tool)))
 
 ;;;###autoload
 (defun zeta-block-restart ()
@@ -266,6 +483,8 @@ When the current block is not a Zeta question, dispatch to the binding that
     (delete-process zeta-block--process))
   (setq zeta-block--process nil)
   (clrhash zeta-block--callbacks)
+  (clrhash zeta-block--pending-runs)
+  (clrhash zeta-block--completed-runs)
   (setq zeta-block--active-requests 0
         zeta-block--status 'off
         zeta-block--last-error nil)
@@ -275,13 +494,27 @@ When the current block is not a Zeta question, dispatch to the binding that
 (defun zeta-block-emacs-read-tool ()
   "Return the JSON-RPC descriptor for the Emacs read tool."
   '(("name" . "emacs_read")
-    ("description" . "Read the current live Emacs buffer, including unsaved edits.")
+    ("description" . "Read numbered lines from the current live Emacs buffer, including unsaved edits.")
     ("schema" . (("type" . "object")
                  ("additionalProperties" . :json-false)
                  ("properties" . (("start_line" . (("type" . "integer")
                                                    ("minimum" . 1)))
                                   ("end_line" . (("type" . "integer")
                                                  ("minimum" . 1)))))))))
+
+(defun zeta-block-emacs-replace-tool ()
+  "Return the JSON-RPC descriptor for the Emacs replacement tool."
+  '(("name" . "emacs_replace")
+    ("description" . "Replace an exact line range in the current live Emacs buffer. The old text must match the current buffer contents.")
+    ("schema" . (("type" . "object")
+                 ("additionalProperties" . :json-false)
+                 ("required" . ["start_line" "end_line" "old" "new"])
+                 ("properties" . (("start_line" . (("type" . "integer")
+                                                   ("minimum" . 1)))
+                                  ("end_line" . (("type" . "integer")
+                                                 ("minimum" . 1)))
+                                  ("old" . (("type" . "string")))
+                                  ("new" . (("type" . "string")))))))))
 
 ;;;###autoload
 (defun zeta-block-status ()
@@ -385,6 +618,8 @@ When the current block is not a Zeta question, dispatch to the binding that
           (zeta-block-handle-response message))
          ((string= (gethash "method" message) "tools.call")
           (zeta-block-handle-tool-call (gethash "params" message)))
+         ((string= (gethash "method" message) "events.notify")
+          (zeta-block-handle-event-notify (gethash "params" message)))
          ((string= (gethash "method" message) "events.publish")
           nil)))
     (error
@@ -403,9 +638,64 @@ When the current block is not a Zeta question, dispatch to the binding that
             (when track
               (zeta-block-clear-running message))
             (funcall callback nil message))
-        (when track
+        (when (and track
+                   (not (zeta-block-session-start-result-p
+                         (gethash "result" message))))
           (zeta-block-clear-running))
         (funcall callback (gethash "result" message) nil)))))
+
+(defun zeta-block-session-start-result-p (result)
+  "Return non-nil when RESULT is the async `session.run' start response."
+  (and (hash-table-p result)
+       (string= (or (gethash "status" result) "") "started")
+       (stringp (gethash "run_id" result))))
+
+(defun zeta-block-handle-event-notify (params)
+  "Handle an `events.notify' notification with PARAMS."
+  (when (hash-table-p params)
+    (let ((event (gethash "event" params)))
+      (when (hash-table-p event)
+        (zeta-block-handle-run-event event)))))
+
+(defun zeta-block-handle-run-event (event)
+  "Complete pending run state from terminal lifecycle EVENT."
+  (let* ((event-type (gethash "event_type" event))
+         (run-id (gethash "run_id" event))
+         (payload (gethash "payload" event))
+         (target-agent (and (hash-table-p payload)
+                            (gethash "target_agent" payload)))
+         (callback (and (stringp run-id)
+                        (gethash run-id zeta-block--pending-runs))))
+    (when (and (stringp run-id)
+               (member event-type
+                       '("runtime.queue_item.completed"
+                         "runtime.queue_item.failed"
+                         "runtime.queue_item.cancelled"
+                         "runtime.queue_item.unhandled"))
+               (string= target-agent "zeta.session.turn"))
+      (let* ((result (and (hash-table-p payload)
+                          (gethash "result" payload)))
+             (error (zeta-block-terminal-event-error event result)))
+        (if callback
+            (progn
+              (remhash run-id zeta-block--pending-runs)
+              (zeta-block-clear-running error)
+              (funcall callback result error))
+          (puthash run-id (cons result error) zeta-block--completed-runs))))))
+
+(defun zeta-block-terminal-event-error (event result)
+  "Return displayable error text for terminal EVENT and RESULT, or nil."
+  (let ((event-type (gethash "event_type" event)))
+    (cond
+     ((string= event-type "runtime.queue_item.completed")
+      nil)
+     ((and (hash-table-p result)
+           (gethash "error" result))
+      (format "%s" (gethash "error" result)))
+     ((hash-table-p result)
+      (format "Run %s." (or (gethash "outcome" result) "failed")))
+     (t
+      (format "Run %s." (car (last (split-string event-type "\\."))))))))
 
 (defun zeta-block-handle-tool-call (params)
   "Handle a server tool call with PARAMS."
@@ -413,11 +703,15 @@ When the current block is not a Zeta question, dispatch to the binding that
          (name (and (hash-table-p params) (gethash "name" params)))
          (arguments (and (hash-table-p params) (gethash "arguments" params)))
          (result
-          (if (string= name "emacs_read")
-              (zeta-block-emacs-read arguments)
+          (cond
+           ((string= name "emacs_read")
+            (zeta-block-emacs-read arguments))
+           ((string= name "emacs_replace")
+            (zeta-block-emacs-replace arguments))
+           (t
             `(("ok" . :json-false)
               ("error" . (("code" . "unknown-tool")
-                          ("message" . ,(format "unknown Emacs tool: %s" name))))))))
+                          ("message" . ,(format "unknown Emacs tool: %s" name)))))))))
     (when id
       (zeta-block-send-notification
        "tools.respond"
@@ -434,20 +728,112 @@ ARGUMENTS may contain start_line and end_line."
                       ("message" . "No active Emacs buffer is available."))))
       (with-current-buffer buffer
         (let* ((range (zeta-block-buffer-range arguments))
-               (text (buffer-substring-no-properties (car range) (cdr range)))
+               (start-line (line-number-at-pos (car range)))
+               (end-line (line-number-at-pos (cdr range)))
+               (text (zeta-block-numbered-text (car range) (cdr range)))
                (path (or buffer-file-name ""))
                (hash (secure-hash 'sha256 (buffer-substring-no-properties
                                            (point-min)
                                            (point-max)))))
+          (list
+           (cons "ok" t)
+           (cons "content" (vector (list (cons "type" "text")
+                                         (cons "text" text))))
+           (cons "metadata"
+                 (list
+                  (cons "buffer_name" (buffer-name))
+                  (cons "path" path)
+                  (cons "modified" (if (buffer-modified-p) t :json-false))
+                  (cons "modified_tick" (buffer-chars-modified-tick))
+                  (cons "content_hash" (concat "sha256:" hash))
+                  (cons "start_line" start-line)
+                  (cons "end_line" end-line)))))))))
+
+(defun zeta-block-emacs-replace (arguments)
+  "Return a tool result for replacing text in the active Emacs buffer."
+  (let ((buffer zeta-block--active-buffer))
+    (cond
+     ((not (buffer-live-p buffer))
+      '(("ok" . :json-false)
+        ("error" . (("code" . "buffer-unavailable")
+                    ("message" . "No active Emacs buffer is available.")))))
+     ((not (hash-table-p arguments))
+      '(("ok" . :json-false)
+        ("error" . (("code" . "invalid-arguments")
+                    ("message" . "emacs_replace arguments must be an object.")))))
+     (t
+      (with-current-buffer buffer
+        (let* ((start-line (gethash "start_line" arguments))
+               (end-line (gethash "end_line" arguments))
+               (old (gethash "old" arguments))
+               (new (gethash "new" arguments)))
+          (cond
+           ((not (and (integerp start-line)
+                      (integerp end-line)
+                      (<= start-line end-line)
+                      (stringp old)
+                      (stringp new)))
+            '(("ok" . :json-false)
+              ("error" . (("code" . "invalid-arguments")
+                          ("message" . "emacs_replace requires start_line, end_line, old, and new.")))))
+           (t
+            (zeta-block-apply-line-replacement
+             start-line
+             end-line
+             old
+             new)))))))))
+
+(defun zeta-block-apply-line-replacement (start-line end-line old new)
+  "Replace START-LINE..END-LINE when OLD matches current buffer text."
+  (let* ((start (zeta-block-line-position start-line))
+         (end (save-excursion
+                (goto-char (zeta-block-line-position end-line))
+                (line-end-position)))
+         (current (buffer-substring-no-properties start end)))
+    (if (not (string= current old))
+        `(("ok" . :json-false)
+          ("error" . (("code" . "stale-buffer")
+                      ("message" . "The requested line range no longer matches old text; read the buffer again.")))
+          ("metadata" . (("start_line" . ,start-line)
+                         ("end_line" . ,end-line)
+                         ("current" . ,current))))
+      (let ((before-hash (secure-hash 'sha256 (buffer-substring-no-properties
+                                               (point-min)
+                                               (point-max)))))
+        (save-excursion
+          (goto-char start)
+          (delete-region start end)
+          (insert new))
+        (let ((after-hash (secure-hash 'sha256 (buffer-substring-no-properties
+                                                (point-min)
+                                                (point-max)))))
           `(("ok" . t)
-            ("content" . [,(list (cons "type" "text") (cons "text" text))])
+            ("content" . [,(list (cons "type" "text")
+                                 (cons "text"
+                                       (format "replaced lines %d..%d in %s"
+                                               start-line
+                                               end-line
+                                               (buffer-name))))])
             ("metadata" . (("buffer_name" . ,(buffer-name))
-                           ("path" . ,path)
-                           ("modified" . ,(if (buffer-modified-p) t :json-false))
-                           ("modified_tick" . ,(buffer-chars-modified-tick))
-                           ("content_hash" . ,(concat "sha256:" hash))
-                           ("start_line" . ,(line-number-at-pos (car range)))
-                           ("end_line" . ,(line-number-at-pos (cdr range)))))))))))
+                           ("path" . ,(or buffer-file-name ""))
+                           ("start_line" . ,start-line)
+                           ("end_line" . ,end-line)
+                           ("before_hash" . ,(concat "sha256:" before-hash))
+                           ("after_hash" . ,(concat "sha256:" after-hash))))))))))
+
+(defun zeta-block-numbered-text (start end)
+  "Return buffer text between START and END with one-indexed line numbers."
+  (save-excursion
+    (goto-char start)
+    (let ((lines nil))
+      (while (< (point) end)
+        (let ((line (line-number-at-pos))
+              (line-text (buffer-substring-no-properties
+                          (line-beginning-position)
+                          (min (line-end-position) end))))
+          (push (format "%d: %s" line line-text) lines))
+        (forward-line 1))
+      (string-join (nreverse lines) "\n"))))
 
 (defun zeta-block-buffer-range (arguments)
   "Return cons of buffer positions requested by ARGUMENTS."
@@ -481,7 +867,14 @@ ARGUMENTS may contain start_line and end_line."
          (when callback
            (funcall callback nil (string-trim (format "Zeta process %s" event))))))
      zeta-block--callbacks)
+    (maphash
+     (lambda (_run-id callback)
+       (when callback
+         (funcall callback nil (string-trim (format "Zeta process %s" event)))))
+     zeta-block--pending-runs)
     (clrhash zeta-block--callbacks)
+    (clrhash zeta-block--pending-runs)
+    (clrhash zeta-block--completed-runs)
     (setq zeta-block--active-requests 0
           zeta-block--status (if (string-match-p "finished" event) 'off 'error)
           zeta-block--last-error (unless (eq zeta-block--status 'off)
