@@ -7,10 +7,14 @@ shell-turn recording must not pay for the heaviest workflow's import graph.
 
 import importlib
 from contextlib import suppress
+from importlib.metadata import PackageNotFoundError, version
 
 import click
 
-from commas._version import __version__
+try:
+    __version__ = version("commas")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
