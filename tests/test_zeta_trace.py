@@ -8,6 +8,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import zeta.capabilities.execution as zeta_capability_execution
+import zeta.context.components as zeta_context
+import zeta.models.chat_completions as zeta_model
+import zeta.models.profiles as zeta_models
 from _zeta_helpers import (
     BatchSpyStore,
     read_tool_call_response,
@@ -15,16 +19,10 @@ from _zeta_helpers import (
     record_durable_timeline_event,
 )
 from click.testing import CliRunner
-
-import zeta.capabilities.execution as zeta_capability_execution
-import zeta.context.components as zeta_context
-import zeta.models.chat_completions as zeta_model
-import zeta.models.profiles as zeta_models
 from commas.agent_io import last_event_time
 from commas.cli import cli as commas_cli
 from commas.display.summarize import assistant_trace_summary
 from commas.trace.replay import latest_model_answer
-from zeta import models as zeta_models_api
 from zeta.context.builder import PromptBuilder
 from zeta.context.components import chat_messages
 from zeta.events import DraftEvent
@@ -50,6 +48,8 @@ from zeta.run import runtime as zeta_agent
 from zeta.run.context import RuntimeContext, default_session
 from zeta.run.runtime import AgentRunResult
 from zeta.run.thread_run import current_timeline
+
+from zeta import models as zeta_models_api
 
 zeta_trace = SimpleNamespace(
     AmbiguousIdError=AmbiguousIdError,

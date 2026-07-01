@@ -14,6 +14,9 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import zeta.capabilities.execution as zeta_capability_execution
+import zeta.models.chat_completions as zeta_model
+import zeta.models.types as zeta_model_shapes
 from _zeta_helpers import (
     assert_prompt_trace_replay_graph,
     assert_tool_call_derivation,
@@ -29,12 +32,7 @@ from _zeta_helpers import (
     tool_call_fixture,
 )
 from click.testing import CliRunner
-
-import zeta.capabilities.execution as zeta_capability_execution
-import zeta.models.chat_completions as zeta_model
-import zeta.models.types as zeta_model_shapes
 from commas.tools import ensure_builtin_tools_registered
-from zeta import models as zeta_models_api
 from zeta.agents import spec as zeta_agent_spec
 from zeta.agents.manifest import ManifestError
 from zeta.capabilities.execution import (
@@ -69,6 +67,8 @@ from zetad.queue import QueueItem
 from zetad.rpc import jsonrpc as zetad_jsonrpc
 from zetad.rpc import routes as zetad_rpc_routes
 from zetad.store import RuntimeEventStore
+
+from zeta import models as zeta_models_api
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore)
 
@@ -239,7 +239,7 @@ def _test_capability(
 
 
 def test_zeta_console_script_is_declared() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    pyproject = tomllib.loads(Path("zeta/pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["scripts"]["zeta"] == "zetad.cli:main"
 

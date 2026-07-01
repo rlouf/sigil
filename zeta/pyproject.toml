@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=69", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zeta-os"
+dynamic = ["version"]
+description = "Operating substrate for agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+  { name = "Rémi Louf" }
+]
+keywords = [
+  "agents",
+  "ai",
+  "cli",
+  "llm",
+  "runtime",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development",
+]
+dependencies = [
+  "click>=8.1",
+  "croniter",
+  "httpx",
+  "jinja2>=3.1",
+  "jsonschema>=4.0",
+  "PyYAML",
+]
+
+[project.urls]
+Homepage = "https://github.com/rlouf/sigil"
+Repository = "https://github.com/rlouf/sigil"
+Issues = "https://github.com/rlouf/sigil/issues"
+
+[project.scripts]
+zeta = "zetad.cli:main"
+
+[project.entry-points."zeta.event_connectors"]
+slack = "connectors.slack:slack_event_connector"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"
+local_scheme = "no-local-version"
+root = ".."
+version_file = "src/zeta/_version.py"

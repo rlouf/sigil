@@ -404,7 +404,7 @@ def test_zsh_wrappers_call_current_cli_contract() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/commas/bindings/commas.zsh\n                    commas_command hello\n                    commas_agent_step hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source commas/src/commas/bindings/commas.zsh\n                    commas_command hello\n                    commas_agent_step hello\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -428,7 +428,7 @@ def test_zsh_agent_step_uses_zeta_handoff_directly() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/commas/bindings/commas.zsh\n                    commas_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source commas/src/commas/bindings/commas.zsh\n                    commas_agent_step_auto repair\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -451,7 +451,7 @@ def test_zsh_bare_agent_step_sends_no_continue_and_no_positional() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 commas_agent_step
                 commas_agent_step_auto
                 """
@@ -471,7 +471,7 @@ def test_zsh_agent_wrappers_call_zeta_loop() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/commas/bindings/commas.zsh\n                    commas_agent_step hello\n                    commas_agent_step_auto hello\n                    "
+                "                    source commas/src/commas/bindings/commas.zsh\n                    commas_agent_step hello\n                    commas_agent_step_auto hello\n                    "
             ),
             tmp,
             stub,
@@ -491,7 +491,7 @@ def test_zsh_wrappers_dispatch_piped_stdin_to_operator_runtime() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/commas/bindings/commas.zsh\n                    printf 'notes\\n' | commas_command draft executive summary\n                    printf 'cmd\\n' | commas_agent_step run it\n                    "
+                "                    source commas/src/commas/bindings/commas.zsh\n                    printf 'notes\\n' | commas_command draft executive summary\n                    printf 'cmd\\n' | commas_agent_step run it\n                    "
             ),
             tmp,
             stub,
@@ -514,7 +514,7 @@ def test_zsh_glyph_functions_dispatch_piped_stdin() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/commas/bindings/commas.zsh\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
+                "                    source commas/src/commas/bindings/commas.zsh\n                    eval \"printf 'notes\\\\n' | , draft executive summary\"\n                    eval \"printf 'cmd\\\\n' | ,, run it\"\n                    "
             ),
             tmp,
             stub,
@@ -534,7 +534,7 @@ def test_zsh_does_not_record_commas_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/commas/bindings/commas.zsh\n                    false\n                    wait\n                    "
+                "                    source commas/src/commas/bindings/commas.zsh\n                    false\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -552,7 +552,7 @@ def test_zsh_does_not_record_commas_wrapper_commands() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/commas/bindings/commas.zsh\n                    commas_command hello\n                    wait\n                    "
+                "                    source commas/src/commas/bindings/commas.zsh\n                    commas_command hello\n                    wait\n                    "
             ),
             tmp,
             stub,
@@ -573,7 +573,7 @@ def test_zsh_plus_line_goes_through_capture_widget() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 + echo captured
                 exit
                 """
@@ -596,7 +596,7 @@ def test_zsh_plus_glyph_is_widget_only() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                "                    source src/commas/bindings/commas.zsh\n                    + echo captured\n                    "
+                "                    source commas/src/commas/bindings/commas.zsh\n                    + echo captured\n                    "
             ),
             tmp,
             stub,
@@ -606,7 +606,7 @@ def test_zsh_plus_glyph_is_widget_only() -> None:
 
 
 GLYPH_SPLIT_PROBE = """\
-source src/commas/bindings/commas.zsh
+source commas/src/commas/bindings/commas.zsh
 probe() {
   if __commas_glyph_split "$1"; then
     print -r -- "text=${reply[1]}:"
@@ -690,7 +690,7 @@ def test_zsh_dispatch_routes_plus_text_to_commas_run_verbatim() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 __commas_dispatch_text="echo captured | cat"
                 __commas_dispatch
                 commas_command "what's (the) deal!"
@@ -718,7 +718,7 @@ def test_zsh_glyph_split_handles_multiline_buffers() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 __commas_glyph_split "+ echo one
                 echo two" || exit 1
                 __commas_dispatch_text="${reply[1]}"
@@ -742,7 +742,7 @@ def test_zsh_installs_glyph_dispatch_accept_line_widget() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    source src/commas/bindings/commas.zsh\n                    print -- "widget=${widgets[accept-line]}"\n                    '
+                '                    source commas/src/commas/bindings/commas.zsh\n                    print -- "widget=${widgets[accept-line]}"\n                    '
             ),
             tmp,
             stub,
@@ -764,7 +764,7 @@ def test_zsh_glyph_widget_rewrites_buffer_to_safe_dispatch_line() -> None:
             textwrap.dedent(
                 """\
                 function zle() { return 0; }
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 BUFFER="+ echo captured"
                 __commas_accept_line_with_glyph_dispatch
                 print -- "buffer=$BUFFER"
@@ -795,7 +795,7 @@ def test_zsh_wraps_simple_zeta_handoff_with_run_capture() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/commas/bindings/commas.zsh\n                    commas_agent_step hello >/dev/null\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source commas/src/commas/bindings/commas.zsh\n                    commas_agent_step hello >/dev/null\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -812,7 +812,7 @@ def test_zsh_wraps_shell_grammar_handoff_with_run_capture() -> None:
         result = run_shell(
             "zsh",
             textwrap.dedent(
-                '                    source src/commas/bindings/commas.zsh\n                    __commas_history_insert "$(__commas_zeta_prompt_command "echo zeta | cat")"\n                    print -- "history=${history[$HISTCMD]}"\n                    '
+                '                    source commas/src/commas/bindings/commas.zsh\n                    __commas_history_insert "$(__commas_zeta_prompt_command "echo zeta | cat")"\n                    print -- "history=${history[$HISTCMD]}"\n                    '
             ),
             tmp,
             stub,
@@ -832,7 +832,7 @@ def test_zsh_status_glyph_dispatches_to_commas_status() -> None:
                 # eval re-parses with the sourced aliases in scope, matching the
                 # line-at-a-time parsing of an interactive shell. A plain `?` in
                 # a fully pre-parsed `zsh -c` script never sees the alias.
-                "                    source src/commas/bindings/commas.zsh\n                    eval '?'\n                    "
+                "                    source commas/src/commas/bindings/commas.zsh\n                    eval '?'\n                    "
             ),
             tmp,
             stub,
@@ -852,7 +852,7 @@ def test_zsh_binding_preserves_question_mark_globbing() -> None:
             "zsh",
             textwrap.dedent(
                 f"""\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 cd {tmp}
                 print -- ?b
                 """
@@ -878,7 +878,7 @@ def test_zsh_interrupted_zeta_step_leaves_no_handoff_file() -> None:
             textwrap.dedent(
                 f"""\
                 export TMPDIR={tmp}
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 commas_agent_step interrupt
                 print -- "survived=yes"
                 """
@@ -905,8 +905,8 @@ def test_zsh_precmd_hook_runs_before_earlier_registered_hooks() -> None:
                 autoload -Uz add-zsh-hook
                 theme_precmd() { true }
                 add-zsh-hook precmd theme_precmd
-                source src/commas/bindings/commas.zsh
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 print -- "hooks=$precmd_functions"
                 """
             ),
@@ -929,7 +929,7 @@ def test_zsh_records_shell_turns_without_a_handoff() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 __commas_zeta_before_command "echo recorded"
                 true
                 __commas_zeta_after_command_before_prompt
@@ -957,7 +957,7 @@ def test_zsh_records_every_command_with_no_turn_limit() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 for command in "echo one" "echo two" "echo three"; do
                   __commas_zeta_before_command "$command"
                   true
@@ -989,7 +989,7 @@ def test_zsh_leading_space_skips_recording() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 __commas_zeta_before_command " echo secret"
                 true
                 __commas_zeta_after_command_before_prompt
@@ -1017,7 +1017,7 @@ def test_zsh_commas_record_opt_out_disables_recording() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 export COMMAS_RECORD=0
                 __commas_zeta_before_command "echo zero"
                 true
@@ -1053,7 +1053,7 @@ def test_zsh_records_interactive_commands_end_to_end() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 echo hi
                 exit
                 """
@@ -1076,7 +1076,7 @@ def test_zsh_recordable_command_excludes_all_commas_invocations() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 __commas_zeta_recordable_command "commas"; print -- "bare=$?"
                 __commas_zeta_recordable_command "commas status"; print -- "args=$?"
                 __commas_zeta_recordable_command "./commas status"; print -- "relative=$?"
@@ -1111,7 +1111,7 @@ def test_zsh_generates_session_id_without_uuidgen() -> None:
                 """\
                 unset COMMAS_SESSION_ID
                 function uuidgen() { return 127 }
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 print -- "sid=$COMMAS_SESSION_ID"
                 """
             ),
@@ -1139,7 +1139,7 @@ def test_zsh_resolves_cli_from_commands_hash_without_forking() -> None:
                 f"""\
                 unset COMMAS_BIN
                 path=({bin_dir} $path)
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 print -- "bin=$__commas_bin"
                 """
             ),
@@ -1159,7 +1159,7 @@ def test_zsh_shell_turn_recording_does_not_spawn_python3() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 function python3() { print -- "python3 used" >> "$ZLE_LOG"; return 127 }
                 __commas_zeta_record_shell_turn "echo hi" 3
                 """
@@ -1185,7 +1185,7 @@ def test_zsh_zeta_handoff_staging_does_not_spawn_python3() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 function python3() { print -- "python3 used" >> "$ZLE_LOG"; return 127 }
                 commas_agent_step hello >/dev/null
                 print -- "history=${history[$HISTCMD]}"
@@ -1210,7 +1210,7 @@ def test_zsh_binding_functions_survive_hostile_user_options() -> None:
                 """\
                 setopt ksh_arrays sh_word_split
                 function zle() { return 0; }
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 BUFFER="+ echo captured | cat"
                 __commas_accept_line_with_glyph_dispatch
                 eval "$BUFFER"
@@ -1248,7 +1248,7 @@ def test_zsh_glyph_lines_recallable_in_session_but_not_saved() -> None:
                 HISTSIZE=100
                 SAVEHIST=100
                 setopt inc_append_history
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 , hello
                 true
                 history 1
@@ -1272,7 +1272,7 @@ def test_zsh_history_filter_is_additive_and_covers_glyphs() -> None:
         result = run_shell_args(
             ["zsh", "-f", "-ic"],
             textwrap.dedent(
-                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source src/commas/bindings/commas.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __commas_zshaddhistory ", hello"; print -- "comma=$?"\n                    __commas_zshaddhistory "? hello"; print -- "question=$?"\n                    __commas_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __commas_zshaddhistory "+ echo"; print -- "run=$?"\n                    __commas_zshaddhistory "__commas_dispatch"; print -- "dispatch=$?"\n                    __commas_zshaddhistory "…"; print -- "ellipsis=$?"\n                    __commas_zshaddhistory "@ hello"; print -- "at=$?"\n                    __commas_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
+                '                    function zshaddhistory() { print -- "user:$1" >> "$ZLE_LOG"; return 0; }\n                    source commas/src/commas/bindings/commas.zsh\n                    print -- "hooks=$zshaddhistory_functions"\n                    zshaddhistory "echo hello"\n                    __commas_zshaddhistory ", hello"; print -- "comma=$?"\n                    __commas_zshaddhistory "? hello"; print -- "question=$?"\n                    __commas_zshaddhistory "\\? hello"; print -- "escaped_question=$?"\n                    __commas_zshaddhistory "+ echo"; print -- "run=$?"\n                    __commas_zshaddhistory "__commas_dispatch"; print -- "dispatch=$?"\n                    __commas_zshaddhistory "…"; print -- "ellipsis=$?"\n                    __commas_zshaddhistory "@ hello"; print -- "at=$?"\n                    __commas_zshaddhistory "echo hello"; print -- "echo=$?"\n                    '
             ),
             tmp,
             stub,
@@ -1316,7 +1316,7 @@ def test_interactive_plus_dispatches_pipeline_through_widget() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline("+ echo captured | cat")
             shell.expect("ran:--shell echo captured | cat")
             shell.expect_prompt()
@@ -1335,7 +1335,7 @@ def test_interactive_comma_glyph_dispatches_to_ask() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1352,7 +1352,7 @@ def test_interactive_status_glyph_dispatches_to_status() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline("?")
             shell.expect("clean")
             shell.expect_prompt()
@@ -1371,7 +1371,7 @@ def test_interactive_glyph_line_recallable_with_up_arrow() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1394,7 +1394,7 @@ def test_interactive_accepted_glyph_line_keeps_typed_text_with_dim_trailer() -> 
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline("+ echo captured | cat")
             shell.expect("\x1b[90m__commas_dispatch")
             shell.expect("ran:--shell echo captured | cat")
@@ -1418,7 +1418,7 @@ def test_interactive_dispatch_word_is_an_ellipsis_under_utf8_locale() -> None:
             env={"TERM": "xterm-256color", "LANG": "en_US.UTF-8"},
         )
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline("+ echo captured | cat")
             shell.expect("\x1b[90m…")
             shell.expect("ran:--shell echo captured | cat")
@@ -1440,10 +1440,10 @@ def test_zsh_dispatch_word_falls_back_without_utf8_locale() -> None:
             textwrap.dedent(
                 """\
                 unset LANG LC_ALL LC_CTYPE
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 print -- "word=$__commas_dispatch_word"
                 export LANG=en_US.UTF-8
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 print -- "utf8word=$__commas_dispatch_word"
                 """
             ),
@@ -1464,7 +1464,7 @@ def test_interactive_unquoted_prompt_dispatches_as_argv() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(", summarize this repo")
             shell.expect("answer")
             shell.expect_prompt()
@@ -1483,7 +1483,7 @@ def test_interactive_double_quoted_prompt_expands_like_the_shell() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.run("box=staging-7")
             shell.sendline(', "explain the host $box: $(echo from-subst)"')
             shell.expect("answer")
@@ -1501,7 +1501,7 @@ def test_interactive_single_quoted_prompt_stays_literal() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(", 'explain $PATH literally'")
             shell.expect("answer")
             shell.expect_prompt()
@@ -1519,7 +1519,7 @@ def test_interactive_quoted_prompt_redirects_answer_to_file() -> None:
         out = tmp / "summary.txt"
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.run(f', "summarize this" > {out}')
             shell.exit()
         finally:
@@ -1535,7 +1535,7 @@ def test_interactive_quoted_prompt_pipes_answer() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(', "hello" | tr a-z A-Z')
             shell.expect("ANSWER")
             shell.expect_prompt()
@@ -1556,7 +1556,7 @@ def test_interactive_piped_glyph_line_recallable_with_up_arrow() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(', "hello" | tr a-z A-Z')
             shell.expect("ANSWER")
             shell.expect_prompt()
@@ -1580,7 +1580,7 @@ def test_interactive_glyph_display_decoration_does_not_leak_to_next_line() -> No
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub, env={"TERM": "xterm-256color"})
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(', "hello"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1601,7 +1601,7 @@ def test_interactive_commands_recorded_in_order_with_status() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.run("true")
             shell.run("false")
             shell.exit()
@@ -1618,7 +1618,7 @@ def test_interactive_commands_recorded_in_order_with_status() -> None:
 def interactive_session_vars(shell: InteractiveZsh) -> dict[str, str]:
     # The markers are split in the sent line so the input echo cannot match
     # the expects; only the printed output contains the joined forms.
-    shell.run("source src/commas/bindings/commas.zsh")
+    shell.run("source commas/src/commas/bindings/commas.zsh")
     shell.sendline('print -- "si""d=${COMMAS_SESSION_ID}@tt""y=${COMMAS_SESSION_TTY}@"')
     shell.expect("sid=")
     start = shell.scanned
@@ -1730,7 +1730,7 @@ def test_interactive_comma_with_apostrophe_dispatches_without_quote_prompt() -> 
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1751,7 +1751,7 @@ def test_interactive_comma_with_parens_and_bang_dispatches_verbatim() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(", 'why (really) fix it!'")
             shell.expect("answer")
             shell.expect_prompt()
@@ -1774,7 +1774,7 @@ def test_interactive_plus_runs_under_job_control() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub, env={"COMMAS_BIN": str(REAL_COMMAS)})
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline("+ sleep 30")
             shell.settle(1.0)
             shell.send_control("z")
@@ -1802,7 +1802,7 @@ def test_interactive_plus_exit_status_reaches_the_prompt() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub, env={"COMMAS_BIN": str(REAL_COMMAS)})
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.run("+ false", timeout_seconds=30.0)
             shell.sendline('print -- "s""t=$?"')
             shell.expect("st=1")
@@ -1823,7 +1823,7 @@ def test_zsh_plus_completion_registered_after_compinit() -> None:
                 """\
                 autoload -Uz compinit
                 compinit -u
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 print -- "comp=${_comps[+]}"
                 """
             ),
@@ -1845,7 +1845,7 @@ def test_zsh_glyph_functions_remain_defined_for_highlighters() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 print -- "comma=$+functions[,]"
                 print -- "comma2=$+functions[,,]"
                 print -- "comma3=$+functions[,,,]"
@@ -1872,7 +1872,7 @@ def test_interactive_plus_completes_like_the_underlying_command() -> None:
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run("autoload -Uz compinit; compinit -u")
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.send("+ cat READM\t")
             shell.expect("README.md")
             shell.send_control("c")
@@ -1908,9 +1908,9 @@ def test_interactive_dispatch_chains_with_accept_line_wrappers(
         try:
             if plugin_first:
                 shell.run(f"source {plugin}")
-                shell.run("source src/commas/bindings/commas.zsh")
+                shell.run("source commas/src/commas/bindings/commas.zsh")
             else:
-                shell.run("source src/commas/bindings/commas.zsh")
+                shell.run("source commas/src/commas/bindings/commas.zsh")
                 shell.run(f"source {plugin}")
             shell.sendline(', "hello"')
             shell.expect("answer")
@@ -1941,7 +1941,7 @@ def test_interactive_dispatch_survives_real_autosuggestions() -> None:
         shell = InteractiveZsh(tmp, stub)
         try:
             shell.run(f"source {AUTOSUGGESTIONS}")
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
             shell.expect_prompt()
@@ -1962,7 +1962,7 @@ def test_interactive_dispatch_survives_real_syntax_highlighting() -> None:
         stub = make_stub(tmp)
         shell = InteractiveZsh(tmp, stub)
         try:
-            shell.run("source src/commas/bindings/commas.zsh")
+            shell.run("source commas/src/commas/bindings/commas.zsh")
             shell.run(f"source {SYNTAX_HIGHLIGHTING}")
             shell.sendline(', "what\'s the deal"')
             shell.expect("answer")
@@ -2012,7 +2012,7 @@ def test_zsh_plus_staged_command_resumes_step() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 commas_agent_step "repair it"
                 __commas_run_plus_capture_command "uv run pytest"
                 """
@@ -2036,7 +2036,7 @@ def test_zsh_plus_staged_command_resumes_originating_workflow() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 commas_agent_step_auto "repair it"
                 __commas_run_plus_capture_command "uv run pytest"
                 """
@@ -2062,7 +2062,7 @@ def test_zsh_plus_unrelated_command_does_not_resume() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 commas_agent_step "repair it"
                 __commas_run_plus_capture_command "git status"
                 """
@@ -2082,7 +2082,7 @@ def test_zsh_plus_auto_continue_opt_out() -> None:
             "zsh",
             textwrap.dedent(
                 """\
-                source src/commas/bindings/commas.zsh
+                source commas/src/commas/bindings/commas.zsh
                 export COMMAS_AUTO_CONTINUE=0
                 commas_agent_step "repair it"
                 __commas_run_plus_capture_command "uv run pytest"

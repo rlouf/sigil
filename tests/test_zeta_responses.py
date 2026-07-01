@@ -4,7 +4,6 @@ import json
 from typing import Any
 
 import pytest
-
 import zeta.models.codex_auth as codex_auth
 import zeta.models.responses as zeta_responses
 import zeta.models.types as zeta_model_shapes

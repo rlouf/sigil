@@ -7,8 +7,10 @@ __pycache__/
 mutants/
 dist/
 .DS_Store
-src/sigil/_version.py
-src/sigil_sh.egg-info/
+commas/src/commas/_version.py
+commas/src/commas.egg-info/
+zeta/src/zeta/_version.py
+zeta/src/zeta.egg-info/
 node_modules/
 package-lock.json
 .claude/

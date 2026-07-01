@@ -4,9 +4,6 @@ import json
 from typing import Any
 
 from click.testing import CliRunner
-
-from commas import history as commas_history
-from commas import state as commas_state
 from commas.cli import cli as commas_cli
 from commas.protocols import (
     EFFECT_KIND_COMMAND,
@@ -25,6 +22,9 @@ from commas.state import (
 )
 from zeta.records.events import DraftEvent
 from zeta.records.stores.sqlite import SqliteEventStore
+
+from commas import history as commas_history
+from commas import state as commas_state
 
 
 def sample_turn_record(turn_id: str = "turn-1", **overrides: Any) -> dict[str, Any]:

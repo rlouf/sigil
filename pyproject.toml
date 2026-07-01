@@ -1,77 +1,24 @@
-[build-system]
-requires = ["setuptools>=69", "setuptools-scm>=8"]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "commas"
-dynamic = ["version"]
-description = "Verb-first LLM interaction for the shell, with optional punctuation shortcuts."
-readme = "README.md"
+name = "zeta-monorepo"
+version = "0.0.0"
 requires-python = ">=3.11"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
-authors = [
-  { name = "Rémi Louf" }
-]
-keywords = [
-  "ai",
-  "cli",
-  "llm",
-  "shell",
-  "terminal",
-]
-classifiers = [
-  "Development Status :: 3 - Alpha",
-  "Environment :: Console",
-  "Intended Audience :: Developers",
-  "Operating System :: MacOS",
-  "Operating System :: POSIX",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Programming Language :: Python :: 3.13",
-  "Topic :: Software Development",
-  "Topic :: System :: Shells",
-  "Topic :: Terminals",
-]
 dependencies = [
-  "click>=8.1",
-  "croniter",
-  "httpx",
-  "jinja2>=3.1",
-  "jsonschema>=4.0",
-  "PyYAML",
-  "rich>=13.7",
+  "commas",
+  "zeta-os",
 ]
 
-[project.urls]
-Homepage = "https://github.com/rlouf/sigil"
-Repository = "https://github.com/rlouf/sigil"
-Issues = "https://github.com/rlouf/sigil/issues"
+[tool.uv]
+package = false
 
-[project.scripts]
-commas = "commas.cli:main"
-zeta = "zetad.cli:main"
+[tool.uv.sources]
+commas = { workspace = true }
+zeta-os = { workspace = true }
 
-[project.entry-points."zeta.event_connectors"]
-slack = "connectors.slack:slack_event_connector"
-
-[tool.setuptools]
-package-dir = { "" = "src" }
-include-package-data = true
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-commas = [
-  "bindings/commas.zsh",
+[tool.uv.workspace]
+members = [
+  "commas",
+  "zeta",
 ]
-
-[tool.setuptools_scm]
-fallback_version = "0.1.0"
-local_scheme = "no-local-version"
-version_file = "src/commas/_version.py"
 
 [dependency-groups]
 dev = [
@@ -98,7 +45,7 @@ extend-exclude = ["docs/demos"]
 extend-select = ["B", "I", "UP"]
 
 [tool.vulture]
-paths = ["src", "tests"]
+paths = ["commas/src", "zeta/src", "tests"]
 min_confidence = 80
 
 [tool.deptry]

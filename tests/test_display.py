@@ -4,23 +4,22 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import commas.display.render as display_render
+import commas.display.state as display_state
+import commas.display.summarize as display_summarize
 import pytest
 from _zeta_helpers import (
     TtyBuffer,
     visible_terminal_text,
 )
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
-
-import commas.display.render as display_render
-import commas.display.state as display_state
-import commas.display.summarize as display_summarize
 from commas.display.tty import IRIS, ITALIC, MUTED, RESET
 from commas.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
     SHELL_HANDOFF_OUTCOME_EXECUTED,
 )
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
 from zeta.records.objects import Object
 from zeta.records.stores.memory import InMemoryStore
 
@@ -91,39 +90,39 @@ def test_commas_display_summarizes_tool_results() -> None:
 def test_commas_display_classifies_progress_events() -> None:
     event = display_state.progress_event_for_tool_result(
         "read",
-        {"ok": True, "metadata": {"path": "src/commas/agent_io.py"}},
-        {"path": "src/commas/agent_io.py"},
+        {"ok": True, "metadata": {"path": "commas/src/commas/agent_io.py"}},
+        {"path": "commas/src/commas/agent_io.py"},
     )
     assert event is not None
     assert event.kind == "read"
     assert event.phase == "Mapping repo"
-    assert event.line == "✓ read src/commas/agent_io.py · ok"
+    assert event.line == "✓ read commas/src/commas/agent_io.py · ok"
 
     event = display_state.progress_event_for_tool_result(
         "ls",
-        {"ok": True, "metadata": {"path": "src/commas", "entries": 3}},
-        {"path": "src/commas"},
+        {"ok": True, "metadata": {"path": "commas/src/commas", "entries": 3}},
+        {"path": "commas/src/commas"},
     )
     assert event is not None
     assert event.kind == "list"
     assert event.phase == "Mapping repo"
-    assert event.line == "✓ listed src/commas · 3 entries"
+    assert event.line == "✓ listed commas/src/commas · 3 entries"
 
     event = display_state.progress_event_for_tool_result(
         "ls",
         {
             "ok": True,
             "metadata": {
-                "path": "src/commas",
+                "path": "commas/src/commas",
                 "entries": 30,
                 "recursive": True,
                 "limit": 50,
             },
         },
-        {"path": "src/commas", "recursive": True, "limit": 50},
+        {"path": "commas/src/commas", "recursive": True, "limit": 50},
     )
     assert event is not None
-    assert event.line == "✓ listed src/commas (recursive) · 30 entries"
+    assert event.line == "✓ listed commas/src/commas (recursive) · 30 entries"
 
     event = display_state.progress_event_for_tool_result(
         "write",
@@ -301,7 +300,7 @@ def test_commas_display_terminal_digest_uses_reasoning_for_phase() -> None:
     renderer.observe_tool_call("read", {"path": "README.md"})
     renderer.observe_tool_result("read", {"ok": True})
     renderer.observe_reasoning_delta("Now I'll inspect prompt assembly before editing.")
-    renderer.observe_tool_call("read", {"path": "src/commas/agent_io.py"})
+    renderer.observe_tool_call("read", {"path": "commas/src/commas/agent_io.py"})
     renderer.observe_tool_result("read", {"ok": True})
 
     assert renderer.current_phase == "Inspect prompt assembly before editing"
@@ -320,7 +319,7 @@ def test_commas_display_terminal_digest_ignores_generic_reasoning_phase() -> Non
     renderer.observe_tool_call("read", {"path": "README.md"})
     renderer.observe_tool_result("read", {"ok": True})
     renderer.observe_reasoning_delta("Checking.")
-    renderer.observe_tool_call("read", {"path": "src/commas/agent_io.py"})
+    renderer.observe_tool_call("read", {"path": "commas/src/commas/agent_io.py"})
     renderer.observe_tool_result("read", {"ok": True})
 
     assert renderer.current_phase == "Mapping repo"

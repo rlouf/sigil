@@ -1,13 +1,14 @@
 # Zeta
 
 [![CI](https://github.com/rlouf/sigil/actions/workflows/ci.yml/badge.svg)](https://github.com/rlouf/sigil/actions/workflows/ci.yml)
+[![Zeta PyPI](https://img.shields.io/pypi/v/zeta-os.svg)](https://pypi.org/project/zeta-os/)
 [![PyPI](https://img.shields.io/pypi/v/commas.svg)](https://pypi.org/project/commas/)
 [![Python](https://img.shields.io/pypi/pyversions/commas.svg)](https://pypi.org/project/commas/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Zeta is a local, event-driven runtime for authored agents.
+Zeta is an operating substrate for agents.
 
-An authored agent is a Markdown file that declares which durable events it
+An agent is a Markdown file that declares which durable events it
 accepts, which tools it can use, what events it may return, and the prompt that
 should run when it is triggered. The runtime stores events, queue state, run
 attempts, tool calls, model calls, and prompt traces in project-local SQLite
@@ -19,10 +20,11 @@ history workflows.
 
 ## Install
 
-The Python package is published as `commas`; it installs both `zeta` and
-`commas` commands:
+The Python packages are published as `zeta-os` and `commas`. `zeta-os` installs
+the `zeta` command; `commas` installs the shell frontend:
 
 ```sh
+uv tool install zeta-os
 uv tool install commas
 zeta --help
 ```
@@ -80,7 +82,7 @@ That sends prompts and any tool-read file contents to OpenAI's backend. Run
 `codex login` first so `~/.codex/auth.json` exists.
 
 The `zeta run` worker resolves its model from the project runtime session
-stored under `.zeta/sessions/default`. For authored agents, the usual choices
+stored under `.zeta/sessions/default`. For agents, the usual choices
 are to set a `default = true` profile in `models.toml` or to set a per-agent
 `model:` override in the agent frontmatter.
 
@@ -97,7 +99,7 @@ commas model clear
 
 ## Project Layout
 
-Zeta reads authored agents from a flat `agents/` directory in the project root:
+Zeta reads agent definitions from a flat `agents/` directory in the project root:
 
 ```text
 agents/

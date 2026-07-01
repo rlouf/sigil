@@ -500,7 +500,7 @@ def task_state_fixture(
         "open_questions": [],
         "files_touched": [
             {
-                "path": "src/zeta/prompt/transforms.py",
+                "path": "zeta/src/zeta/prompt/transforms.py",
                 "operation": "modified",
                 "status": "in_progress",
                 "notes": "Add task-state extraction transform",

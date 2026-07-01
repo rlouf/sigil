@@ -16,7 +16,6 @@ import pytest
 from _patch import patch, patch_dict
 from _zeta_helpers import record_durable_timeline_event
 from click.testing import CliRunner
-
 from commas.cli import cli, main
 from commas.cli._base import (
     EXIT_COMMAND_NOT_FOUND,
@@ -82,7 +81,7 @@ class TtyStringIO(StringIO):
 
 
 def test_zeta_package_does_not_import_parent_commas_modules() -> None:
-    zeta_root = Path("src/zeta")
+    zeta_root = Path("zeta/src/zeta")
     violations: list[str] = []
     for path in sorted(zeta_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -101,7 +100,7 @@ def test_zeta_package_does_not_import_parent_commas_modules() -> None:
 
 
 def test_zeta_package_does_not_import_zetad_modules() -> None:
-    zeta_root = Path("src/zeta")
+    zeta_root = Path("zeta/src/zeta")
     violations: list[str] = []
     for path in sorted(zeta_root.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

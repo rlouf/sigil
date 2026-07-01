@@ -8,6 +8,9 @@ from typing import Any, cast
 
 import httpx
 import pytest
+import zeta.models.chat_completions as zeta_model
+import zeta.models.profiles as zeta_models
+import zeta.models.types as zeta_models_api
 from _zeta_helpers import (
     DeltaSink,
     sse_lines,
@@ -15,10 +18,6 @@ from _zeta_helpers import (
     write_models_config,
 )
 from click.testing import CliRunner
-
-import zeta.models.chat_completions as zeta_model
-import zeta.models.profiles as zeta_models
-import zeta.models.types as zeta_models_api
 from commas.cli import cli as commas_cli
 from commas.sessions import session_dir
 from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
@@ -1546,6 +1545,7 @@ def test_zeta_models_package_dispatches_default_api_to_chat_completions(
 
 def test_zeta_models_package_routes_codex_api_to_responses(monkeypatch) -> None:
     import zeta.models.responses as zeta_responses
+
     from zeta import models as models_pkg
 
     captured: dict[str, Any] = {}

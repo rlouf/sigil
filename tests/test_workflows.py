@@ -8,6 +8,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+import zeta.models.chat_completions as zeta_model
+import zeta.models.profiles as zeta_models
 from _zeta_helpers import (
     TtyBuffer,
     record_durable_timeline_event,
@@ -16,12 +18,6 @@ from _zeta_helpers import (
     write_skill,
 )
 from click.testing import CliRunner
-
-import commas
-import zeta.models.chat_completions as zeta_model
-import zeta.models.profiles as zeta_models
-from commas import agent_io
-from commas import handoff as commas_handoff
 from commas.cli import cli as commas_cli
 from commas.history import (
     effect_record,
@@ -48,7 +44,6 @@ from commas.sessions import record_turn, session_dir
 from commas.state import history_view, read_events
 from commas.workflows import ask as ask_runner
 from commas.workflows import step as zeta_runner
-from zeta import models as zeta_models_api
 from zeta.context.components import PromptTrace, chat_messages
 from zeta.records import events as zeta_event_model
 from zeta.records.events import DraftEvent, Event, event_view
@@ -58,6 +53,11 @@ from zeta.records.stores.object_store import resolve_object_id
 from zeta.records.stores.sqlite import SqliteEventStore, event_store_path
 from zeta.run import runtime as zeta_agent
 from zeta.run.runtime import AgentRunResult
+
+import commas
+from commas import agent_io
+from commas import handoff as commas_handoff
+from zeta import models as zeta_models_api
 
 zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
 

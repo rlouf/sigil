@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from commas.tools import bash as bash_tool
 from commas.tools import ensure_builtin_tools_registered, register_builtin_tools
 from commas.tools import grep as grep_tool
@@ -349,7 +348,7 @@ def test_commas_ensures_shared_zeta_registry_has_builtins() -> None:
 
 
 def test_zeta_capability_registry_does_not_import_commas_tools() -> None:
-    source = Path("src/zeta/capabilities/registry.py").read_text(encoding="utf-8")
+    source = Path("zeta/src/zeta/capabilities/registry.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     imports = []
     for node in ast.walk(tree):

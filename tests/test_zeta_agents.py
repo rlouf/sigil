@@ -11,7 +11,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-
 from connectors import (
     EgressBinding,
     EventConnector,
@@ -953,7 +952,7 @@ def test_zeta_load_connector_registry_honors_process_allowlist(
 
 
 def test_zeta_slack_connector_is_discoverable_as_entry_point() -> None:
-    metadata = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    metadata = tomllib.loads(Path("zeta/pyproject.toml").read_text(encoding="utf-8"))
 
     assert metadata["project"]["entry-points"]["zeta.event_connectors"] == (
         {"slack": "connectors.slack:slack_event_connector"}

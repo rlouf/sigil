@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import zeta.models.chat_completions as zeta_model
+import zeta.models.types as zeta_models_api
 from _zeta_helpers import (
     BatchSpyStore,
     assert_task_state_graph,
@@ -18,9 +20,6 @@ from _zeta_helpers import (
     tool_result_transcript,
     write_skill,
 )
-
-import zeta.models.chat_completions as zeta_model
-import zeta.models.types as zeta_models_api
 from commas.tools import ensure_builtin_tools_registered
 from zeta.agents import skills as zeta_skills
 from zeta.capabilities.execution import (

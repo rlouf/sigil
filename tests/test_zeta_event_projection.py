@@ -3,7 +3,6 @@ from dataclasses import asdict, replace
 from typing import Any
 
 import pytest
-
 from commas.history import effect_record, event_from_record, turn_record
 from zeta.events import DraftEvent, Event
 from zeta.objects import Derivation, Object

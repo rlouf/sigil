@@ -49,7 +49,9 @@ jobs:
         run: uv run pytest
 
       - name: Build distributions
-        run: uv build
+        run: |
+          uv build --package zeta-os
+          uv build --package commas
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4

@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from _patch import patch
 from click.testing import CliRunner
-
 from commas.cli import cli, main
 from commas.cli._base import EXIT_ERROR, EXIT_MODEL_UNAVAILABLE, EXIT_OK, EXIT_USAGE
 from commas.cli.step import CONTINUE_OBJECTIVE

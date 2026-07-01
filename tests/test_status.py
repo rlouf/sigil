@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 from _zeta_helpers import write_models_config
 from click.testing import CliRunner
-
 from commas.cli import cli
 from commas.history import effect_record, publish_effect_record, turn_record
 from commas.protocols import turn_contract

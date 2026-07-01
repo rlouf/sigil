@@ -11,7 +11,6 @@ from pathlib import Path
 from _patch import patch, patch_dict
 from _zeta_helpers import write_codex_auth_file
 from click.testing import CliRunner
-
 from commas.cli import cli, main
 from commas.cli._base import EXIT_ERROR, EXIT_OK
 from commas.install import (
