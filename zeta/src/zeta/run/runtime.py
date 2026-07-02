@@ -13,6 +13,7 @@ from zeta.capabilities.execution import (
     CapabilityExecutionContext,
     handle_tool_call,
 )
+from zeta.capabilities.host import HostDirectory
 from zeta.capabilities.registry import (
     CapabilityRegistry,
     CapabilityToolSchema,
@@ -111,6 +112,7 @@ class RunDependencies:
     tool_registry: CapabilityRegistry
     builder: PromptBuilder
     abort_reason: AbortReason
+    tool_hosts: HostDirectory | None = None
     model_gateway: ModelGateway = field(default_factory=DefaultModelGateway)
 
 
@@ -152,6 +154,7 @@ class AgentRun:
                 staged_effect=info.staged_effect,
                 answer_streamed=info.answer_streamed,
             )
+        self.state.stop = "max_turns"
         self.state.note_step("finish_run")
         return self.state.result()
 
@@ -270,6 +273,7 @@ async def step_tools(
     ctx: RunDependencies,
 ) -> tuple[RunState, RunInfo]:
     appended_events: list[DraftEvent] = []
+    batch_events: list[DraftEvent] = []
     staged_effect: dict[str, Any] | None = None
     tool_calls = list(state.pending_tool_calls)
     model_telemetry = dict(state.pending_model_telemetry)
@@ -289,10 +293,13 @@ async def step_tools(
             state=state,
             ctx=ctx,
         )
-        state.events.extend(result_event.events)
+        batch_events.extend(result_event.events)
         appended_events.extend(result_event.events)
         if result_event.events:
-            project_prompt_trace_projection(state.events, ctx.builder.store())
+            project_prompt_trace_projection(
+                [*state.events, *batch_events],
+                ctx.builder.store(),
+            )
         state.next_model_caused_by = next_model_parent(result_event.events)
         if result_event.staged_effect is not None and config.stop_on_staged_effect:
             staged_effect = result_event.staged_effect
@@ -301,6 +308,7 @@ async def step_tools(
         if result_event.stop:
             state.stop = "finished"
             break
+    state.events.extend(batch_events)
     state.turn += 1
     return state, RunInfo(
         kind="tools",
@@ -429,6 +437,7 @@ async def run_agent_loop(
         event_sink=event_sink,
         trace_store=trace_store,
         tool_registry=active_tool_registry,
+        tool_hosts=HostDirectory.from_registry(active_tool_registry),
         builder=builder,
         model_gateway=gateway,
         abort_reason=run_abort_reason(cancellation_event, deadline, clock=clock),
@@ -767,6 +776,7 @@ async def run_capability_step(
         event_sink=ctx.event_sink,
         trace_store=ctx.builder.store(),
         tool_registry=ctx.tool_registry,
+        tool_hosts=ctx.tool_hosts or HostDirectory.from_registry(ctx.tool_registry),
     )
     handled = handle_tool_call(
         tool_call,

@@ -307,6 +307,7 @@ def _profile_validation_diagnostic(
 ) -> ModelDiagnostic | None:
     return (
         _validate_profile_name(path, label, value)
+        or _validate_profile_model(path, label, value)
         or _validate_profile_thinking(path, label, value)
         or _validate_profile_api(path, label, value)
     )
@@ -323,6 +324,17 @@ def _validate_profile_name(
             path,
             f"{label}.name must use lowercase letters, digits, and hyphens",
         )
+    return None
+
+
+def _validate_profile_model(
+    path: Path,
+    label: str,
+    value: dict[str, Any],
+) -> ModelDiagnostic | None:
+    model = value.get("model")
+    if not isinstance(model, str) or not model.strip():
+        return ModelDiagnostic(path, f"{label}.model must be a non-empty string")
     return None
 
 

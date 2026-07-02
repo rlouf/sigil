@@ -14,8 +14,8 @@ import zeta.models.types as zeta_models_api
 from click.testing import CliRunner
 from commas.cli import cli as commas_cli
 from commas.sessions import session_dir
-from zetad.cli import cli as zeta_cli
 from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
+from zetad.cli import cli as zeta_cli
 
 from test_support.zeta_helpers import (
     DeltaSink,
@@ -785,6 +785,27 @@ model = "bad"
     assert "lowercase letters" in catalog.diagnostics[0].message
 
 
+def test_zeta_model_profiles_report_missing_model(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    write_models_config(
+        home,
+        """
+[[models]]
+name = "missing-model"
+""",
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    catalog = zeta_models.load_model_profiles()
+
+    assert catalog.profiles == {}
+    assert len(catalog.diagnostics) == 1
+    assert "model" in catalog.diagnostics[0].message
+
+
 def test_commas_model_cli_switches_model_per_session(
     tmp_path: Path,
     monkeypatch,
@@ -1164,6 +1185,63 @@ def test_zeta_stream_json_sse_accepts_missing_content_type(monkeypatch) -> None:
         '{"type":"response.output_text.delta","delta":"ok"}',
         "[DONE]",
     ]
+
+
+def test_zeta_stream_json_sse_preserves_error_body(monkeypatch) -> None:
+    class FakeStreamResponse:
+        is_error = True
+
+        def __init__(self) -> None:
+            self._content = b""
+
+        def __enter__(self) -> "FakeStreamResponse":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._content = b""
+
+        def read(self) -> bytes:
+            self._content = (
+                b'{"error":{"message":"tool schema was rejected by provider"}}'
+            )
+            return self._content
+
+        @property
+        def text(self) -> str:
+            return self._content.decode()
+
+        def raise_for_status(self) -> None:
+            request = httpx.Request("POST", "https://example.test/v1/chat")
+            response = httpx.Response(
+                400,
+                content=self._content,
+                request=request,
+            )
+            raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeClient":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def stream(self, *args: object, **kwargs: object) -> FakeStreamResponse:
+            return FakeStreamResponse()
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+
+    with pytest.raises(RuntimeError, match="tool schema was rejected"):
+        list(
+            zeta_model.stream_json_sse(
+                "https://example.test/v1/chat",
+                {"model": "test"},
+                headers={},
+            )
+        )
 
 
 def test_zeta_chat_completion_messages_accepts_request_model(monkeypatch) -> None:

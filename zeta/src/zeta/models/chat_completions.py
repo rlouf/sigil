@@ -331,6 +331,8 @@ def stream_json_sse(
                 json=body,
                 headers=request_headers,
             ) as response:
+                if getattr(response, "is_error", False):
+                    response.read()
                 response.raise_for_status()
                 yield from parse_sse_lines(response.iter_lines())
     except httpx.HTTPStatusError as exc:

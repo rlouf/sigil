@@ -247,15 +247,16 @@ class SqliteEventStore:
                 raise
 
     def get(self, event_id: str) -> Event | None:
-        row = self.connection.execute(
-            """
-            SELECT seq, id, type, source, payload, idempotency_key, caused_by,
-                   session_id, run_id, turn_id, timestamp
-            FROM events
-            WHERE id = ?
-            """,
-            (event_id,),
-        ).fetchone()
+        with self._write_lock:
+            row = self.connection.execute(
+                """
+                SELECT seq, id, type, source, payload, idempotency_key, caused_by,
+                       session_id, run_id, turn_id, timestamp
+                FROM events
+                WHERE id = ?
+                """,
+                (event_id,),
+            ).fetchone()
         return _row_to_event(row) if row is not None else None
 
     def list_events(self, filter: Filter) -> list[Event]:
@@ -287,17 +288,18 @@ class SqliteEventStore:
         if filter.limit is not None:
             limit = "LIMIT ?"
             params.append(filter.limit)
-        rows = self.connection.execute(
-            f"""
-            SELECT seq, id, type, source, payload, idempotency_key, caused_by,
-                   session_id, run_id, turn_id, timestamp
-            FROM events
-            {where}
-            ORDER BY seq ASC
-            {limit}
-            """,
-            params,
-        ).fetchall()
+        with self._write_lock:
+            rows = self.connection.execute(
+                f"""
+                SELECT seq, id, type, source, payload, idempotency_key, caused_by,
+                       session_id, run_id, turn_id, timestamp
+                FROM events
+                {where}
+                ORDER BY seq ASC
+                {limit}
+                """,
+                params,
+            ).fetchall()
         return [_row_to_event(row) for row in rows]
 
     def children(self, event_id: str, *, limit: int | None = None) -> list[Event]:
@@ -335,28 +337,29 @@ class SqliteEventStore:
         return int(cursor.rowcount)
 
     def _duplicate_for(self, event: Event) -> Event:
-        if event.idempotency_key is not None:
-            row = self.connection.execute(
-                """
-                SELECT seq, id, type, source, payload, idempotency_key, caused_by,
-                       session_id, run_id, turn_id, timestamp
-                FROM events
-                WHERE id = ? OR idempotency_key = ?
-                ORDER BY id = ? DESC
-                LIMIT 1
-                """,
-                (event.id, event.idempotency_key, event.id),
-            ).fetchone()
-        else:
-            row = self.connection.execute(
-                """
-                SELECT seq, id, type, source, payload, idempotency_key, caused_by,
-                       session_id, run_id, turn_id, timestamp
-                FROM events
-                WHERE id = ?
-                """,
-                (event.id,),
-            ).fetchone()
+        with self._write_lock:
+            if event.idempotency_key is not None:
+                row = self.connection.execute(
+                    """
+                    SELECT seq, id, type, source, payload, idempotency_key, caused_by,
+                           session_id, run_id, turn_id, timestamp
+                    FROM events
+                    WHERE id = ? OR idempotency_key = ?
+                    ORDER BY id = ? DESC
+                    LIMIT 1
+                    """,
+                    (event.id, event.idempotency_key, event.id),
+                ).fetchone()
+            else:
+                row = self.connection.execute(
+                    """
+                    SELECT seq, id, type, source, payload, idempotency_key, caused_by,
+                           session_id, run_id, turn_id, timestamp
+                    FROM events
+                    WHERE id = ?
+                    """,
+                    (event.id,),
+                ).fetchone()
         if row is None:
             raise sqlite3.IntegrityError(f"append conflict for event {event.id}")
         return _row_to_event(row)

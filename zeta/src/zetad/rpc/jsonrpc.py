@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 else:
     RpcHandler: TypeAlias = Callable[[dict[str, Any], Any], Awaitable[RpcResult]]
 
+MAX_JSONRPC_LINE_BYTES = 1024 * 1024
+
 
 @dataclass
 class RpcError(RuntimeError):
@@ -50,7 +52,19 @@ class JsonRpcConnection:
     async def serve(self, router: JsonRpcRouter) -> None:
         try:
             async with asyncio.TaskGroup() as tasks:
-                while line_bytes := await self.reader.readline():
+                while True:
+                    try:
+                        line_bytes = await self._read_line()
+                    except ValueError as exc:
+                        await self.write_error(
+                            None,
+                            -32700,
+                            "Parse error",
+                            {"message": str(exc)},
+                        )
+                        continue
+                    if line_bytes is None:
+                        break
                     if not line_bytes.strip():
                         continue
                     try:
@@ -98,6 +112,27 @@ class JsonRpcConnection:
 
     async def close(self) -> None:
         self.writer.close()
+
+    async def _read_line(self) -> bytes | None:
+        line = bytearray()
+        while True:
+            chunk = await self.reader.read(1)
+            if not chunk:
+                return bytes(line) if line else None
+            line.extend(chunk)
+            if chunk == b"\n":
+                return bytes(line)
+            if len(line) > MAX_JSONRPC_LINE_BYTES:
+                await self._discard_line()
+                raise ValueError(
+                    f"JSON-RPC line exceeds {MAX_JSONRPC_LINE_BYTES} bytes"
+                )
+
+    async def _discard_line(self) -> None:
+        while True:
+            chunk = await self.reader.read(1)
+            if not chunk or chunk == b"\n":
+                return
 
 
 class JsonRpcRouter:

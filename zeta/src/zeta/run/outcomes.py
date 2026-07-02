@@ -36,6 +36,7 @@ class StepResult:
 @dataclass(frozen=True)
 class AgentRunResult:
     final_answer: str = ""
+    stop_reason: RunStopReason | None = None
     telemetry: dict[str, Any] = field(default_factory=dict)
     events: list[DraftEvent] = field(default_factory=list)
     staged_effect: dict[str, Any] | None = None
@@ -47,6 +48,8 @@ class AgentRunResult:
 
 def agent_run_result_payload(result: AgentRunResult) -> dict[str, Any]:
     payload: dict[str, Any] = {"final_answer": result.final_answer}
+    if result.stop_reason is not None:
+        payload["stop_reason"] = result.stop_reason
     if result.events:
         payload["events"] = [asdict(event) for event in result.events]
     if result.staged_effect is not None:
@@ -92,6 +95,7 @@ class RunState:
     ) -> AgentRunResult:
         return AgentRunResult(
             final_answer=final_answer,
+            stop_reason=self.stop,
             events=self.events,
             staged_effect=staged_effect,
             answer_streamed=answer_streamed,

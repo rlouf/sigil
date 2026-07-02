@@ -105,64 +105,69 @@ class RuntimeEventStore:
         return queue_item_id
 
     def event_has_queue_item(self, event_id: str) -> bool:
-        row = self.connection.execute(
-            """
-            SELECT 1
-            FROM queue_items
-            WHERE event_id = ?
-            LIMIT 1
-            """,
-            (event_id,),
-        ).fetchone()
+        with self.events._write_lock:
+            row = self.connection.execute(
+                """
+                SELECT 1
+                FROM queue_items
+                WHERE event_id = ?
+                LIMIT 1
+                """,
+                (event_id,),
+            ).fetchone()
         return row is not None
 
     def queue_item(self, queue_item_id: str) -> dict[str, Any] | None:
-        row = self.connection.execute(
-            """
-            SELECT queue_item_id, event_id, target_agent, status
-            FROM queue_items
-            WHERE queue_item_id = ?
-            """,
-            (queue_item_id,),
-        ).fetchone()
+        with self.events._write_lock:
+            row = self.connection.execute(
+                """
+                SELECT queue_item_id, event_id, target_agent, status
+                FROM queue_items
+                WHERE queue_item_id = ?
+                """,
+                (queue_item_id,),
+            ).fetchone()
         return dict(row) if row is not None else None
 
     def list_queue_items(self) -> list[dict[str, Any]]:
-        rows = self.connection.execute(
-            """
-            SELECT queue_item_id, event_id, target_agent, status, available_at,
-                   claimed_by, claimed_until, attempt_count, last_error, updated_at
-            FROM queue_items
-            ORDER BY updated_at ASC, queue_item_id ASC
-            """
-        ).fetchall()
+        with self.events._write_lock:
+            rows = self.connection.execute(
+                """
+                SELECT queue_item_id, event_id, target_agent, status, available_at,
+                       claimed_by, claimed_until, attempt_count, last_error, updated_at
+                FROM queue_items
+                ORDER BY updated_at ASC, queue_item_id ASC
+                """
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def list_attempts(self) -> list[dict[str, Any]]:
-        rows = self.connection.execute(
-            """
-            SELECT a.attempt_id, a.queue_item_id, a.event_id, a.attempt_number,
-                   a.target_agent, a.worker_name, a.status, a.started_at,
-                   a.heartbeat_at, a.finished_at, a.error, a.session_id, a.run_id,
-                   COALESCE(a.summary, r.summary) AS summary,
-                   a.input_tokens, a.output_tokens,
-                   COALESCE(a.tool_calls_json, r.tool_calls_json) AS tool_calls_json,
-                   r.final_status, r.result_json, r.events_json, r.usage_json
-            FROM attempts a
-            LEFT JOIN attempt_results r ON r.attempt_id = a.attempt_id
-            ORDER BY a.started_at ASC, a.attempt_id ASC
-            """
-        ).fetchall()
+        with self.events._write_lock:
+            rows = self.connection.execute(
+                """
+                SELECT a.attempt_id, a.queue_item_id, a.event_id, a.attempt_number,
+                       a.target_agent, a.worker_name, a.status, a.started_at,
+                       a.heartbeat_at, a.finished_at, a.error, a.session_id, a.run_id,
+                       COALESCE(a.summary, r.summary) AS summary,
+                       a.input_tokens, a.output_tokens,
+                       COALESCE(a.tool_calls_json, r.tool_calls_json) AS tool_calls_json,
+                       r.final_status, r.result_json, r.events_json, r.usage_json
+                FROM attempts a
+                LEFT JOIN attempt_results r ON r.attempt_id = a.attempt_id
+                ORDER BY a.started_at ASC, a.attempt_id ASC
+                """
+            ).fetchall()
         return [_row_to_attempt(row) for row in rows]
 
     def list_locks(self) -> list[dict[str, Any]]:
-        rows = self.connection.execute(
-            """
-            SELECT key, owner, acquired_at, expires_at
-            FROM locks
-            ORDER BY key ASC
-            """
-        ).fetchall()
+        with self.events._write_lock:
+            rows = self.connection.execute(
+                """
+                SELECT key, owner, acquired_at, expires_at
+                FROM locks
+                ORDER BY key ASC
+                """
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def acquire_locks(
@@ -235,6 +240,40 @@ class RuntimeEventStore:
             )
             self.connection.commit()
         return int(cursor.rowcount)
+
+    def renew_locks(
+        self,
+        keys: Iterable[str],
+        owner: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        requested = tuple(dict.fromkeys(keys))
+        if not requested:
+            return True
+        placeholders = _sql_placeholders(requested)
+        with self.events._write_lock:
+            _execute_with_retry(self.connection, "BEGIN IMMEDIATE")
+            try:
+                cursor = self.connection.execute(
+                    f"""
+                    UPDATE locks
+                    SET expires_at = ?
+                    WHERE owner = ?
+                      AND key IN ({placeholders})
+                      AND expires_at >= ?
+                    """,
+                    (now_ms + lease_ms, owner, *requested, now_ms),
+                )
+                if cursor.rowcount != len(requested):
+                    self.connection.rollback()
+                    return False
+                self.connection.commit()
+                return True
+            except Exception:
+                self.connection.rollback()
+                raise
 
     def reconcile_expired_locks(self, *, now_ms: int) -> int:
         with self.events._write_lock:
@@ -418,18 +457,19 @@ class RuntimeEventStore:
         worker_name: str,
         claim_token: str,
     ) -> bool:
-        row = self.connection.execute(
-            """
-            SELECT 1
-            FROM queue_items
-            WHERE queue_item_id = ?
-              AND claimed_by = ?
-              AND claimed_token = ?
-              AND status = 'claimed'
-            LIMIT 1
-            """,
-            (queue_item_id, worker_name, claim_token),
-        ).fetchone()
+        with self.events._write_lock:
+            row = self.connection.execute(
+                """
+                SELECT 1
+                FROM queue_items
+                WHERE queue_item_id = ?
+                  AND claimed_by = ?
+                  AND claimed_token = ?
+                  AND status = 'claimed'
+                LIMIT 1
+                """,
+                (queue_item_id, worker_name, claim_token),
+            ).fetchone()
         return row is not None
 
     def reconcile_expired_queue_claims(self, *, now_ms: int) -> int:

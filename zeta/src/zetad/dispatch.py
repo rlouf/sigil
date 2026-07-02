@@ -88,6 +88,21 @@ class AttemptHeartbeatStore(Protocol):
 
 
 @runtime_checkable
+class LockRenewalStore(Protocol):
+    """Operational lock index used to keep mutual-exclusion leases alive."""
+
+    def renew_locks(
+        self,
+        keys: Iterable[str],
+        owner: str,
+        *,
+        lease_ms: int,
+        now_ms: int,
+    ) -> bool:
+        """Refresh held mutual-exclusion locks for a running queue item."""
+
+
+@runtime_checkable
 class QueueClaimOwnershipStore(Protocol):
     """Operational queue index used to fence lifecycle writes."""
 
@@ -348,7 +363,11 @@ class EventDispatcher:
                 run_id=run_id,
             )
         )
-        heartbeat_task = self._start_attempt_heartbeat(attempt_id, queue_item_id)
+        heartbeat_task = self._start_attempt_heartbeat(
+            attempt_id,
+            queue_item_id,
+            agent.definition.lock_keys,
+        )
         try:
             try:
                 result = await agent.run(
@@ -420,6 +439,7 @@ class EventDispatcher:
         self,
         attempt_id: str,
         queue_item_id: str,
+        lock_keys: Iterable[str] = (),
     ) -> asyncio.Task[None] | None:
         if (
             self.worker_name is None
@@ -430,7 +450,12 @@ class EventDispatcher:
         ):
             return None
         return asyncio.create_task(
-            self._heartbeat_attempt(self.event_sink, attempt_id, queue_item_id)
+            self._heartbeat_attempt(
+                self.event_sink,
+                attempt_id,
+                queue_item_id,
+                tuple(lock_keys),
+            )
         )
 
     async def _stop_attempt_heartbeat(
@@ -448,6 +473,7 @@ class EventDispatcher:
         store: AttemptHeartbeatStore,
         attempt_id: str,
         queue_item_id: str,
+        lock_keys: tuple[str, ...],
     ) -> None:
         if self.worker_name is None or self.heartbeat_interval_seconds is None:
             return
@@ -455,14 +481,22 @@ class EventDispatcher:
             return
         while True:
             await asyncio.sleep(self.heartbeat_interval_seconds)
-            store.heartbeat_attempt(
+            now_ms = current_time_ms()
+            heartbeat_current = store.heartbeat_attempt(
                 attempt_id,
                 queue_item_id,
                 self.worker_name,
                 claim_token=self.claim_token,
                 lease_ms=self.lease_ms,
-                now_ms=current_time_ms(),
+                now_ms=now_ms,
             )
+            if heartbeat_current and lock_keys and isinstance(store, LockRenewalStore):
+                store.renew_locks(
+                    lock_keys,
+                    self.claim_token,
+                    lease_ms=self.lease_ms,
+                    now_ms=now_ms,
+                )
 
     def _executor_for_id(self, agent_id: str) -> ExecutableAgent | None:
         for executor in self.executors:

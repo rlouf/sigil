@@ -24,6 +24,7 @@ from zeta.agents.manifest import ManifestError
 from zeta.capabilities.execution import (
     InProcessCapabilityExecutor,
 )
+from zeta.capabilities.host import HostDirectory
 from zeta.capabilities.registry import CapabilityRegistry, RegisteredCapability
 from zeta.capabilities.types import (
     Capability,
@@ -1313,6 +1314,54 @@ def test_zeta_step_pending_tools_returns_info_and_clears_pending_tools() -> None
     assert projected[1]["model_telemetry"] == {"usage": {"input_tokens": 3}}
 
 
+def test_zeta_step_tools_does_not_commit_partial_batch_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_capability_step(*args: object, **kwargs: object) -> object:
+        tool_call = args[0]
+        if isinstance(tool_call, dict) and tool_call.get("id") == "call-2":
+            raise RuntimeError("tool batch interrupted")
+        return zeta_capability_execution.CapabilityCallResult(
+            events=[
+                zeta_events.DraftEvent(
+                    "tool_result",
+                    "zeta",
+                    {"tool_call_id": "call-1", "result": {"ok": True}},
+                )
+            ]
+        )
+
+    monkeypatch.setattr(zeta_agent, "run_capability_step", fake_run_capability_step)
+    registry = CapabilityRegistry()
+    state = zeta_agent.RunState(
+        pending_tool_calls=[
+            *tool_call_fixture("call-1", name="read", path="README.md"),
+            *tool_call_fixture("call-2", name="read", path="README.md"),
+        ],
+        pending_tool_parent_id="assistant-1",
+    )
+    ctx = zeta_agent.RunDependencies(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        builder=zeta_context.PromptBuilder(store=zeta_trace.InMemoryStore()),
+        abort_reason=never_abort,
+    )
+
+    with pytest.raises(RuntimeError, match="tool batch interrupted"):
+        asyncio.run(
+            zeta_agent.step_tools(
+                state,
+                config=zeta_agent.AgentConfig(),
+                allowed_capabilities=(),
+                tool_schema=registry.model_tool_schema(()),
+                ctx=ctx,
+            )
+        )
+
+    assert state.events == []
+
+
 def test_zeta_record_assistant_step_links_output_to_prompt() -> None:
     store = zeta_trace.InMemoryStore()
     state = zeta_agent.RunState()
@@ -1426,6 +1475,116 @@ def test_zeta_run_capability_step_records_call_execution_and_result(
             "time": projected[1]["time"],
         },
     ]
+
+
+def test_zeta_run_capability_step_dispatches_to_injected_host() -> None:
+    state = zeta_agent.RunState()
+    calls: list[tuple[str, dict[str, Any], str]] = []
+    registry = CapabilityRegistry()
+
+    def fail_in_process(_params: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("registry executor should not run")
+
+    capability = RegisteredCapability(
+        Capability(
+            CapabilityId("test", "read"),
+            "Read fixture.",
+            {"type": "object"},
+        ),
+        InProcessCapabilityExecutor(fail_in_process),
+    )
+    registry.register(capability)
+
+    class FakeHost:
+        declarations = (capability,)
+        closed = False
+
+        async def call(
+            self,
+            capability_id: str,
+            params: dict[str, Any],
+            mode: str,
+            ctx: object,
+        ) -> dict[str, Any]:
+            del ctx
+            calls.append((capability_id, params, mode))
+            return {"ok": True, "content": [{"type": "text", "text": "host"}]}
+
+    hosts = HostDirectory()
+    hosts.register_host(FakeHost())
+    allowed_capabilities = ("test.read",)
+    ctx = zeta_agent.RunDependencies(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        tool_hosts=hosts,
+        builder=zeta_context.PromptBuilder(),
+        abort_reason=never_abort,
+    )
+
+    result = asyncio.run(
+        zeta_agent.run_capability_step(
+            {
+                "id": "call-1",
+                "function": {"name": "read", "arguments": '{"path": "README.md"}'},
+            },
+            index=0,
+            config=zeta_agent.AgentConfig(execution_mode="direct"),
+            allowed_capabilities=allowed_capabilities,
+            tool_schema=registry.model_tool_schema(allowed_capabilities),
+            model_telemetry={},
+            assistant_event_id="assistant-1",
+            state=state,
+            ctx=ctx,
+        )
+    )
+
+    assert calls == [("test.read", {"path": "README.md"}, "direct")]
+    projected = timeline_events(result.events)
+    assert projected[-1]["type"] == "tool_result"
+    assert projected[-1]["result"] == {
+        "ok": True,
+        "content": [{"type": "text", "text": "host"}],
+    }
+
+
+def test_zeta_run_capability_step_records_unknown_tool_when_no_host_serves_call() -> None:
+    state = zeta_agent.RunState()
+    registry = CapabilityRegistry()
+    capability = _test_capability("read")
+    registry.register(capability)
+    allowed_capabilities = ("test.read",)
+    ctx = zeta_agent.RunDependencies(
+        event_sink=None,
+        trace_store=None,
+        tool_registry=registry,
+        tool_hosts=HostDirectory(),
+        builder=zeta_context.PromptBuilder(),
+        abort_reason=never_abort,
+    )
+
+    result = asyncio.run(
+        zeta_agent.run_capability_step(
+            {"id": "call-1", "function": {"name": "read", "arguments": "{}"}},
+            index=0,
+            config=zeta_agent.AgentConfig(execution_mode="direct"),
+            allowed_capabilities=allowed_capabilities,
+            tool_schema=registry.model_tool_schema(allowed_capabilities),
+            model_telemetry={},
+            assistant_event_id="assistant-1",
+            state=state,
+            ctx=ctx,
+        )
+    )
+
+    projected = timeline_events(result.events)
+    assert projected[-1]["type"] == "tool_result"
+    assert projected[-1]["status"] == "refused"
+    assert projected[-1]["result"]["error"] == {
+        "code": "unknown-tool",
+        "message": "unknown tool: test.read",
+        "data": {"capability_id": "test.read"},
+    }
 
 
 def test_zeta_run_capability_step_reconciles_existing_terminal_result(
@@ -1644,6 +1803,65 @@ def test_zeta_rpc_initialize_returns_server_metadata() -> None:
             "result": {"server": "zeta", "protocol": "0.1"},
         }
     ]
+
+
+def test_zeta_rpc_oversized_line_returns_parse_error_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeWriter:
+        def __init__(self) -> None:
+            self.buffer = bytearray()
+            self.closed = False
+
+        def write(self, data: bytes | bytearray | memoryview) -> None:
+            self.buffer.extend(data)
+
+        async def drain(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    async def initialize(
+        params: dict[str, Any],
+        client: object,
+    ) -> dict[str, Any]:
+        del params, client
+        return {"server": "zeta", "protocol": "0.1"}
+
+    async def run_case() -> list[dict[str, Any]]:
+        reader = asyncio.StreamReader(limit=32)
+        reader.feed_data(
+            (
+                '{"jsonrpc":"2.0","id":1,"method":"'
+                + ("x" * 128)
+                + '"}\n'
+            ).encode()
+        )
+        reader.feed_data(
+            (
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "initialize"})
+                + "\n"
+            ).encode()
+        )
+        reader.feed_eof()
+        writer = FakeWriter()
+        connection = zetad_jsonrpc.JsonRpcConnection(reader, cast(Any, writer))
+        client = SimpleNamespace(connection=connection)
+        router = zetad_jsonrpc.JsonRpcRouter(cast(Any, client))
+        router.route("initialize", initialize)
+
+        await connection.serve(router)
+        return [json.loads(line) for line in writer.buffer.decode().splitlines()]
+
+    monkeypatch.setattr(zetad_jsonrpc, "MAX_JSONRPC_LINE_BYTES", 64)
+    messages = asyncio.run(run_case())
+    assert messages[0]["error"]["code"] == -32700
+    assert {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {"server": "zeta", "protocol": "0.1"},
+    } in messages
 
 
 def test_zeta_rpc_unknown_method_returns_structured_error() -> None:
@@ -4348,6 +4566,42 @@ def test_zeta_sqlite_event_store_reconciles_and_reacquires_expired_locks(
     assert event_store.list_locks() == []
 
 
+def test_zeta_sqlite_event_store_renews_locks(tmp_path: Path) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    assert event_store.acquire_locks(
+        ["context:repo"],
+        "claim-token",
+        lease_ms=1_000,
+        now_ms=10_000,
+    )
+
+    assert event_store.renew_locks(
+        ["context:repo"],
+        "claim-token",
+        lease_ms=1_000,
+        now_ms=10_500,
+    )
+    assert event_store.list_locks()[0]["expires_at"] == 11_500
+    assert (
+        event_store.renew_locks(
+            ["context:repo"],
+            "other-token",
+            lease_ms=1_000,
+            now_ms=10_600,
+        )
+        is False
+    )
+    assert (
+        event_store.renew_locks(
+            ["context:repo"],
+            "claim-token",
+            lease_ms=1_000,
+            now_ms=11_501,
+        )
+        is False
+    )
+
+
 def test_zeta_cli_queue_json_projects_runtime_queue(tmp_path: Path) -> None:
     state_dir = tmp_path / ".zeta"
     event_store = zeta_events.SqliteEventStore(event_store_path(state_dir))
@@ -5004,7 +5258,7 @@ def test_zeta_local_runtime_builds_project_services(tmp_path: Path) -> None:
         assert runtime.project_root == tmp_path.resolve()
         assert runtime.state_dir == tmp_path.resolve() / ".zeta"
         assert runtime.events.path == event_store_path(runtime.state_dir)
-        assert runtime.tool_registry.get("commas.read") is None
+        assert runtime.tool_registry.get("zeta.read") is None
     finally:
         runtime.close()
 
@@ -5052,7 +5306,7 @@ def test_zeta_local_runtime_accepts_explicit_tool_registry(tmp_path: Path) -> No
 
     try:
         assert runtime.tool_registry is registry
-        assert runtime.tool_registry.get("commas.read") is None
+        assert runtime.tool_registry.get("zeta.read") is None
     finally:
         runtime.close()
 
@@ -5090,7 +5344,7 @@ def test_zeta_cli_run_registers_builtin_tools(
     )
 
     assert result.exit_code == 0
-    assert captured["tool_registry"].get("commas.write") is not None
+    assert captured["tool_registry"].get("zeta.write") is not None
 
 
 def test_zeta_local_runtime_run_once_executes_available_queue_item(
@@ -5578,6 +5832,55 @@ def test_zeta_local_runtime_heartbeats_running_attempt(
     assert int(attempt["heartbeat_at"]) >= heartbeat_rows[0]["heartbeat_at"]
     assert int(queue_item["claimed_until"]) >= heartbeat_rows[0]["claimed_until"]
     assert queue_item["claimed_by"] == "local-runtime"
+
+
+def test_zeta_local_runtime_heartbeats_running_locks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_store = zeta_events.SqliteEventStore(tmp_path / "events.sqlite3")
+    accepted = event_store.accept(
+        zeta_events.DraftEvent("github.issue.opened", "github", {})
+    ).event
+    renewed_locks: list[dict[str, int]] = []
+
+    async def run_agent(run: zetad_dispatch.AgentInvocation) -> dict[str, object]:
+        deadline = asyncio.get_running_loop().time() + 1
+        initial_expires_at: int | None = None
+        while asyncio.get_running_loop().time() < deadline:
+            locks = event_store.list_locks()
+            if locks:
+                expires_at = int(locks[0]["expires_at"])
+                if initial_expires_at is None:
+                    initial_expires_at = expires_at
+                elif expires_at > initial_expires_at:
+                    renewed_locks.append({"expires_at": expires_at})
+                    return {"event_id": run.triggering_event.id}
+            await asyncio.sleep(0.005)
+        raise AssertionError("lock lease was not refreshed")
+
+    agent = zetad_dispatch.ExecutableAgent(
+        zetad_dispatch.AgentDefinition(
+            "issue-triage",
+            (zetad_dispatch.EventPattern("github.issue.opened"),),
+            lock_keys=("context:repo",),
+        ),
+        run=run_agent,
+    )
+    monkeypatch.setattr(zetad_worker, "project_executors", lambda _runtime: (agent,))
+    runtime = zetad_worker.WorkerServices(
+        project_root=tmp_path,
+        state_dir=tmp_path,
+        events=event_store,
+    )
+    monkeypatch.setattr(zetad_worker, "ATTEMPT_HEARTBEAT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(zetad_worker, "QUEUE_LEASE_MS", 1_000)
+
+    message = asyncio.run(zetad_worker.run_once(runtime))
+
+    assert message == f"ran qi_{accepted.id}"
+    assert renewed_locks
+    assert event_store.list_locks() == []
 
 
 def test_zeta_local_runtime_does_not_complete_stale_queue_claim(
@@ -7406,8 +7709,8 @@ def test_zeta_agent_turn_runs_multiple_read_only_tools_in_order(monkeypatch) -> 
     )
 
     assert ran == [
-        ("commas.read", {"path": "README.md"}),
-        ("commas.ls", {"path": "src"}),
+        ("zeta.read", {"path": "README.md"}),
+        ("zeta.ls", {"path": "src"}),
     ]
     assert result.final_answer == "done"
     assert [
@@ -7786,6 +8089,50 @@ def test_zeta_agent_turn_stops_after_staged_effect(
     assert requests == 1
     assert result.final_answer == ""
     assert result.staged_effect is None
+    assert [event["type"] for event in timeline_events(result.events)] == [
+        "model",
+        "tool_call",
+        "tool_result",
+    ]
+
+
+def test_zeta_agent_turn_reports_max_turns_exhaustion(monkeypatch) -> None:
+    registry = CapabilityRegistry()
+    registry.register(_test_capability("inspect"))
+
+    def fake_chat_completion_messages(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        return {
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "inspect", "arguments": "{}"},
+                }
+            ]
+        }
+
+    monkeypatch.setattr(zeta_model, "model_endpoint_open", lambda: True)
+    monkeypatch.setattr(
+        zeta_models_api,
+        "chat_completion_messages",
+        fake_chat_completion_messages,
+    )
+
+    result = run_agent_turn(
+        "inspect",
+        [],
+        zeta_agent.AgentConfig(
+            allowed_capabilities=("inspect",),
+            max_turns=1,
+        ),
+        tool_registry=registry,
+    )
+
+    assert result.stop_reason == "max_turns"
+    assert result.final_answer == ""
     assert [event["type"] for event in timeline_events(result.events)] == [
         "model",
         "tool_call",

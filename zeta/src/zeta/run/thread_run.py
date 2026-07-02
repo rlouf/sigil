@@ -216,7 +216,11 @@ async def run_session_request(
             runtime_context=runtime_context,
         )
     return _session_result(
-        _session_outcome(result.staged_effect, result.final_answer),
+        _session_outcome(
+            result.staged_effect,
+            result.final_answer,
+            stop_reason=result.stop_reason,
+        ),
         result.final_answer,
         run_id=run_id,
         runtime_context=runtime_context,
@@ -259,8 +263,17 @@ def _session_result(
     return result
 
 
-def _session_outcome(staged_effect: dict[str, Any] | None, final_answer: str) -> str:
+def _session_outcome(
+    staged_effect: dict[str, Any] | None,
+    final_answer: str,
+    *,
+    stop_reason: str | None = None,
+) -> str:
     del final_answer
+    if stop_reason == "max_turns":
+        return "max_turns"
+    if stop_reason == "aborted":
+        return "aborted"
     if staged_effect is not None:
         return "staged"
     return "completed"
