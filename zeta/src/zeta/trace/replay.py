@@ -12,20 +12,26 @@ from zeta.models.profiles import (
 from zeta.models.types import ModelOutput
 from zeta.records.objects import Derivation, Object, ObjectId
 from zeta.records.stores.object_store import Store, warn_trace_failure_once
+from pathlib import Path
 
-from commas.display.summarize import (
+from zeta.run.context import zeta_state_dir
+from zeta.trace.summarize import (
     assistant_trace_message,
     assistant_trace_summary,
     short_trace_id,
 )
 
 
-def replay_model_selection(model_profile: str | None) -> ModelSelection:
+def replay_model_selection(
+    model_profile: str | None,
+    *,
+    session_dir: Path | None = None,
+) -> ModelSelection:
     """Return the model a replay should use, honoring --model."""
     if model_profile is None:
-        from commas.sessions import session_dir
-
-        return resolve_active_model(session_dir=session_dir()).selection
+        return resolve_active_model(
+            session_dir=session_dir or zeta_state_dir() / "sessions" / "default"
+        ).selection
     selection = resolve_model_profile(model_profile)
     if selection is None:
         raise click.ClickException(f"unknown model profile: {model_profile}")

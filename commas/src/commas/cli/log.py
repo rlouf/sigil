@@ -192,7 +192,7 @@ def cmd_log_show(turn_id: str, json_output: bool) -> int:
     """Show one turn in full: objective, contract, model, cost, effects.
 
     Effects carry content hashes, and the listed prompt ids feed
-    `commas trace show`. TURN_ID may be a full id or a unique prefix.
+    `zeta trace show`. TURN_ID may be a full id or a unique prefix.
     """
     from commas.display.summarize import render_turn_record
     from commas.state import history_view

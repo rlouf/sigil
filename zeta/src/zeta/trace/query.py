@@ -11,7 +11,7 @@ from zeta.records.stores.object_store import (
     resolve_object_id,
 )
 
-from commas.display.summarize import estimated_prompt_tokens
+from zeta.trace.summarize import estimated_prompt_tokens
 
 
 def resolve_cli_object_id(token: str, *, store: Store) -> ObjectId:

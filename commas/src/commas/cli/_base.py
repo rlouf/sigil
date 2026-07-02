@@ -39,7 +39,6 @@ COMMAND_MODULES = {
     "ask": "commas.cli.step",
     "blame": "commas.cli.log",
     "doctor": "commas.cli.install",
-    "events": "commas.cli.events",
     "install": "commas.cli.install",
     "log": "commas.cli.log",
     "model": "commas.cli.model",
@@ -47,7 +46,6 @@ COMMAND_MODULES = {
     "session": "commas.cli.session",
     "status": "commas.cli.status",
     "step": "commas.cli.step",
-    "trace": "commas.cli.trace",
 }
 
 
@@ -96,8 +94,6 @@ def cli(ctx: click.Context) -> None:
       commas install          install zsh glyph bindings
       commas doctor           check install, shell, state, and model endpoint
       commas status           show current session status
-      commas events           inspect recent Commas activity
-
     Use "commas COMMAND --help" for command-specific options.
     """
     if ctx.invoked_subcommand is None:
@@ -128,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
         if type(error).__name__ == "IncompatibleSchemaError":
             click.echo(f"commas: {error}", err=True)
             click.echo(
-                "Run `commas trace reinit-store --yes` to recreate the local store.",
+                "Run `zeta trace reinit-store --yes` to recreate the local store.",
                 err=True,
             )
             return EXIT_ERROR

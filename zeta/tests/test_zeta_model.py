@@ -14,6 +14,7 @@ import zeta.models.types as zeta_models_api
 from click.testing import CliRunner
 from commas.cli import cli as commas_cli
 from commas.sessions import session_dir
+from zetad.cli import cli as zeta_cli
 from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
 
 from test_support.zeta_helpers import (
@@ -808,14 +809,8 @@ url = "http://127.0.0.1:8081/v1/chat/completions"
     assert "model: fast -> fast-model" in use.output
     assert zeta_models.active_model_profile(session_dir=session_dir()) == "fast"
 
-    show = CliRunner().invoke(commas_cli, ["model", "show"])
-    assert show.exit_code == 0, show.output
-    assert "model: fast -> fast-model" in show.output
-
     monkeypatch.setenv("COMMAS_SESSION_ID", "two")
-    other_session = CliRunner().invoke(commas_cli, ["model", "show"])
-    assert other_session.exit_code == 0, other_session.output
-    assert "model: default ->" in other_session.output
+    assert zeta_models.active_model_profile(session_dir=session_dir()) is None
 
     monkeypatch.setenv("COMMAS_SESSION_ID", "one")
     clear = CliRunner().invoke(commas_cli, ["model", "clear"])
@@ -1715,7 +1710,7 @@ model = "fast-model"
     )
     monkeypatch.setenv("HOME", str(home))
 
-    result = CliRunner().invoke(commas_cli, ["model", "list"])
+    result = CliRunner().invoke(zeta_cli, ["model", "list"])
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
@@ -1744,10 +1739,11 @@ model = "fast-model"
 """,
     )
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("COMMAS_SESSION_ID", "list-active-session")
-    zeta_models.set_active_model_profile("fast", session_dir=session_dir())
+    monkeypatch.setenv("ZETA_STATE_DIR", str(tmp_path / ".zeta"))
+    monkeypatch.setenv("ZETA_SESSION_ID", "list-active-session")
+    zeta_models.set_active_model_profile("fast")
 
-    result = CliRunner().invoke(commas_cli, ["model", "list"])
+    result = CliRunner().invoke(zeta_cli, ["model", "list"])
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
@@ -1774,7 +1770,7 @@ default = true
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("COMMAS_SESSION_ID", "show-source-session")
 
-    result = CliRunner().invoke(commas_cli, ["model", "show"])
+    result = CliRunner().invoke(zeta_cli, ["model", "show"])
 
     assert result.exit_code == 0, result.output
     assert (

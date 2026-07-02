@@ -91,9 +91,9 @@ command selects a profile for the current shell session, not for a project
 worker:
 
 ```sh
-commas model list
+zeta model list
 commas model use fast
-commas model show
+zeta model show
 commas model clear
 ```
 
@@ -446,30 +446,25 @@ Runtime events use the following prefixes:
 
 Runtime events answer "what happened?" Prompt traces answer "what exactly did
 the model see?" They are stored in `.zeta/zeta.sqlite3`, scoped by session id.
-The trace inspector currently lives under the Commas CLI. By default, Commas trace
-commands read `~/.zeta`; point them at a project runtime by setting
-`ZETA_STATE_DIR` to the same state directory used by `zeta run`.
 
 ```sh
-export ZETA_STATE_DIR=.zeta
-
 # List recent prompts and assistant messages across agent sessions.
-commas trace log --all-sessions
+zeta trace log --all-sessions
 
 # List failed or successful tool calls.
-commas trace tools --failed --all-sessions
-commas trace tools --successful --json --all-sessions
+zeta trace tools --failed --all-sessions
+zeta trace tools --successful --json --all-sessions
 
 # Inspect one agent session.
-commas trace --session agent/issue-triage log
-commas trace --session agent/issue-triage show 4f9d01c2
-commas trace --session agent/issue-triage tree 4f9d01c2 --down
+zeta trace --session agent/issue-triage log
+zeta trace --session agent/issue-triage show 4f9d01c2
+zeta trace --session agent/issue-triage tree 4f9d01c2 --down
 
 # Compare two prompts component by component.
-commas trace --session agent/issue-triage diff A B --stat
+zeta trace --session agent/issue-triage diff A B --stat
 
 # Rebuild and resend a stored prompt.
-commas trace --session agent/issue-triage replay PROMPT_ID --model fast --diff
+zeta trace --session agent/issue-triage replay PROMPT_ID --model fast --diff
 ```
 
 Every trace id argument accepts a full id, a unique prefix, or a ref such as
@@ -541,13 +536,14 @@ The regular CLI remains available without glyphs:
 commas ask [QUESTION]
 commas status [--json]
 commas log [--touched PATH] [--workflow W] [--since T] [--failed] [--session ID] [--cost] [--json]
-commas events [--limit N] [--json] [--raw]
 commas session [show|path|list|clear|transcript] [--json]
-commas model [list|use|show|clear]
-commas trace [--session ID] [log|tools|grep|show|tree|closure|refs|prompts|diff|replay]
+commas model [use|clear]
 commas install [--install-dir DIR] [--rc FILE] [--glyphs|--no-glyphs]
 commas doctor [--json]
 ```
+
+Runtime state is inspected with `zeta`: use `zeta events`, `zeta trace`, and
+`zeta model list/show`.
 
 Commas writes shell frontend state under `~/.commas/` by default. Zeta authored
 agents write project runtime state under `.zeta/` by default.

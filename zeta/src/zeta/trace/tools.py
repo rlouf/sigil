@@ -7,7 +7,7 @@ from zeta.records.objects import Object, ObjectId
 from zeta.records.stores.object_store import Store
 from zeta.records.stores.sqlite import SqliteObjectStore
 
-from commas.display.summarize import truncate
+from zeta.trace.summarize import truncate
 
 
 def tool_failure_detail(row: dict[str, Any]) -> str:

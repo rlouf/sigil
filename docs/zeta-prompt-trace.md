@@ -369,14 +369,14 @@ components and verified by its stored hash.
 The graph is inspectable and exercisable from the CLI:
 
 ```text
-commas trace log
-commas trace show OBJECT_ID
-commas trace tree OBJECT_ID [--down]
-commas trace closure OBJECT_ID
-commas trace diff OLD_PROMPT NEW_PROMPT [--stat]
-commas trace replay PROMPT_ID [--model PROFILE] [--diff]
-commas trace refs
-commas trace prompts
+zeta trace log
+zeta trace show OBJECT_ID
+zeta trace tree OBJECT_ID [--down]
+zeta trace closure OBJECT_ID
+zeta trace diff OLD_PROMPT NEW_PROMPT [--stat]
+zeta trace replay PROMPT_ID [--model PROFILE] [--diff]
+zeta trace refs
+zeta trace prompts
 ```
 
 `trace diff` is the component-level comparison this design makes cheap:

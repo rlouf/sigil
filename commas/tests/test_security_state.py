@@ -71,6 +71,7 @@ from zetad.queue import (
     queue_item_event_payload,
     queue_item_from_event_payload,
 )
+from zetad.cli import cli as zeta_cli
 
 from test_support.patch import patch, patch_dict
 from test_support.zeta_helpers import record_durable_timeline_event
@@ -389,7 +390,6 @@ def test_top_level_help_lists_commands() -> None:
     for command in [
         "ask",
         "doctor",
-        "events",
         "install",
         "session",
         "status",
@@ -457,9 +457,11 @@ def test_doctor_help_states_the_exit_contract() -> None:
     assert "Exits 1" in result.output
 
 
-def test_trace_group_help_explains_id_resolution() -> None:
+def test_commas_trace_command_is_removed() -> None:
     result = CliRunner().invoke(cli, ["trace", "--help"])
-    assert "unique prefix" in " ".join(result.output.split())
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
 HEAVY_MODULES_PROBE = (
@@ -1307,210 +1309,102 @@ def test_sqlite_event_store_accepts_events_without_idempotency_keys(
     assert inserted.inserted is True
 
 
-def test_events_default_lists_recent_events() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
-        old_session_id = os.environ.get("COMMAS_SESSION_ID")
-        os.environ["COMMAS_STATE_DIR"] = tmp
-        os.environ["COMMAS_SESSION_ID"] = "test"
-        try:
-            first = append_event({"type": "first"})
-            second = append_event(
-                {
-                    "type": "failure_recorded",
-                    "glyph": ",,",
-                    "command": "git status --short",
-                    "status": 0,
-                }
-            )
-            text = CliRunner().invoke(cli, ["events", "--limit", "1"])
-            listed = CliRunner().invoke(cli, ["events", "--json"])
-            raw = CliRunner().invoke(cli, ["events", "--json", "--raw"])
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("COMMAS_STATE_DIR", None)
-            else:
-                os.environ["COMMAS_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("COMMAS_SESSION_ID", None)
-            else:
-                os.environ["COMMAS_SESSION_ID"] = old_session_id
+def test_commas_events_command_is_removed() -> None:
+    result = CliRunner().invoke(cli, ["events", "--help"])
 
-    assert text.exit_code == 0, text.output
-    assert text.output.splitlines()[0].split() == [
-        "time",
-        "workflow",
-        "event",
-        "session",
-        "detail",
-    ]
-    assert second.id[:8] not in text.output
-    assert ",,        failure recorded" in text.output
-    assert "git status --short -> 0" in text.output
-    assert first.id not in text.output
-    assert listed.exit_code == 0, listed.output
-    summaries = json.loads(listed.output)
-    assert [event["type"] for event in summaries] == [
-        "first",
-        "failure_recorded",
-    ]
-    assert summaries[-1]["short_id"] == second.id[:8]
-    assert summaries[-1]["workflow"] == ",,"
-    assert summaries[-1]["event"] == "failure recorded"
-    assert summaries[-1]["detail"] == "git status --short -> 0"
-    assert raw.exit_code == 0, raw.output
-    raw_events = json.loads(raw.output)
-    assert raw_events[0]["type"] == "first"
-    assert raw_events[0]["source"] == "commas"
-    assert raw_events[0]["session_id"] == "test"
-    assert raw_events[0]["payload"]["cwd"]
-    assert raw_events[1]["payload"]["command"] == "git status --short"
-    assert "short_id" not in raw_events[0]
-    assert "command" not in raw_events[1]
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
-def test_events_list_subcommand_filters_by_session() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
-        ):
-            append_event({"type": "alpha", "session": "s1", "content": "one"})
-            append_event({"type": "beta", "session": "s2", "content": "two"})
+def test_zeta_events_causality_subcommands(tmp_path: Path) -> None:
+    store = SqliteEventStore(event_store_path(tmp_path / ".zeta"))
+    try:
+        prompt = store.accept(
+            DraftEvent(
+                "zeta.prompt.submitted",
+                "test",
+                {},
+                turn_id="turn-1",
+            )
+        ).event
+        model = store.accept(
+            DraftEvent(
+                "zeta.model_call.completed",
+                "test",
+                {},
+                caused_by=prompt.id,
+                turn_id="turn-1",
+            )
+        ).event
+        tool = store.accept(
+            DraftEvent(
+                "zeta.tool_call.completed",
+                "test",
+                {},
+                caused_by=model.id,
+                turn_id="turn-1",
+            )
+        ).event
+        turn_event = store.accept(
+            DraftEvent(
+                "zeta.turn.completed",
+                "test",
+                {},
+                caused_by=tool.id,
+                turn_id="turn-1",
+            )
+        ).event
+    finally:
+        store.close()
 
-            result = CliRunner().invoke(
-                cli,
-                ["events", "list", "--session", "s2", "--json"],
-            )
-
-    assert result.exit_code == 0, result.output
-    events = json.loads(result.output)
-    assert [event["type"] for event in events] == ["beta"]
-    assert events[0]["session"] == "s2"
-
-
-def test_events_causality_subcommands() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch_dict(
-            os.environ,
-            {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
-        ):
-            append_event(
-                {
-                    "id": "prompt-event",
-                    "type": "zeta.prompt.submitted",
-                    "turn_id": "turn-1",
-                    "time": 1.0,
-                }
-            )
-            append_event(
-                {
-                    "id": "model-event",
-                    "type": "zeta.model_call.completed",
-                    "turn_id": "turn-1",
-                    "caused_by": "prompt-event",
-                    "time": 2.0,
-                }
-            )
-            append_event(
-                {
-                    "id": "tool-event",
-                    "type": "zeta.tool_call.completed",
-                    "turn_id": "turn-1",
-                    "caused_by": "model-event",
-                    "time": 3.0,
-                }
-            )
-            append_event(
-                {
-                    "id": "turn-event",
-                    "type": "zeta.turn.completed",
-                    "turn_id": "turn-1",
-                    "caused_by": "tool-event",
-                    "time": 4.0,
-                }
-            )
-
-            trace = CliRunner().invoke(cli, ["events", "trace", "turn-event", "--json"])
-            root = CliRunner().invoke(cli, ["events", "root", "turn-event", "--json"])
-            descendants = CliRunner().invoke(
-                cli, ["events", "descendants", "prompt-event", "--json"]
-            )
-            turn = CliRunner().invoke(cli, ["events", "turn", "turn-1", "--json"])
-            raw = CliRunner().invoke(
-                cli, ["events", "trace", "turn-event", "--json", "--raw"]
-            )
+    common = ["--state-dir", str(tmp_path / ".zeta")]
+    trace = CliRunner().invoke(
+        zeta_cli, ["events", "trace", *common, turn_event.id, "--json"]
+    )
+    root = CliRunner().invoke(
+        zeta_cli, ["events", "root", *common, turn_event.id, "--json"]
+    )
+    descendants = CliRunner().invoke(
+        zeta_cli, ["events", "descendants", *common, prompt.id, "--json"]
+    )
+    turn = CliRunner().invoke(
+        zeta_cli, ["events", "turn", *common, "turn-1", "--json"]
+    )
+    raw = CliRunner().invoke(
+        zeta_cli, ["events", "trace", *common, turn_event.id, "--json", "--raw"]
+    )
 
     assert trace.exit_code == 0, trace.output
     assert [event["id"] for event in json.loads(trace.output)] == [
-        "prompt-event",
-        "model-event",
-        "tool-event",
-        "turn-event",
+        prompt.id,
+        model.id,
+        tool.id,
+        turn_event.id,
     ]
     assert root.exit_code == 0, root.output
-    assert json.loads(root.output)["id"] == "prompt-event"
+    assert json.loads(root.output)["id"] == prompt.id
     assert descendants.exit_code == 0, descendants.output
     assert [event["id"] for event in json.loads(descendants.output)] == [
-        "model-event",
-        "tool-event",
-        "turn-event",
+        model.id,
+        tool.id,
+        turn_event.id,
     ]
     assert turn.exit_code == 0, turn.output
     assert [event["id"] for event in json.loads(turn.output)] == [
-        "prompt-event",
-        "model-event",
-        "tool-event",
-        "turn-event",
+        prompt.id,
+        model.id,
+        tool.id,
+        turn_event.id,
     ]
     assert raw.exit_code == 0, raw.output
-    assert json.loads(raw.output)[1]["caused_by"] == "prompt-event"
+    assert json.loads(raw.output)[1]["caused_by"] == prompt.id
 
 
-def test_events_subcommands_raw_requires_json() -> None:
-    result = CliRunner().invoke(cli, ["events", "trace", "event-1", "--raw"])
+def test_zeta_events_subcommands_raw_requires_json() -> None:
+    result = CliRunner().invoke(zeta_cli, ["events", "trace", "event-1", "--raw"])
 
     assert result.exit_code == 2
     assert "--raw requires --json" in result.output
-
-
-def test_events_failure_recorded_label_is_not_prefixed_as_glyph() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        old_state_dir = os.environ.get("COMMAS_STATE_DIR")
-        old_session_id = os.environ.get("COMMAS_SESSION_ID")
-        os.environ["COMMAS_STATE_DIR"] = tmp
-        os.environ["COMMAS_SESSION_ID"] = "test"
-        try:
-            event = append_event(
-                {
-                    "type": "failure_recorded",
-                    "glyph": "failure",
-                    "command": "false",
-                    "status": 1,
-                }
-            )
-            text = CliRunner().invoke(cli, ["events", "--limit", "1"])
-            listed = CliRunner().invoke(cli, ["events", "--json"])
-        finally:
-            if old_state_dir is None:
-                os.environ.pop("COMMAS_STATE_DIR", None)
-            else:
-                os.environ["COMMAS_STATE_DIR"] = old_state_dir
-            if old_session_id is None:
-                os.environ.pop("COMMAS_SESSION_ID", None)
-            else:
-                os.environ["COMMAS_SESSION_ID"] = old_session_id
-
-    assert text.exit_code == 0, text.output
-    assert event.id[:8] not in text.output
-    assert "failure recorded" in text.output
-    assert "failure failure recorded" not in text.output
-    assert "false -> 1" in text.output
-    assert listed.exit_code == 0, listed.output
-    summary = json.loads(listed.output)[0]
-    assert summary["workflow"] == "-"
-    assert summary["event"] == "failure recorded"
-    assert summary["detail"] == "false -> 1"
 
 
 def test_session_list_includes_last_event_context() -> None:
@@ -2174,7 +2068,7 @@ def test_cli_invocation_ingests_spooled_turns() -> None:
             {"COMMAS_STATE_DIR": tmp, "COMMAS_SESSION_ID": "test"},
         ):
             write_spool(tmp, [("1700000000.0", "echo spooled", "0", "/repo")])
-            result = CliRunner().invoke(cli, ["events", "--limit", "1"])
+            result = CliRunner().invoke(cli, ["status"])
             assert result.exit_code == 0
 
         rows = read_recent_turns(tmp)
@@ -2579,13 +2473,6 @@ def test_every_cli_command_and_option_documents_itself() -> None:
             if not isinstance(param, click.Option):
                 continue
             assert param.help, f"{path} {param.opts[0]} has no help text"
-
-
-def test_events_raw_requires_json() -> None:
-    result = CliRunner().invoke(cli, ["events", "--raw"])
-
-    assert result.exit_code == 2
-    assert "--raw requires --json" in result.output
 
 
 def test_session_transcript_renders_conversation() -> None:

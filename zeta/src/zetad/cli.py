@@ -15,6 +15,8 @@ from zeta.records.stores.sqlite import event_store_path
 from zeta.tools import register_builtin_tools
 
 from zetad import scheduling, worker
+from zetad.cli_model import model_group
+from zetad.cli_trace import trace_group
 from zetad.rpc.stdio import run_stdio
 from zetad.store import RuntimeEventStore
 
@@ -34,6 +36,10 @@ QUEUE_STATUS_ORDER = (
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
     """Zeta runtime commands."""
+
+
+cli.add_command(trace_group)
+cli.add_command(model_group)
 
 
 def runtime_state_dir(project_root: Path, state_dir: Path | None) -> Path:
@@ -71,6 +77,88 @@ def event_record(event: Event) -> dict[str, object]:
         "timestamp_ms": event.timestamp_ms,
         "cursor": event.cursor,
     }
+
+
+def event_summary_record(event: Event) -> dict[str, object]:
+    return {
+        "id": event.id,
+        "type": event.event_type,
+        "source": event.source,
+        "session_id": event.session_id,
+        "run_id": event.run_id,
+        "turn_id": event.turn_id,
+        "caused_by": event.caused_by,
+        "timestamp_ms": event.timestamp_ms,
+    }
+
+
+def print_event_sequence(
+    events: list[Event],
+    *,
+    json_output: bool,
+    raw: bool,
+    empty_message: str,
+) -> int:
+    if json_output:
+        payload = [
+            event_record(event) if raw else event_summary_record(event)
+            for event in events
+        ]
+        click.echo(json.dumps(payload, ensure_ascii=False))
+        return 0
+    if not events:
+        click.echo(empty_message)
+        return 0
+    for event in events:
+        click.echo(
+            "\t".join(
+                [
+                    str(event.cursor or ""),
+                    event.event_type,
+                    event.source,
+                    event.id,
+                ]
+            )
+        )
+    return 0
+
+
+def print_event_item(
+    event: Event | None,
+    *,
+    json_output: bool,
+    raw: bool,
+    empty_message: str,
+) -> int:
+    if json_output:
+        payload = None if event is None else (
+            event_record(event) if raw else event_summary_record(event)
+        )
+        click.echo(json.dumps(payload, ensure_ascii=False))
+        return 0
+    if event is None:
+        click.echo(empty_message)
+        return 0
+    return print_event_sequence([event], json_output=False, raw=False, empty_message="")
+
+
+def descendant_events(event_store: RuntimeEventStore, event_id: str) -> list[Event]:
+    events = event_store.list_events(Filter())
+    children: dict[str, list[Event]] = {}
+    for event in events:
+        if event.caused_by is not None:
+            children.setdefault(event.caused_by, []).append(event)
+    descendants: list[Event] = []
+    seen: set[str] = {event_id}
+    stack = list(reversed(children.get(event_id, [])))
+    while stack:
+        event = stack.pop()
+        if event.id in seen:
+            continue
+        seen.add(event.id)
+        descendants.append(event)
+        stack.extend(reversed(children.get(event.id, [])))
+    return descendants
 
 
 def run_summary_records(event_store: RuntimeEventStore) -> list[dict[str, object]]:
@@ -373,6 +461,162 @@ def events_publish(
     status = "published" if outcome.inserted else "already published"
     click.echo(f"{status} {outcome.event.event_type} {outcome.event.id}")
     return 0
+
+
+@events.command("trace")
+@click.argument("event_id")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
+def events_trace(
+    event_id: str,
+    project_root: Path,
+    state_dir: Path | None,
+    json_output: bool,
+    raw: bool,
+) -> int:
+    """Show the causal chain from root to EVENT_ID."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        chain = event_store.causal_chain(event_id)
+    finally:
+        event_store.close()
+    return print_event_sequence(
+        chain,
+        json_output=json_output,
+        raw=raw,
+        empty_message=f"event not found: {event_id}",
+    )
+
+
+@events.command("root")
+@click.argument("event_id")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return raw event payload.")
+def events_root(
+    event_id: str,
+    project_root: Path,
+    state_dir: Path | None,
+    json_output: bool,
+    raw: bool,
+) -> int:
+    """Show the root cause for EVENT_ID."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        chain = event_store.causal_chain(event_id)
+    finally:
+        event_store.close()
+    return print_event_item(
+        chain[0] if chain else None,
+        json_output=json_output,
+        raw=raw,
+        empty_message=f"event not found: {event_id}",
+    )
+
+
+@events.command("descendants")
+@click.argument("event_id")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
+def events_descendants(
+    event_id: str,
+    project_root: Path,
+    state_dir: Path | None,
+    json_output: bool,
+    raw: bool,
+) -> int:
+    """Show events caused by EVENT_ID, recursively."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        descendants = descendant_events(event_store, event_id)
+    finally:
+        event_store.close()
+    return print_event_sequence(
+        descendants,
+        json_output=json_output,
+        raw=raw,
+        empty_message=f"no descendants for event: {event_id}",
+    )
+
+
+@events.command("turn")
+@click.argument("turn_id")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
+)
+@click.option("--json", "json_output", is_flag=True, help="Emit JSON.")
+@click.option("--raw", is_flag=True, help="With --json, return raw event payloads.")
+def events_turn(
+    turn_id: str,
+    project_root: Path,
+    state_dir: Path | None,
+    json_output: bool,
+    raw: bool,
+) -> int:
+    """Show events associated with TURN_ID."""
+    if raw and not json_output:
+        raise click.UsageError("--raw requires --json")
+    event_store = runtime_event_store(project_root, state_dir)
+    try:
+        turn_events = event_store.events_for_turn(turn_id)
+    finally:
+        event_store.close()
+    return print_event_sequence(
+        turn_events,
+        json_output=json_output,
+        raw=raw,
+        empty_message=f"no events for turn: {turn_id}",
+    )
 
 
 def event_payload_from_json(payload_json: str) -> dict[str, object]:

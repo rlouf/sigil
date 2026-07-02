@@ -5,7 +5,7 @@ import difflib
 from zeta.records.objects import Object, ObjectId
 from zeta.records.stores.object_store import Store
 
-from commas.display.summarize import short_trace_id, trace_object_summary
+from zeta.trace.summarize import short_trace_id, trace_object_summary
 
 
 def render_prompt_diff(

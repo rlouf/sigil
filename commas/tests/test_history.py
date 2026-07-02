@@ -1,10 +1,12 @@
 """Turn/effect history append and query tests."""
 
 import json
+from pathlib import Path
 from typing import Any
 
 from click.testing import CliRunner
 from commas.cli import cli as commas_cli
+from zetad.cli import cli as zeta_cli
 from commas.protocols import (
     EFFECT_KIND_COMMAND,
     EFFECT_KIND_FILE_WRITE,
@@ -681,8 +683,17 @@ def test_bundle_import_restores_history_and_trace_queries(
     show = runner.invoke(commas_cli, ["log", "show", "turn-bundle-1"])
     blame = runner.invoke(commas_cli, ["blame", "/tmp/deploy-notes.md"])
     trace_show = runner.invoke(
-        commas_cli,
-        ["trace", "--session", "bundle-src", "show", "--json", ids["prompt_id"]],
+        zeta_cli,
+        [
+            "trace",
+            "--state-dir",
+            str(Path.home() / ".zeta"),
+            "--session",
+            "bundle-src",
+            "show",
+            "--json",
+            ids["prompt_id"],
+        ],
     )
     assert log.exit_code == 0 and "write the deploy notes" in log.output
     assert show.exit_code == 0 and "turn-bundle-1" in show.output

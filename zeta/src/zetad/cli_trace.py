@@ -1,6 +1,11 @@
-"""User-facing trace inspection commands."""
+"""Trace inspection commands for the Zeta runtime CLI."""
 
+from __future__ import annotations
+
+import json
+import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import click
@@ -13,11 +18,8 @@ from zeta.records.stores.sqlite import (
     open_existing_trace_store,
     zeta_sqlite_path,
 )
-
-from commas.cli._base import cli, examples
-from commas.cli._shared import pretty_print_json
-from commas.trace.diff import render_prompt_diff
-from commas.trace.query import (
+from zeta.trace.diff import render_prompt_diff
+from zeta.trace.query import (
     get_trace_object,
     list_trace_closure,
     list_trace_prompts,
@@ -25,81 +27,108 @@ from commas.trace.query import (
     resolve_cli_object_id,
     resolve_cli_prompt,
 )
-from commas.trace.render import (
+from zeta.trace.render import (
     object_listing_lines,
     render_trace_object,
     render_trace_tree,
 )
-from commas.trace.replay import (
+from zeta.trace.replay import (
     answer_display_text,
     latest_model_answer,
     record_replay,
     render_replay,
     replay_model_selection,
 )
-from commas.trace.tools import tool_call_rows, tool_failure_detail
+from zeta.trace.tools import tool_call_rows, tool_failure_detail
 
 NARRATIVE_KINDS = ("prompt", "assistant_message")
 
 
-@cli.group(
-    "trace",
-    epilog=examples(
-        "commas trace log",
-        "commas trace show 4f9d01c2",
-        "commas trace --session 47bd31c0 show turn/4f9d01c2",
-    ),
+@click.group("trace")
+@click.option(
+    "--project-root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Project root containing .zeta runtime state.",
+)
+@click.option(
+    "--state-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Override the runtime state directory.",
 )
 @click.option(
     "--session",
     "session_scope",
     default=None,
-    help="Read another session's trace store (read-only).",
+    help="Read this session's trace store.",
 )
 @click.pass_context
-def trace_group(ctx: click.Context, session_scope: str | None) -> None:
-    """Inspect a session trace store, the current one by default.
+def trace_group(
+    ctx: click.Context,
+    project_root: Path,
+    state_dir: Path | None,
+    session_scope: str,
+) -> None:
+    """Inspect runtime prompt and tool traces.
 
-    The store records prompts, assistant messages, tool calls, and tool
-    results, content-addressed and linked by derivations. It answers "what
-    exactly did the model see" for the prompt ids that `commas log show`
-    and `?` hand out.
-
-    Every ID argument accepts a ref name (like turn/<id>), a full id, or
-    a unique prefix of an id.
+    Every ID argument accepts a ref name, a full id, or a unique prefix.
     """
-    ctx.obj = session_scope
+
+    ctx.obj = {
+        "state_dir": trace_state_dir(project_root, state_dir),
+        "session": session_scope or os.environ.get("ZETA_SESSION_ID") or "default",
+        "session_explicit": session_scope is not None,
+    }
 
 
-def trace_session_scope(ctx: click.Context) -> str | None:
-    """Return the --session scope set by the enclosing trace group."""
-    return ctx.obj if isinstance(ctx.obj, str) else None
+def trace_state_dir(project_root: Path, state_dir: Path | None) -> Path:
+    """Resolve the runtime state directory for zeta trace commands."""
+
+    if state_dir is not None:
+        return state_dir.expanduser()
+    env_state_dir = os.environ.get("ZETA_STATE_DIR")
+    if env_state_dir:
+        return Path(env_state_dir).expanduser()
+    return project_root.expanduser().resolve() / ".zeta"
 
 
-def scoped_store(ctx: click.Context) -> Store:
-    """Return the trace store selected by the group's --session option.
+def trace_context(ctx: click.Context) -> tuple[Path, str]:
+    obj = ctx.obj if isinstance(ctx.obj, dict) else {}
+    raw_state_dir = obj.get("state_dir")
+    raw_session = obj.get("session")
+    state_dir = raw_state_dir if isinstance(raw_state_dir, Path) else Path(".zeta")
+    session = raw_session if isinstance(raw_session, str) and raw_session else "default"
+    return state_dir, session
 
-    Session-scoped stores are uncached read-only opens, closed with the
-    command's context.
-    """
-    scope = trace_session_scope(ctx)
-    if scope is None:
-        return current_store()
-    store = open_session_store(scope)
+
+def trace_session_is_explicit(ctx: click.Context) -> bool:
+    obj = ctx.obj if isinstance(ctx.obj, dict) else {}
+    return obj.get("session_explicit") is True
+
+
+def scoped_store(ctx: click.Context, *, read_only: bool = True) -> Store:
+    """Return the trace store selected by the trace group options."""
+
+    state_dir, session_id = trace_context(ctx)
+    if read_only and trace_session_is_explicit(ctx):
+        store = open_session_store(state_dir, session_id)
+        ctx.call_on_close(store.close)
+        return store
+    store = SqliteObjectStore(
+        zeta_sqlite_path(state_dir),
+        session_id=session_id,
+        read_only=read_only,
+    )
     ctx.call_on_close(store.close)
     return store
 
 
-def current_store() -> Store:
-    from commas import zeta_session_for_commas
-
-    return zeta_session_for_commas().trace_store
-
-
-def open_session_store(session_id: str) -> SqliteObjectStore:
+def open_session_store(state_dir: Path, session_id: str) -> SqliteObjectStore:
     """Open a named session's store, mapping lookup errors onto CLI errors."""
+
     try:
-        return open_existing_trace_store(session_id, read_only=True)
+        return open_existing_trace_store(session_id, read_only=True, root=state_dir)
     except UnknownSessionError as error:
         available = ", ".join(error.available) or "none recorded"
         raise click.ClickException(
@@ -107,43 +136,11 @@ def open_session_store(session_id: str) -> SqliteObjectStore:
         ) from error
 
 
-@trace_group.command(
-    "reinit-store",
-    epilog=examples(
-        "commas trace reinit-store",
-        "commas trace reinit-store --yes",
-    ),
-)
-@click.option(
-    "--yes",
-    is_flag=True,
-    help="Recreate the unified Zeta SQLite database without prompting.",
-)
-def trace_reinit_store(yes: bool) -> int:
-    """Recreate the local Zeta SQLite database."""
-    path = zeta_sqlite_path()
-    if not yes:
-        click.confirm(
-            f"Delete and recreate {path}?",
-            abort=True,
-            err=True,
-        )
-    if path.exists():
-        path.unlink()
-    store = SqliteObjectStore(path)
-    store.close()
-    click.echo(f"reinitialized {path}")
-    return 0
+def pretty_print_json(value: object) -> None:
+    click.echo(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
-@trace_group.command(
-    "log",
-    epilog=examples(
-        "commas trace log",
-        "commas trace log --kind tool_call --limit 50",
-        "commas trace log --all",
-    ),
-)
+@trace_group.command("log")
 @click.option(
     "--kind",
     "kinds",
@@ -172,11 +169,8 @@ def trace_log(
     limit: int,
     all_sessions: bool,
 ) -> int:
-    """List recent trace objects, newest first.
+    """List recent trace objects, newest first."""
 
-    Shows prompts and assistant messages by default; --kind and --all
-    widen the listing. Ids are usable with show/closure/tree.
-    """
     selected = None if all_kinds else (tuple(kinds) or NARRATIVE_KINDS)
     lines = scope_listing_lines(
         ctx,
@@ -191,14 +185,33 @@ def trace_log(
     return 0
 
 
-@trace_group.command(
-    "tools",
-    epilog=examples(
-        "commas trace tools --json",
-        "commas trace tools --failed --json",
-        "commas trace tools --all-sessions --limit 50 --json",
-    ),
+@trace_group.command("reinit-store")
+@click.option(
+    "--yes",
+    is_flag=True,
+    help="Recreate the unified Zeta SQLite database without prompting.",
 )
+@click.pass_context
+def trace_reinit_store(ctx: click.Context, yes: bool) -> int:
+    """Recreate the selected Zeta trace database."""
+
+    state_dir, _session_id = trace_context(ctx)
+    path = zeta_sqlite_path(state_dir)
+    if not yes:
+        click.confirm(
+            f"Delete and recreate {path}?",
+            abort=True,
+            err=True,
+        )
+    if path.exists():
+        path.unlink()
+    store = SqliteObjectStore(path)
+    store.close()
+    click.echo(f"reinitialized {path}")
+    return 0
+
+
+@trace_group.command("tools")
 @click.option("--json", "json_output", is_flag=True, help="Emit rows as JSON.")
 @click.option("--failed", is_flag=True, help="Only include failed tool calls.")
 @click.option("--successful", is_flag=True, help="Only include successful tool calls.")
@@ -225,6 +238,7 @@ def trace_tools(
     all_sessions: bool,
 ) -> int:
     """List tool calls joined with their results from the trace store."""
+
     if failed and successful:
         raise click.ClickException("--failed conflicts with --successful")
     rows = scope_tool_rows(
@@ -253,13 +267,7 @@ def trace_tools(
     return 0
 
 
-@trace_group.command(
-    "grep",
-    epilog=examples(
-        'commas trace grep "parser test" --kind prompt',
-        "commas trace grep timeout --all-sessions",
-    ),
-)
+@trace_group.command("grep")
 @click.argument("pattern")
 @click.option(
     "--kind",
@@ -288,12 +296,8 @@ def trace_grep(
     limit: int,
     all_sessions: bool,
 ) -> int:
-    """Search trace object data for a substring, newest first.
+    """Search trace object data for a substring, newest first."""
 
-    Matching is case-insensitive over the stored JSON data. LIKE
-    wildcards in PATTERN match literally. --kind narrows the search;
-    --all-sessions searches every recorded session, grouped by session.
-    """
     selected = tuple(kinds) or None
     lines = scope_listing_lines(
         ctx,
@@ -318,19 +322,18 @@ def scope_tool_rows(
     successful: bool,
     limit: int,
 ) -> list[dict[str, Any]]:
+    state_dir, session_id = trace_context(ctx)
     if not all_sessions:
         return tool_call_rows(
             scoped_store(ctx),
-            session=trace_session_scope(ctx),
+            session=session_id,
             failed=failed,
             successful=successful,
             limit=limit,
         )
-    if trace_session_scope(ctx) is not None:
-        raise click.ClickException("--all-sessions conflicts with --session")
     rows: list[dict[str, Any]] = []
-    for session_id_value in available_session_ids():
-        store = open_session_store(session_id_value)
+    for session_id_value in available_session_ids(state_dir):
+        store = open_session_store(state_dir, session_id_value)
         try:
             rows.extend(
                 tool_call_rows(
@@ -352,18 +355,14 @@ def scope_listing_lines(
     all_sessions: bool,
     render: Callable[[Store], list[str]],
 ) -> list[str]:
-    """Render lines for the scoped store, or for every recorded session.
+    """Render lines for the scoped store, or every recorded session."""
 
-    With all_sessions each line carries its session id as a prefix;
-    the flag conflicts with the group's --session option.
-    """
+    state_dir, _session_id = trace_context(ctx)
     if not all_sessions:
         return render(scoped_store(ctx))
-    if trace_session_scope(ctx) is not None:
-        raise click.ClickException("--all-sessions conflicts with --session")
     lines = []
-    for session_id_value in available_session_ids():
-        store = open_session_store(session_id_value)
+    for session_id_value in available_session_ids(state_dir):
+        store = open_session_store(state_dir, session_id_value)
         try:
             lines.extend(f"{session_id_value}  {line}" for line in render(store))
         finally:
@@ -371,21 +370,13 @@ def scope_listing_lines(
     return lines
 
 
-@trace_group.command(
-    "show",
-    epilog=examples(
-        "commas trace show 4f9d01c2",
-        "commas trace show turn/4f9d01c2 --json",
-    ),
-)
+@trace_group.command("show")
 @click.argument("object_id")
 @click.option("--json", "json_output", is_flag=True, help="Emit the raw object JSON.")
 @click.pass_context
 def trace_show(ctx: click.Context, object_id: str, json_output: bool) -> int:
-    """Show one trace object, its body, and both derivation directions.
+    """Show one trace object, its body, and both derivation directions."""
 
-    Renders a human summary by default; --json keeps the raw record.
-    """
     store = scoped_store(ctx)
     resolved = resolve_cli_object_id(object_id, store=store)
     if json_output:
@@ -402,31 +393,19 @@ def trace_show(ctx: click.Context, object_id: str, json_output: bool) -> int:
     return 0
 
 
-@trace_group.command(
-    "closure",
-    epilog=examples("commas trace closure 4f9d01c2"),
-)
+@trace_group.command("closure")
 @click.argument("object_id")
 @click.pass_context
 def trace_closure(ctx: click.Context, object_id: str) -> int:
-    """List every object reachable from a trace object.
+    """List every object reachable from a trace object."""
 
-    Follows the object's links and derivations transitively and emits
-    the result as JSON, one entry per reachable object.
-    """
-    store = scoped_store(ctx)
+    store = scoped_store(ctx, read_only=False)
     resolved = resolve_cli_object_id(object_id, store=store)
     pretty_print_json({"objects": list_trace_closure(resolved, store=store)})
     return 0
 
 
-@trace_group.command(
-    "tree",
-    epilog=examples(
-        "commas trace tree 4f9d01c2",
-        "commas trace tree 4f9d01c2 --down",
-    ),
-)
+@trace_group.command("tree")
 @click.argument("object_id")
 @click.option("--down", is_flag=True, help="Follow consumers instead of producers.")
 @click.option(
@@ -438,12 +417,8 @@ def trace_closure(ctx: click.Context, object_id: str) -> int:
 )
 @click.pass_context
 def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> int:
-    """Render the derivation tree around one trace object.
+    """Render the derivation tree around one trace object."""
 
-    Walks what produced the object by default; --down walks what came
-    of it. Edges carry the producer name; repeated objects render as
-    `…`.
-    """
     store = scoped_store(ctx)
     resolved = resolve_cli_object_id(object_id, store=store)
     for line in render_trace_tree(resolved, down=down, depth=depth, store=store):
@@ -451,13 +426,7 @@ def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> in
     return 0
 
 
-@trace_group.command(
-    "diff",
-    epilog=examples(
-        "commas trace diff 4f9d01c2 81be33aa",
-        "commas trace diff 4f9d01c2 81be33aa --stat",
-    ),
-)
+@trace_group.command("diff")
 @click.argument("old_id")
 @click.argument("new_id")
 @click.option(
@@ -468,12 +437,8 @@ def trace_tree(ctx: click.Context, object_id: str, down: bool, depth: int) -> in
 )
 @click.pass_context
 def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) -> int:
-    """Compare two prompts component by component.
+    """Compare two prompts component by component."""
 
-    Identical component ids are unchanged. A removed/added pair of the
-    same kind renders as changed, with a text diff of its messages;
-    --stat keeps one line per change instead.
-    """
     store = scoped_store(ctx)
     old = resolve_cli_prompt(store, old_id)
     new = resolve_cli_prompt(store, new_id)
@@ -482,13 +447,7 @@ def trace_diff(ctx: click.Context, old_id: str, new_id: str, stat_only: bool) ->
     return 0
 
 
-@trace_group.command(
-    "replay",
-    epilog=examples(
-        "commas trace replay 4f9d01c2",
-        "commas trace replay 4f9d01c2 --model fast --diff",
-    ),
-)
+@trace_group.command("replay")
 @click.argument("object_id")
 @click.option(
     "--model",
@@ -509,22 +468,19 @@ def trace_replay(
     model_profile: str | None,
     diff_output: bool,
 ) -> int:
-    """Resend a stored prompt through the model boundary.
+    """Resend a stored prompt through the model boundary."""
 
-    Rebuilds the exact request from the prompt's linked components,
-    verifies it against the recorded payload hash, and sends it to the
-    active model (--model replays against another profile). The new
-    answer is recorded with a ModelReplay derivation, so replays are
-    themselves traced.
-    """
     store = scoped_store(ctx)
+    state_dir, session_id = trace_context(ctx)
     prompt_id, _ = resolve_cli_prompt(store, object_id)
     reconstructed = reconstructed_prompt_request(store, prompt_id)
     if reconstructed is None:
         raise click.ClickException(f"not a prompt: {object_id}")
-    selection = replay_model_selection(model_profile)
+    selection = replay_model_selection(
+        model_profile,
+        session_dir=state_dir / "sessions" / session_id,
+    )
     original = latest_model_answer(store, prompt_id)
-    from commas.sessions import session_id as current_session_id
 
     message = chat_completion_messages(
         reconstructed.messages,
@@ -534,7 +490,7 @@ def trace_replay(
         max_tokens=reconstructed.max_tokens,
         selected_model=selection.model,
         selected_url=selection.url,
-        session_id=trace_session_scope(ctx) or current_session_id(),
+        session_id=session_id,
         thinking=reconstructed.thinking,
     )
     replay_id = record_replay(store, prompt_id, message, selection)
@@ -551,32 +507,20 @@ def trace_replay(
     return 0
 
 
-@trace_group.command(
-    "refs",
-    epilog=examples("commas trace refs"),
-)
+@trace_group.command("refs")
 @click.pass_context
 def trace_refs(ctx: click.Context) -> int:
-    """List the mutable refs and the objects they point at.
+    """List the mutable refs and the objects they point at."""
 
-    Refs are stable names like turn/<id> that track moving targets;
-    any of them works where an ID argument is expected.
-    """
     pretty_print_json({"refs": list_trace_refs(store=scoped_store(ctx))})
     return 0
 
 
-@trace_group.command(
-    "prompts",
-    epilog=examples("commas trace prompts"),
-)
+@trace_group.command("prompts")
 @click.pass_context
 def trace_prompts(ctx: click.Context) -> int:
-    """List recorded prompts with store size statistics.
+    """List recorded prompts with store size statistics."""
 
-    Emits JSON: per prompt its id, component count, and estimated
-    tokens, plus the store's object count and total bytes.
-    """
     store = scoped_store(ctx)
     stats = store.stats()
     pretty_print_json(
@@ -589,3 +533,6 @@ def trace_prompts(ctx: click.Context) -> int:
         }
     )
     return 0
+
+
+__all__ = ["trace_group", "trace_state_dir"]
