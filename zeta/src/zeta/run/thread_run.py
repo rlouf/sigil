@@ -58,6 +58,7 @@ class SessionRunParams:
     tools: list[str] | None = None
     context: str = ""
     system: str | None = None
+    fresh: bool = False
     model: str | None = None
     url: str | None = None
     thinking: str | None = None
@@ -76,6 +77,7 @@ class SessionRunParams:
         }
         for key in (
             "system",
+            "fresh",
             "model",
             "url",
             "thinking",
@@ -135,6 +137,7 @@ def session_agent_request(params: dict[str, Any]) -> AgentRunRequest:
         runtime="zeta-rpc",
         tools=tuple(request.tools or ()),
         context=request.context,
+        fresh=request.fresh,
         config=AgentConfig(
             system_prompt=request.system,
             max_turns=request.max_steps,
@@ -168,6 +171,7 @@ def session_agent_request_for_context(
         runtime=request.runtime,
         tools=request.tools,
         context=request.context,
+        fresh=request.fresh,
         config=AgentConfig(
             system_prompt=config.system_prompt,
             max_turns=config.max_turns,

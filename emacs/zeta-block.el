@@ -29,9 +29,8 @@ checkout."
   :group 'zeta-block)
 
 (defcustom zeta-block-read-only-tools
-  '("read" "grep" "ls" "query_log" "emacs_read" "emacs_replace")
+  '("read" "grep" "ls" "query_log" "emacs_read")
   "Tools made available to `?' submissions.
-The Emacs frontend still refuses `emacs_replace' while answering a question;
 `zeta?' answers are inserted below the prompt instead of mutating the buffer."
   :type '(repeat string)
   :group 'zeta-block)
@@ -685,11 +684,11 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
   "Ask Zeta QUESTION and call CALLBACK with (RESULT ERROR)."
   (zeta-block-ensure-process)
   (setq zeta-block--active-mutation-allowed nil)
-  (zeta-block-register-tools (list (zeta-block-emacs-replace-tool)))
   (zeta-block-send-request
    "session.run"
    `(("workflow" . "ask")
      ("objective" . ,question)
+     ("fresh" . t)
      ("tools" . ,(vconcat zeta-block-read-only-tools))
      ("system" . ,(zeta-block-ask-system-prompt)))
    (lambda (result error)
@@ -743,6 +742,7 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
    "session.run"
    `(("workflow" . "do")
      ("objective" . ,(zeta-block-inline-objective instruction line-number))
+     ("fresh" . t)
      ("tools" . ,(vconcat zeta-block-inline-tools))
      ("system" . ,(zeta-block-inline-system-prompt)))
    (lambda (result error)
@@ -760,6 +760,7 @@ When PROMPT is non-nil, tag the inserted response as agent-authored."
    "session.run"
    `(("workflow" . "do")
      ("objective" . ,(zeta-block-region-objective instruction scope))
+     ("fresh" . t)
      ("tools" . ,(vconcat zeta-block-inline-tools))
      ("system" . ,(zeta-block-region-system-prompt)))
    (lambda (result error)

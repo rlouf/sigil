@@ -82,6 +82,7 @@ class AgentRunRequest:
     tools: tuple[str, ...]
     context: str
     config: AgentConfig
+    fresh: bool = False
 
 
 class ModelStream(Protocol):
@@ -334,7 +335,9 @@ async def run_agent(
         request.tools or request.config.allowed_capabilities,
         tool_registry=runtime_context.tool_registry,
     )
-    prior_timeline = current_timeline(runtime_context=runtime_context)
+    prior_timeline = (
+        [] if request.fresh else current_timeline(runtime_context=runtime_context)
+    )
     user_message: dict[str, Any] = {
         "type": "user_message",
         "content": request.objective,
