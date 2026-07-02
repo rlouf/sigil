@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 
 import pytest
-from _zeta_helpers import write_models_config
 from click.testing import CliRunner
 from commas.cli import cli
 from commas.history import effect_record, publish_effect_record, turn_record
@@ -12,6 +11,8 @@ from commas.sessions import record_turn, session_dir, session_id
 from commas.state import append_event, event_store_path
 from commas.status import current_status, format_status
 from zeta.models.profiles import set_active_model_profile
+
+from test_support.zeta_helpers import write_models_config
 
 
 def test_status_clean_when_no_live_state() -> None:

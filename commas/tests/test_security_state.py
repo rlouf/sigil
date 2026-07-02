@@ -13,8 +13,6 @@ from typing import Any, cast
 
 import click
 import pytest
-from _patch import patch, patch_dict
-from _zeta_helpers import record_durable_timeline_event
 from click.testing import CliRunner
 from commas.cli import cli, main
 from commas.cli._base import (
@@ -73,6 +71,9 @@ from zetad.queue import (
     queue_item_event_payload,
     queue_item_from_event_payload,
 )
+
+from test_support.patch import patch, patch_dict
+from test_support.zeta_helpers import record_durable_timeline_event
 
 
 class TtyStringIO(StringIO):

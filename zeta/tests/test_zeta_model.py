@@ -11,16 +11,17 @@ import pytest
 import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
 import zeta.models.types as zeta_models_api
-from _zeta_helpers import (
+from click.testing import CliRunner
+from commas.cli import cli as commas_cli
+from commas.sessions import session_dir
+from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
+
+from test_support.zeta_helpers import (
     DeltaSink,
     sse_lines,
     task_state_fixture,
     write_models_config,
 )
-from click.testing import CliRunner
-from commas.cli import cli as commas_cli
-from commas.sessions import session_dir
-from zeta.context.compaction.task_state import TASK_STATE_SCHEMA
 
 
 def test_zeta_model_config_ignores_model_env_vars(monkeypatch) -> None:

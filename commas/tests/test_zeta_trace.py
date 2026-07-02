@@ -12,12 +12,6 @@ import zeta.capabilities.execution as zeta_capability_execution
 import zeta.context.components as zeta_context
 import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
-from _zeta_helpers import (
-    BatchSpyStore,
-    read_tool_call_response,
-    read_tool_payload,
-    record_durable_timeline_event,
-)
 from click.testing import CliRunner
 from commas.agent_io import last_event_time
 from commas.cli import cli as commas_cli
@@ -49,6 +43,12 @@ from zeta.run.context import RuntimeContext, default_session
 from zeta.run.runtime import AgentRunResult
 from zeta.run.thread_run import current_timeline
 
+from test_support.zeta_helpers import (
+    BatchSpyStore,
+    read_tool_call_response,
+    read_tool_payload,
+    record_durable_timeline_event,
+)
 from zeta import models as zeta_models_api
 
 zeta_trace = SimpleNamespace(

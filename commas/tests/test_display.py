@@ -8,10 +8,6 @@ import commas.display.render as display_render
 import commas.display.state as display_state
 import commas.display.summarize as display_summarize
 import pytest
-from _zeta_helpers import (
-    TtyBuffer,
-    visible_terminal_text,
-)
 from commas.display.tty import IRIS, ITALIC, MUTED, RESET
 from commas.protocols import (
     SHELL_HANDOFF_OUTCOME_CANCELLED,
@@ -22,6 +18,11 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from zeta.records.objects import Object
 from zeta.records.stores.memory import InMemoryStore
+
+from test_support.zeta_helpers import (
+    TtyBuffer,
+    visible_terminal_text,
+)
 
 zeta_trace = SimpleNamespace(InMemoryStore=InMemoryStore, Object=Object)
 

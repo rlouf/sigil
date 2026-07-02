@@ -8,18 +8,6 @@ from typing import Any
 import pytest
 import zeta.models.chat_completions as zeta_model
 import zeta.models.types as zeta_models_api
-from _zeta_helpers import (
-    BatchSpyStore,
-    assert_task_state_graph,
-    big_transcript_components,
-    linked_ids_by_kind,
-    linked_kinds,
-    task_state_fixture,
-    tool_call_fixture,
-    tool_result_event_payload,
-    tool_result_transcript,
-    write_skill,
-)
 from commas.tools import ensure_builtin_tools_registered
 from zeta.agents import skills as zeta_skills
 from zeta.capabilities.execution import (
@@ -64,6 +52,19 @@ from zeta.events import Event
 from zeta.objects import Derivation, Object
 from zeta.records.provenance import project_prompt_trace_projection
 from zeta.records.stores.memory import InMemoryStore
+
+from test_support.zeta_helpers import (
+    BatchSpyStore,
+    assert_task_state_graph,
+    big_transcript_components,
+    linked_ids_by_kind,
+    linked_kinds,
+    task_state_fixture,
+    tool_call_fixture,
+    tool_result_event_payload,
+    tool_result_transcript,
+    write_skill,
+)
 
 ensure_builtin_tools_registered()
 

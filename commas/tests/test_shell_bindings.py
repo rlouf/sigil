@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SHELL_TIMEOUT_SECONDS = 60.0
 
 

@@ -7,8 +7,9 @@ from typing import Any
 
 import pytest
 import zeta.models.codex_auth as codex_auth
-from _zeta_helpers import fake_jwt
-from _zeta_helpers import write_codex_auth_file as write_auth_file
+
+from test_support.zeta_helpers import fake_jwt
+from test_support.zeta_helpers import write_codex_auth_file as write_auth_file
 
 
 def test_codex_auth_loads_fresh_credentials_without_refresh(

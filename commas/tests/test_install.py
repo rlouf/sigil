@@ -8,8 +8,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from io import StringIO
 from pathlib import Path
 
-from _patch import patch, patch_dict
-from _zeta_helpers import write_codex_auth_file
 from click.testing import CliRunner
 from commas.cli import cli, main
 from commas.cli._base import EXIT_ERROR, EXIT_OK
@@ -21,6 +19,9 @@ from commas.install import (
     doctor_checks,
     install_zsh_binding,
 )
+
+from test_support.patch import patch, patch_dict
+from test_support.zeta_helpers import write_codex_auth_file
 
 
 def test_install_zsh_binding_copies_binding_and_updates_rc_idempotently() -> None:

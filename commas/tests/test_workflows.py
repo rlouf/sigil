@@ -10,13 +10,6 @@ from typing import Any, cast
 import pytest
 import zeta.models.chat_completions as zeta_model
 import zeta.models.profiles as zeta_models
-from _zeta_helpers import (
-    TtyBuffer,
-    record_durable_timeline_event,
-    visible_terminal_text,
-    write_models_config,
-    write_skill,
-)
 from click.testing import CliRunner
 from commas.cli import cli as commas_cli
 from commas.history import (
@@ -57,6 +50,13 @@ from zeta.run.runtime import AgentRunResult
 import commas
 from commas import agent_io
 from commas import handoff as commas_handoff
+from test_support.zeta_helpers import (
+    TtyBuffer,
+    record_durable_timeline_event,
+    visible_terminal_text,
+    write_models_config,
+    write_skill,
+)
 from zeta import models as zeta_models_api
 
 zeta_trace = SimpleNamespace(Ref=Ref, resolve_object_id=resolve_object_id)
